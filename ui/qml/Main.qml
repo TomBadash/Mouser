@@ -11,7 +11,7 @@ ApplicationWindow {
     height: 700
     minimumWidth: 900
     minimumHeight: 600
-    title: "LogiControl — MX Master 3S"
+    title: "Mouser — MX Master 3S"
     color: Theme.bg
 
     Material.theme: Material.Dark
@@ -117,7 +117,10 @@ ApplicationWindow {
             currentIndex: currentPage
 
             MousePage {}
-            ScrollPage {}
+            Loader {
+                active: currentPage === 1 || item   // load on first visit, keep alive
+                source: "ScrollPage.qml"
+            }
         }
     }
 

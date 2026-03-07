@@ -421,7 +421,7 @@ if sys.platform == "win32":
 
         def _setup_raw_input(self):
             hInst = GetModuleHandleW(None)
-            cls_name = f"LogiControlRawInput_{id(self)}"
+            cls_name = f"MouserRawInput_{id(self)}"
             self._ri_wndproc_ref = WNDPROC_TYPE(self._ri_wndproc)
 
             wc = WNDCLASSEXW()
@@ -433,7 +433,7 @@ if sys.platform == "win32":
             RegisterClassExW(byref(wc))
 
             self._ri_hwnd = CreateWindowExW(
-                0, cls_name, "LogiControl RI", 0,
+                0, cls_name, "Mouser RI", 0,
                 0, 0, 1, 1, None, None, hInst, None,
             )
             if not self._ri_hwnd:

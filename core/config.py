@@ -8,11 +8,11 @@ import os
 import sys
 
 if sys.platform == "darwin":
-    CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "LogiControl")
+    CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
 elif sys.platform == "win32":
-    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "LogiControl")
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Mouser")
 else:
-    CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".logicontrol")
+    CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".mouser")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 

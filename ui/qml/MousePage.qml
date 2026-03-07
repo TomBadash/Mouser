@@ -215,6 +215,8 @@ Item {
                                         fillMode: Image.PreserveAspectFit
                                         visible: modelData !== ""
                                         smooth: true; mipmap: true
+                                        asynchronous: true
+                                        cache: true
                                     }
                                 }
                             }
@@ -467,6 +469,8 @@ Item {
                             anchors.centerIn: parent
                             smooth: true
                             mipmap: true
+                            asynchronous: true
+                            cache: true
 
                             property real offX: (width - paintedWidth) / 2
                             property real offY: (height - paintedHeight) / 2

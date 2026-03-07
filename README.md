@@ -1,7 +1,7 @@
-# LogiControl — MX Master 3S Button Remapper
+# Mouser — MX Master 3S Button Remapper
 
 <p align="center">
-  <img src="images/logo_icon.png" width="128" alt="LogiControl logo" />
+  <img src="images/logo_icon.png" width="128" alt="Mouser logo" />
 </p>
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
@@ -27,7 +27,7 @@ No telemetry. No cloud. No Logitech account required.
 ## Screenshots
 
 <p align="center">
-  <img src="images/Screenshot.png" alt="LogiControl UI" />
+  <img src="images/Screenshot.png" alt="Mouser UI" />
 </p>
 
 _The UI shows an interactive diagram of the MX Master 3S. Click any button's hotspot dot to change its action._
@@ -66,7 +66,41 @@ _The UI shows an interactive diagram of the MX Master 3S. Click any button's hot
 
 ---
 
-## Installation
+## Download & Run
+
+> **No install required.** Just download, extract, and double-click.
+
+### Steps
+
+1. **Download** → [**Mouser.zip**](https://github.com/TomBadash/MouseControl/releases/latest/download/Mouser.zip) (44 MB)
+2. **Extract** the zip to any folder (Desktop, Documents, wherever you like)
+3. **Run** `Mouser.exe`
+
+That's it — the app will open and start remapping your mouse buttons immediately.
+
+### What to expect
+
+- The **settings window** opens showing your mouse diagram
+- A **system tray icon** appears near the clock (bottom-right)
+- Button remapping is **active immediately**
+- Closing the window **doesn't quit** the app — it keeps running in the tray
+- To fully quit: right-click the tray icon → **Quit Mouser**
+
+### First-time notes
+
+- **Windows SmartScreen** may show a warning the first time → click **More info → Run anyway**
+- **Logitech Options+** must not be running (it conflicts with HID++ access)
+- Config is saved automatically to `%APPDATA%\Mouser`
+
+<p align="center">
+  <a href="https://github.com/TomBadash/MouseControl/releases/latest/download/Mouser.zip">
+    <img src="https://img.shields.io/badge/Download-Mouser.zip-00d4aa?style=for-the-badge&logo=windows" alt="Download" />
+  </a>
+</p>
+
+---
+
+## Installation (from source)
 
 ### Prerequisites
 
@@ -79,8 +113,8 @@ _The UI shows an interactive diagram of the MX Master 3S. Click any button's hot
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/logi-control.git
-cd logi-control
+git clone https://github.com/TomBadash/MouseControl.git
+cd MouseControl
 
 # 2. Create a virtual environment
 python -m venv .venv
@@ -108,26 +142,43 @@ pip install -r requirements.txt
 python main_qml.py
 
 # Option B: Use the batch file (shows a console window)
-LogiControl.bat
+Mouser.bat
 
 # Option C: Use the desktop shortcut (no console window)
-# Double-click LogiControl.lnk
+# Double-click Mouser.lnk
 ```
 
 > **Tip:** To run without a console window, use `pythonw.exe main_qml.py` or the `.lnk` shortcut.
 
 ### Creating a Desktop Shortcut
 
-A `LogiControl.lnk` shortcut is included. To create one manually:
+A `Mouser.lnk` shortcut is included. To create one manually:
 
 ```powershell
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\LogiControl.lnk")
-$s.TargetPath = "C:\path\to\logi-control\.venv\Scripts\pythonw.exe"
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Mouser.lnk")
+$s.TargetPath = "C:\path\to\mouser\.venv\Scripts\pythonw.exe"
 $s.Arguments = "main_qml.py"
-$s.WorkingDirectory = "C:\path\to\logi-control"
-$s.IconLocation = "C:\path\to\logi-control\images\logo.ico, 0"
+$s.WorkingDirectory = "C:\path\to\mouser"
+$s.IconLocation = "C:\path\to\mouser\images\logo.ico, 0"
 $s.Save()
 ```
+
+### Building the Portable App
+
+To produce a standalone `Mouser.exe` that anyone can download and run without Python:
+
+```bash
+# 1. Install PyInstaller (inside your venv)
+pip install pyinstaller
+
+# 2. Build using the included spec file
+pyinstaller Mouser.spec --noconfirm
+
+# — or simply run the build script —
+build.bat
+```
+
+The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
 
 ---
 
@@ -167,7 +218,7 @@ Intercepted events are either **blocked** (hook returns 1) and replaced with an 
 
 ### Gesture Button Detection (3-tier)
 
-The MX Master 3S gesture button doesn't send standard mouse events. LogiControl uses a 3-tier detection system:
+The MX Master 3S gesture button doesn't send standard mouse events. Mouser uses a 3-tier detection system:
 
 1. **HID++ 2.0** (primary, Bluetooth) — Opens the Logitech HID collection, discovers `REPROG_CONTROLS_V4` (feature `0x1B04`), and diverts CID `0x00C3` (gesture button). Best reliability.
 2. **Raw Input** (fallback) — Registers for raw mouse input and detects extra button bits beyond the standard 5.
@@ -183,7 +234,7 @@ The central orchestrator. On app change, it performs a **lightweight profile swi
 
 ### Configuration
 
-All settings are stored in `%APPDATA%\LogiControl\config.json`. The config supports:
+All settings are stored in `%APPDATA%\Mouser\config.json`. The config supports:
 - Multiple named profiles with per-profile button mappings
 - Per-profile app associations (list of `.exe` names)
 - Global settings: DPI, scroll inversion, start options
@@ -194,9 +245,9 @@ All settings are stored in `%APPDATA%\LogiControl\config.json`. The config suppo
 ## Project Structure
 
 ```
-logi-control/
+mouser/
 ├── main_qml.py              # Application entry point (PySide6 + QML)
-├── LogiControl.bat          # Quick-launch batch file
+├── Mouser.bat               # Quick-launch batch file
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
@@ -221,7 +272,7 @@ logi-control/
 │
 └── images/
     ├── mouse.png            # MX Master 3S top-down diagram
-    ├── logo.png             # LogiControl logo (source)
+    ├── logo.png             # Mouser logo (source)
     ├── logo.ico             # Multi-size icon for shortcuts
     ├── logo_icon.png        # Square icon with background
     ├── chrom.png            # App icon: Chrome
@@ -252,7 +303,7 @@ The app has two pages accessible from a slim sidebar:
 - **Windows only** — relies on `SetWindowsHookExW`, `SendInput`, and Windows Raw Input APIs
 - **MX Master 3S only** — HID++ feature indices and CIDs are hardcoded for this device (PID `0xB034`)
 - **Bluetooth recommended** — HID++ gesture button divert works best over Bluetooth; USB receiver has partial support
-- **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running LogiControl
+- **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
 - **Admin not required** — but some games or elevated windows may not receive injected keystrokes
 
@@ -291,4 +342,4 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 
 ---
 
-**LogiControl** is not affiliated with or endorsed by Logitech. "Logitech", "MX Master", and "Options+" are trademarks of Logitech International S.A.
+**Mouser** is not affiliated with or endorsed by Logitech. "Logitech", "MX Master", and "Options+" are trademarks of Logitech International S.A.
