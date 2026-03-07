@@ -7,7 +7,13 @@ import json
 import os
 import sys
 
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "LogiControl")
+if sys.platform == "darwin":
+    CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "LogiControl")
+elif sys.platform == "win32":
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "LogiControl")
+else:
+    CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".logicontrol")
+
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 # Which mouse events map to which friendly button names
@@ -64,12 +70,22 @@ DEFAULT_CONFIG = {
 # icon values must match filenames in images/ (without extension for png,
 # or with extension for non-png like .webp)
 KNOWN_APPS = {
+    # Windows executables
     "msedge.exe":                {"label": "Microsoft Edge",       "icon": ""},
     "chrome.exe":                {"label": "Google Chrome",        "icon": "chrom"},
     "Microsoft.Media.Player.exe":{"label": "Windows Media Player", "icon": "media.webp"},
     "wmplayer.exe":              {"label": "Windows Media Player (Classic)", "icon": "media.webp"},
     "vlc.exe":                   {"label": "VLC Media Player",     "icon": "VLC"},
     "Code.exe":                  {"label": "Visual Studio Code",   "icon": "VSCODE"},
+    # macOS executables (basename of the bundle binary)
+    "Safari":                    {"label": "Safari",               "icon": ""},
+    "Google Chrome":             {"label": "Google Chrome",        "icon": "chrom"},
+    "Chromium":                  {"label": "Chromium",             "icon": "chrom"},
+    "Firefox":                   {"label": "Firefox",              "icon": ""},
+    "VLC":                       {"label": "VLC Media Player",     "icon": "VLC"},
+    "Code":                      {"label": "Visual Studio Code",   "icon": "VSCODE"},
+    "Finder":                    {"label": "Finder",               "icon": ""},
+    "Music":                     {"label": "Apple Music",          "icon": ""},
 }
 
 

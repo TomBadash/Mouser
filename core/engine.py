@@ -132,8 +132,12 @@ class Engine:
         self._enabled = enabled
 
     def start(self):
+        import time
+        print("[Engine] calling hook.start()...", flush=True)
         self.hook.start()
+        print("[Engine] hook.start() returned, calling app_detector.start()...", flush=True)
         self._app_detector.start()
+        print("[Engine] app_detector.start() returned", flush=True)
         # Read current DPI from device on startup (don't overwrite it)
         self._dpi_read_cb = None   # UI callback for initial DPI
         def _read_dpi():

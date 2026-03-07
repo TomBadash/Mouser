@@ -14,12 +14,29 @@ Requires:  pip install hidapi
 Falls back gracefully if the package or device are unavailable.
 """
 
+import sys
 import threading
 import time
 
 try:
     import hid as _hid
     HIDAPI_OK = True
+
+    # On macOS, hidapi opens HID devices with kIOHIDOptionsTypeSeizeDevice by
+    # default, grabbing exclusive access.  For Bluetooth devices this seizes the
+    # entire transport, blocking the system mouse driver from reading movement
+    # data and freezing the cursor.  Disable exclusive open so the OS mouse
+    # input continues to work alongside our vendor-page HID++ communication.
+    if sys.platform == "darwin":
+        try:
+            import ctypes as _ct
+            _hidlib = _ct.CDLL(_hid.__file__)
+            _hidlib.hid_darwin_set_open_exclusive.argtypes = [_ct.c_int]
+            _hidlib.hid_darwin_set_open_exclusive.restype = _ct.c_int
+            _hidlib.hid_darwin_set_open_exclusive(0)
+            print("[HidGesture] macOS: disabled exclusive HID device open")
+        except Exception as exc:
+            print(f"[HidGesture] macOS: could not disable exclusive open: {exc}")
 except ImportError:
     HIDAPI_OK = False
 
@@ -136,15 +153,20 @@ class HidGestureListener:
         self._dev.write(buf)
 
     def _rx(self, timeout_ms=2000):
-        """Read one HID input report (blocking with timeout)."""
+        """Read one HID input report using non-blocking poll."""
         dev = self._dev
         if dev is None:
             return None
-        try:
-            d = dev.read(64, timeout_ms)
-            return list(d) if d else None
-        except Exception:
-            return None
+        deadline = time.time() + timeout_ms / 1000.0
+        while time.time() < deadline:
+            try:
+                d = dev.read(64)
+                if d:
+                    return list(d)
+            except Exception:
+                return None
+            time.sleep(0.005)   # 5 ms poll — stays on daemon thread, never blocks main run loop
+        return None
 
     def _request(self, feat, func, params, timeout_ms=2000):
         """Send a long HID++ request, wait for matching response."""
@@ -340,7 +362,7 @@ class HidGestureListener:
             try:
                 d = _hid.device()
                 d.open_path(info["path"])
-                d.set_nonblocking(False)
+                d.set_nonblocking(True)   # non-blocking: don't touch main run loop
                 self._dev = d
             except Exception as exc:
                 print(f"[HidGesture] Can't open PID=0x{pid:04X} "
