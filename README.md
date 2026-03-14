@@ -195,15 +195,15 @@ The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
 ┌─────────────┐     ┌──────────┐     ┌────────────────┐
 │  Mouse HW   │────▶│ Mouse    │────▶│ Engine         │
 │ (MX Master) │     │ Hook     │     │ (orchestrator) │
-└─────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
+└─────────────┘     └────▲─────┘     └───────┬────────┘
+                         │                   │
+                    block/pass          ┌────▼────────┐
+                         │              │ Key         │
+┌─────────────┐     ┌────┴─────┐        │ Simulator   │
 │ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
 │ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
-                         ▲
+└─────────────┘     └────▲─────┘
+                         │
                     ┌────┴────────┐
                     │ App         │
                     │ Detector    │
