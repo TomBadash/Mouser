@@ -66,6 +66,19 @@ Actions that use **Ctrl** on Windows automatically use **Cmd (⌘)** on macOS:
 On macOS, the HID gesture listener uses non-exclusive access (`hid_darwin_set_open_exclusive(0)`)
 so the mouse continues to function normally while Mouser reads HID++ reports.
 
+## Packaging as a macOS App
+
+To build a self-contained macOS `.app` bundle, simply run:
+
+```bash
+pyinstaller Mouser.spec
+```
+
+The output will be placed in `dist/Mouser.app`. 
+This application package runs silently in the background (as an `LSUIElement`), meaning it will only appear in your Menu Bar and not clutter your Dock. 
+
+*Note: If you encounter permissions issues or the app silent-crashes at startup, ensure you grant the built `Mouser.app` Accessibility permissions in macOS System Settings.*
+
 ## Running
 
 ```bash
