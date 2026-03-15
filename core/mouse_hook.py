@@ -811,6 +811,7 @@ elif sys.platform == "darwin":
     _BTN_MIDDLE = 2
     _BTN_BACK = 3
     _BTN_FORWARD = 4
+    _SCROLL_INVERT_MARKER = 0x4D4F5553
 
     class MouseHook:
         """
@@ -928,6 +929,58 @@ elif sys.platform == "darwin":
                 value = Quartz.CGEventGetIntegerValueField(cg_event, field)
                 if value:
                     Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
+
+        def _post_inverted_scroll_event(self, cg_event):
+            v_point = Quartz.CGEventGetIntegerValueField(
+                cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis1
+            )
+            h_point = Quartz.CGEventGetIntegerValueField(
+                cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis2
+            )
+            if self.invert_vscroll:
+                v_point = -v_point
+            if self.invert_hscroll:
+                h_point = -h_point
+
+            inverted = Quartz.CGEventCreateScrollWheelEvent(
+                None,
+                Quartz.kCGScrollEventUnitPixel,
+                2,
+                v_point,
+                h_point,
+            )
+            if not inverted:
+                return False
+            Quartz.CGEventSetFlags(inverted, Quartz.CGEventGetFlags(cg_event))
+            Quartz.CGEventSetIntegerValueField(
+                inverted, Quartz.kCGEventSourceUserData, _SCROLL_INVERT_MARKER
+            )
+            for axis in (1, 2):
+                sign = -1 if (
+                    (axis == 1 and self.invert_vscroll) or
+                    (axis == 2 and self.invert_hscroll)
+                ) else 1
+                for field_name in (
+                    f"kCGScrollWheelEventDeltaAxis{axis}",
+                    f"kCGScrollWheelEventFixedPtDeltaAxis{axis}",
+                    f"kCGScrollWheelEventPointDeltaAxis{axis}",
+                ):
+                    field = getattr(Quartz, field_name, None)
+                    if field is None:
+                        continue
+                    value = Quartz.CGEventGetIntegerValueField(cg_event, field)
+                    Quartz.CGEventSetIntegerValueField(inverted, field, sign * value)
+            for field_name in (
+                "kCGScrollWheelEventScrollPhase",
+                "kCGScrollWheelEventMomentumPhase",
+            ):
+                field = getattr(Quartz, field_name, None)
+                if field is None:
+                    continue
+                value = Quartz.CGEventGetIntegerValueField(cg_event, field)
+                Quartz.CGEventSetIntegerValueField(inverted, field, value)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, inverted)
+            return True
 
         def _gesture_cooldown_active(self):
             return time.monotonic() < self._gesture_cooldown_until
@@ -1116,8 +1169,12 @@ elif sys.platform == "darwin":
                         should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
 
                 elif event_type == Quartz.kCGEventScrollWheel:
-                    if self.invert_vscroll:
-                        self._negate_scroll_axis(cg_event, 1)
+                    if (
+                        Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGEventSourceUserData
+                        ) == _SCROLL_INVERT_MARKER
+                    ):
+                        return cg_event
                     h_delta = Quartz.CGEventGetIntegerValueField(
                         cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2)
                     h_delta = h_delta / 65536.0
@@ -1136,6 +1193,14 @@ elif sys.platform == "darwin":
                         else:
                             mouse_event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(h_delta))
                             should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+                    if mouse_event:
+                        self._dispatch_queue.put(mouse_event)
+                        mouse_event = None
+                    if should_block:
+                        return None
+                    if self.invert_vscroll or self.invert_hscroll:
+                        if self._post_inverted_scroll_event(cg_event):
+                            return None
 
                 if mouse_event:
                     self._dispatch_queue.put(mouse_event)
