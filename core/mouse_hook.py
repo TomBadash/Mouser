@@ -1054,6 +1054,18 @@ elif sys.platform == "darwin":
                 )
                 self._start_gesture_tracking()
 
+            # Prefer device-provided RawXY over CGEventTap deltas. On fast swipes
+            # the event tap can emit a tiny starter delta before the HID stream
+            # arrives; if we keep that lock, the real swipe is discarded and the
+            # release falls through as a click.
+            if source == "hid_rawxy" and self._gesture_input_source == "event_tap":
+                self._emit_debug(
+                    "Gesture source promoted from event_tap to hid_rawxy "
+                    f"prev_accum_x={self._gesture_delta_x} "
+                    f"prev_accum_y={self._gesture_delta_y}"
+                )
+                self._start_gesture_tracking()
+
             if self._gesture_input_source not in (None, source):
                 self._emit_debug(
                     f"Gesture source locked to {self._gesture_input_source}; "
