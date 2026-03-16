@@ -31,6 +31,7 @@ class Engine:
         self._profile_change_cb = None       # UI callback
         self._connection_change_cb = None   # UI callback for device status
         self._battery_read_cb = None        # UI callback for battery level
+        self._dpi_read_cb = None            # UI callback for current DPI
         self._debug_cb = None               # UI callback for debug messages
         self._debug_events_enabled = bool(
             self.cfg.get("settings", {}).get("debug_mode", False)
@@ -252,7 +253,6 @@ class Engine:
         self.hook.start()
         self._app_detector.start()
         # Read current DPI from device on startup (don't overwrite it)
-        self._dpi_read_cb = None   # UI callback for initial DPI
         def _read_dpi():
             import time
             time.sleep(3)  # give HID++ time to connect
