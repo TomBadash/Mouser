@@ -231,6 +231,10 @@ class Engine:
     def device_connected(self):
         return self.hook.device_connected
 
+    @property
+    def enabled(self):
+        return self._enabled
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -258,7 +262,7 @@ class Engine:
             self._emit_debug(f"reload_mappings profile={self._current_profile}")
 
     def set_enabled(self, enabled):
-        self._enabled = enabled
+        self._enabled = bool(enabled)
 
     def start(self):
         self.hook.start()

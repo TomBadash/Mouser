@@ -289,7 +289,7 @@ def main():
     toggle_action = QAction("Disable Remapping", tray_menu)
 
     def toggle_remapping():
-        enabled = not engine._enabled
+        enabled = not engine.enabled
         engine.set_enabled(enabled)
         toggle_action.setText(
             "Disable Remapping" if enabled else "Enable Remapping")
@@ -323,8 +323,7 @@ def main():
     quit_action = QAction("Quit Mouser", tray_menu)
 
     def quit_app():
-        engine.hook.stop()
-        engine._app_detector.stop()
+        engine.stop()
         tray.hide()
         app.quit()
 
@@ -346,8 +345,7 @@ def main():
     try:
         sys.exit(app.exec())
     finally:
-        engine.hook.stop()
-        engine._app_detector.stop()
+        engine.stop()
         print("[Mouser] Shut down cleanly")
 
 
