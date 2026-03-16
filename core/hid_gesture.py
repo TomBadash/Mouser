@@ -109,6 +109,30 @@ if sys.platform == "darwin":
         print(f"[HidGesture] macOS native HID unavailable: {exc}")
 
 
+_BACKEND_PREFERENCE = "auto"
+
+
+def set_backend_preference(preference):
+    normalized = (preference or "auto").strip().lower()
+    if normalized not in {"auto", "hidapi", "iokit"}:
+        raise ValueError("hid backend must be one of: auto, hidapi, iokit")
+    if normalized == "hidapi" and not HIDAPI_OK:
+        raise ValueError("hidapi backend requested but hidapi is not available")
+    if normalized == "iokit":
+        if sys.platform != "darwin":
+            raise ValueError("iokit backend is only available on macOS")
+        if not _MAC_NATIVE_OK:
+            raise ValueError("iokit backend requested but native macOS HID is unavailable")
+
+    global _BACKEND_PREFERENCE
+    _BACKEND_PREFERENCE = normalized
+    print(f"[HidGesture] Backend preference set to {normalized}")
+
+
+def get_backend_preference():
+    return _BACKEND_PREFERENCE
+
+
 if _MAC_NATIVE_OK:
     class _MacNativeHidDevice:
         """Minimal IOHIDDevice wrapper for Logitech BLE HID++ on macOS."""
@@ -574,7 +598,7 @@ class HidGestureListener:
             seen.add(key)
             out.append(info)
 
-        if HIDAPI_OK:
+        if HIDAPI_OK and _BACKEND_PREFERENCE in ("auto", "hidapi"):
             try:
                 for info in _hid.enumerate(LOGI_VID, 0):
                     if info.get("usage_page", 0) >= 0xFF00:
@@ -582,7 +606,11 @@ class HidGestureListener:
             except Exception as exc:
                 print(f"[HidGesture] hidapi enumerate error: {exc}")
 
-        if sys.platform == "darwin" and _MAC_NATIVE_OK:
+        if (
+            sys.platform == "darwin"
+            and _MAC_NATIVE_OK
+            and _BACKEND_PREFERENCE in ("auto", "iokit")
+        ):
             for info in _MacNativeHidDevice.enumerate_infos():
                 add_info(info)
 
@@ -975,6 +1003,7 @@ class HidGestureListener:
         if not infos:
             return False
 
+        print(f"[HidGesture] Backend preference: {_BACKEND_PREFERENCE}")
         print(f"[HidGesture] Candidate HID interfaces: {len(infos)}")
         for info in infos:
             pid = int(info.get("product_id", 0) or 0)
@@ -999,9 +1028,13 @@ class HidGestureListener:
             self._gesture_candidates = [DEFAULT_GESTURE_CID]
             self._rawxy_enabled = False
             open_attempts = []
-            if info.get("path"):
+            if _BACKEND_PREFERENCE in ("auto", "hidapi") and info.get("path"):
                 open_attempts.append(("hidapi", info))
-            if sys.platform == "darwin" and _MAC_NATIVE_OK:
+            if (
+                sys.platform == "darwin"
+                and _MAC_NATIVE_OK
+                and _BACKEND_PREFERENCE in ("auto", "iokit")
+            ):
                 open_attempts.extend([
                     ("iokit-exact", info),
                     ("iokit-ble", {
