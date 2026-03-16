@@ -6,7 +6,7 @@ Supports per-application auto-switching of profiles.
 
 import threading
 from core.mouse_hook import MouseHook, MouseEvent
-from core.key_simulator import execute_action
+from core.key_simulator import ACTIONS, execute_action
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
@@ -31,7 +31,12 @@ class Engine:
         self._profile_change_cb = None       # UI callback
         self._connection_change_cb = None   # UI callback for device status
         self._battery_read_cb = None        # UI callback for battery level
+        self._debug_cb = None               # UI callback for debug messages
+        self._debug_events_enabled = bool(
+            self.cfg.get("settings", {}).get("debug_mode", False)
+        )
         self._lock = threading.Lock()
+        self.hook.set_debug_callback(self._emit_debug)
         self._setup_hooks()
         self.hook.set_connection_change_callback(self._on_connection_change)
         # Apply persisted DPI setting
@@ -53,6 +58,7 @@ class Engine:
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        self.hook.debug_mode = self._debug_events_enabled
         self.hook.configure_gestures(
             enabled=any(mappings.get(key, "none") != "none"
                         for key in GESTURE_DIRECTION_BUTTONS),
@@ -61,6 +67,7 @@ class Engine:
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
         )
+        self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
@@ -82,6 +89,10 @@ class Engine:
     def _make_handler(self, action_id):
         def handler(event):
             if self._enabled:
+                self._emit_debug(
+                    f"Mapped {event.event_type} -> {action_id} "
+                    f"({self._action_label(action_id)})"
+                )
                 execute_action(action_id)
         return handler
 
@@ -89,6 +100,10 @@ class Engine:
         def handler(event):
             if not self._enabled:
                 return
+            self._emit_debug(
+                f"Mapped {event.event_type} -> {action_id} "
+                f"({self._action_label(action_id)})"
+            )
             execute_action(action_id)
         return handler
 
@@ -110,6 +125,7 @@ class Engine:
             # Lightweight: just re-wire callbacks, keep hook + HID++ alive
             self.hook.reset_bindings()
             self._setup_hooks()
+            self._emit_debug(f"Active profile -> {profile_name}")
         # Notify UI (if connected)
         if self._profile_change_cb:
             try:
@@ -120,6 +136,52 @@ class Engine:
     def set_profile_change_callback(self, cb):
         """Register a callback ``cb(profile_name)`` invoked on auto-switch."""
         self._profile_change_cb = cb
+
+    def set_debug_callback(self, cb):
+        """Register ``cb(message: str)`` invoked for debug events."""
+        self._debug_cb = cb
+
+    def set_debug_enabled(self, enabled):
+        enabled = bool(enabled)
+        self.cfg.setdefault("settings", {})["debug_mode"] = enabled
+        self._debug_events_enabled = enabled
+        self.hook.debug_mode = enabled
+        if enabled:
+            self._emit_debug(f"Debug enabled on profile {self._current_profile}")
+            self._emit_mapping_snapshot(
+                "Current mappings", get_active_mappings(self.cfg)
+            )
+
+    def set_debug_events_enabled(self, enabled):
+        self._debug_events_enabled = bool(enabled)
+        self.hook.debug_mode = self._debug_events_enabled
+
+    def _action_label(self, action_id):
+        return ACTIONS.get(action_id, {}).get("label", action_id)
+
+    def _emit_debug(self, message):
+        if not self._debug_events_enabled:
+            return
+        if self._debug_cb:
+            try:
+                self._debug_cb(message)
+            except Exception:
+                pass
+
+    def _emit_mapping_snapshot(self, prefix, mappings):
+        if not self._debug_events_enabled:
+            return
+        interesting = [
+            "gesture",
+            "gesture_left",
+            "gesture_right",
+            "gesture_up",
+            "gesture_down",
+            "xbutton1",
+            "xbutton2",
+        ]
+        summary = ", ".join(f"{key}={mappings.get(key, 'none')}" for key in interesting)
+        self._emit_debug(f"{prefix}: {summary}")
 
     def _on_connection_change(self, connected):
         if self._connection_change_cb:
@@ -181,6 +243,7 @@ class Engine:
             self._current_profile = self.cfg.get("active_profile", "default")
             self.hook.reset_bindings()
             self._setup_hooks()
+            self._emit_debug(f"reload_mappings profile={self._current_profile}")
 
     def set_enabled(self, enabled):
         self._enabled = enabled

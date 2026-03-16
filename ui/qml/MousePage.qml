@@ -947,6 +947,253 @@ Item {
                         }
                     }
 
+                    Rectangle {
+                        width: parent.width - 56
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: debugCol.implicitHeight + 24
+                        radius: 14
+                        color: theme.bgCard
+                        border.width: 1
+                        border.color: theme.border
+                        visible: backend.debugMode
+
+                        Column {
+                            id: debugCol
+                            anchors.fill: parent
+                            anchors.margins: 16
+                            spacing: 12
+
+                            RowLayout {
+                                width: parent.width
+                                spacing: 12
+
+                                Column {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+
+                                    Text {
+                                        text: "Debug Events"
+                                        font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: "Collects detected buttons, gestures, and mapped actions"
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+
+                                Switch {
+                                    checked: backend.debugEventsEnabled
+                                    text: checked ? "On" : "Off"
+                                    Material.accent: theme.accent
+                                    onToggled: backend.setDebugEventsEnabled(checked)
+                                }
+
+                                Switch {
+                                    checked: backend.recordMode
+                                    text: checked ? "Rec" : "Record"
+                                    Material.accent: "#e46f4e"
+                                    onToggled: backend.setRecordMode(checked)
+                                }
+
+                                Rectangle {
+                                    width: clearText.implicitWidth + 20
+                                    height: 28
+                                    radius: 8
+                                    color: clearMa.containsMouse
+                                           ? Qt.rgba(1, 1, 1, 0.08)
+                                           : Qt.rgba(1, 1, 1, 0.04)
+
+                                    Text {
+                                        id: clearText
+                                        anchors.centerIn: parent
+                                        text: "Clear"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    MouseArea {
+                                        id: clearMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: backend.clearDebugLog()
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: clearRecText.implicitWidth + 20
+                                    height: 28
+                                    radius: 8
+                                    color: clearRecMa.containsMouse
+                                           ? Qt.rgba(1, 1, 1, 0.08)
+                                           : Qt.rgba(1, 1, 1, 0.04)
+
+                                    Text {
+                                        id: clearRecText
+                                        anchors.centerIn: parent
+                                        text: "Clear Rec"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    MouseArea {
+                                        id: clearRecMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: backend.clearGestureRecords()
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                radius: 10
+                                color: Qt.rgba(1, 1, 1, 0.03)
+                                border.width: 1
+                                border.color: theme.border
+                                height: monitorCol.implicitHeight + 20
+
+                                Column {
+                                    id: monitorCol
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Live Gesture Monitor"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Row {
+                                        spacing: 8
+
+                                        Rectangle {
+                                            width: activeText.implicitWidth + 16
+                                            height: 24
+                                            radius: 12
+                                            color: backend.gestureActive
+                                                   ? Qt.rgba(0.89, 0.45, 0.25, 0.18)
+                                                   : Qt.rgba(1, 1, 1, 0.05)
+
+                                            Text {
+                                                id: activeText
+                                                anchors.centerIn: parent
+                                                text: backend.gestureActive ? "Held" : "Idle"
+                                                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                color: backend.gestureActive ? "#f39c6b" : theme.textSecondary
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            width: moveText.implicitWidth + 16
+                                            height: 24
+                                            radius: 12
+                                            color: backend.gestureMoveSeen
+                                                   ? Qt.rgba(0, 0.83, 0.67, 0.12)
+                                                   : Qt.rgba(1, 1, 1, 0.05)
+
+                                            Text {
+                                                id: moveText
+                                                anchors.centerIn: parent
+                                                text: backend.gestureMoveSeen ? "Move Seen" : "No Move"
+                                                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                color: backend.gestureMoveSeen ? theme.accent : theme.textSecondary
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Source: "
+                                              + (backend.gestureMoveSource ? backend.gestureMoveSource : "n/a")
+                                              + " | dx: " + backend.gestureMoveDx
+                                              + " | dy: " + backend.gestureMoveDy
+                                        font { family: "Menlo"; pixelSize: 11 }
+                                        color: theme.textSecondary
+                                    }
+
+                                    Text {
+                                        text: backend.gestureStatus
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.textPrimary
+                                        wrapMode: Text.Wrap
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 160
+                                radius: 10
+                                color: Qt.rgba(0, 0, 0, 0.18)
+                                border.width: 1
+                                border.color: theme.border
+
+                                ScrollView {
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    clip: true
+
+                                    TextArea {
+                                        id: debugLogArea
+                                        text: backend.debugLog.length
+                                              ? backend.debugLog
+                                              : "Turn on debug mode, then press buttons or use the gesture button."
+                                        readOnly: true
+                                        wrapMode: TextEdit.NoWrap
+                                        selectByMouse: true
+                                        color: backend.debugLog.length
+                                               ? theme.textPrimary
+                                               : theme.textSecondary
+                                        font.pixelSize: 11
+                                        font.family: "Menlo"
+                                        background: null
+                                        padding: 10
+
+                                        onTextChanged: {
+                                            cursorPosition = length
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 180
+                                radius: 10
+                                color: Qt.rgba(0, 0, 0, 0.18)
+                                border.width: 1
+                                border.color: theme.border
+
+                                ScrollView {
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    clip: true
+
+                                    TextArea {
+                                        text: backend.gestureRecords.length
+                                              ? backend.gestureRecords
+                                              : "Turn on Record and perform a few gesture attempts."
+                                        readOnly: true
+                                        wrapMode: TextEdit.Wrap
+                                        selectByMouse: true
+                                        color: backend.gestureRecords.length
+                                               ? theme.textPrimary
+                                               : theme.textSecondary
+                                        font.pixelSize: 11
+                                        font.family: "Menlo"
+                                        background: null
+                                        padding: 10
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Item { width: 1; height: 24 }
                 }
             }
