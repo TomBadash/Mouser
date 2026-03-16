@@ -36,6 +36,7 @@ class Engine:
         self._debug_events_enabled = bool(
             self.cfg.get("settings", {}).get("debug_mode", False)
         )
+        self._battery_poll_stop = threading.Event()
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self._setup_hooks()
@@ -185,28 +186,38 @@ class Engine:
         self._emit_debug(f"{prefix}: {summary}")
 
     def _on_connection_change(self, connected):
+        self._battery_poll_stop.set()
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
             except Exception:
                 pass
         if connected:
+            self._battery_poll_stop = threading.Event()
             threading.Thread(
-                target=self._read_battery_now, daemon=True, name="BatteryRead"
+                target=self._battery_poll_loop,
+                args=(self._battery_poll_stop,),
+                daemon=True,
+                name="BatteryPoll",
             ).start()
 
-    def _read_battery_now(self):
-        """Read battery level from HID++ and fire the callback."""
-        import time
-        time.sleep(1)   # brief settle after connect
-        hg = self.hook._hid_gesture
-        if hg:
-            level = hg.read_battery()
-            if level is not None and self._battery_read_cb:
-                try:
-                    self._battery_read_cb(level)
-                except Exception:
-                    pass
+    def _battery_poll_loop(self, stop_event):
+        """Read battery on connect and refresh it periodically until disconnected."""
+        if stop_event.wait(1):
+            return
+        while not stop_event.is_set():
+            hg = self.hook._hid_gesture
+            if hg:
+                level = hg.read_battery()
+                if stop_event.is_set():
+                    return
+                if level is not None and self._battery_read_cb:
+                    try:
+                        self._battery_read_cb(level)
+                    except Exception:
+                        pass
+            if stop_event.wait(300):
+                return
 
     def set_battery_callback(self, cb):
         """Register ``cb(level: int)`` invoked when battery level is read (0-100)."""
@@ -274,5 +285,6 @@ class Engine:
         self._dpi_read_cb = cb
 
     def stop(self):
+        self._battery_poll_stop.set()
         self._app_detector.stop()
         self.hook.stop()
