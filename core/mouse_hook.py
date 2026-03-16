@@ -233,6 +233,7 @@ if sys.platform == "win32":
             self._blocked_events = set()
             self._hook_proc = None
             self._debug_callback = None
+            self._gesture_callback = None
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
@@ -249,6 +250,8 @@ if sys.platform == "win32":
             self._last_rehook_time = 0
             self._device_connected = False
             self._connection_change_cb = None
+            self._startup_event = threading.Event()
+            self._startup_ok = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
             self._gesture_deadzone = 40.0
@@ -257,6 +260,7 @@ if sys.platform == "win32":
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
@@ -310,10 +314,20 @@ if sys.platform == "win32":
         def set_debug_callback(self, callback):
             self._debug_callback = callback
 
+        def set_gesture_callback(self, callback):
+            self._gesture_callback = callback
+
         def _emit_debug(self, message):
             if self.debug_mode and self._debug_callback:
                 try:
                     self._debug_callback(message)
+                except Exception:
+                    pass
+
+        def _emit_gesture_event(self, event):
+            if self.debug_mode and self._gesture_callback:
+                try:
+                    self._gesture_callback(event)
                 except Exception:
                     pass
 
@@ -323,8 +337,19 @@ if sys.platform == "win32":
                 f"Dispatch {event.event_type}"
                 f"{_format_debug_details(event.raw_data)} callbacks={len(callbacks)}"
             )
+            if event.event_type.startswith("gesture_"):
+                self._emit_gesture_event({
+                    "type": "dispatch",
+                    "event_name": event.event_type,
+                    "callbacks": len(callbacks),
+                })
             if not callbacks:
                 self._emit_debug(f"No mapped action for {event.event_type}")
+                if event.event_type.startswith("gesture_"):
+                    self._emit_gesture_event({
+                        "type": "unmapped",
+                        "event_name": event.event_type,
+                    })
             for cb in callbacks:
                 try:
                     cb(event)
@@ -340,6 +365,7 @@ if sys.platform == "win32":
         def _start_gesture_tracking(self):
             self._gesture_tracking = self._gesture_direction_enabled
             self._gesture_started_at = time.monotonic()
+            self._gesture_last_move_at = self._gesture_started_at
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -347,6 +373,7 @@ if sys.platform == "win32":
         def _finish_gesture_tracking(self):
             self._gesture_tracking = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -384,13 +411,24 @@ if sys.platform == "win32":
                     f"Gesture cooldown active source={source} "
                     f"dx={delta_x} dy={delta_y}"
                 )
+                self._emit_gesture_event({
+                    "type": "cooldown_active",
+                    "source": source,
+                    "dx": delta_x,
+                    "dy": delta_y,
+                })
                 return
             if not self._gesture_tracking:
                 self._emit_debug(f"Gesture tracking started source={source}")
+                self._emit_gesture_event({
+                    "type": "tracking_started",
+                    "source": source,
+                })
                 self._start_gesture_tracking()
 
-            elapsed_ms = (time.monotonic() - self._gesture_started_at) * 1000.0
-            if elapsed_ms > self._gesture_timeout_ms:
+            now = time.monotonic()
+            idle_ms = (now - self._gesture_last_move_at) * 1000.0
+            if idle_ms > self._gesture_timeout_ms:
                 self._emit_debug(
                     f"Gesture segment reset timeout source={source} "
                     f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
@@ -407,10 +445,17 @@ if sys.platform == "win32":
 
             self._gesture_delta_x += delta_x
             self._gesture_delta_y += delta_y
+            self._gesture_last_move_at = now
             self._emit_debug(
                 f"Gesture segment source={source} "
                 f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
             )
+            self._emit_gesture_event({
+                "type": "segment",
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            })
 
             gesture_event = self._detect_gesture_event()
             if not gesture_event:
@@ -422,6 +467,13 @@ if sys.platform == "win32":
                 f"{gesture_event} source={source} "
                 f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
             )
+            self._emit_gesture_event({
+                "type": "detected",
+                "event_name": gesture_event,
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            })
             self._dispatch(
                 MouseEvent(
                     gesture_event,
@@ -439,6 +491,11 @@ if sys.platform == "win32":
                 f"Gesture cooldown started source={source} "
                 f"for_ms={self._gesture_cooldown_ms}"
             )
+            self._emit_gesture_event({
+                "type": "cooldown_started",
+                "source": source,
+                "for_ms": self._gesture_cooldown_ms,
+            })
             self._finish_gesture_tracking()
 
         _WM_NAMES = {
@@ -502,30 +559,39 @@ if sys.platform == "win32":
                 elif wParam == WM_MOUSEWHEEL:
                     if self.invert_vscroll:
                         delta = hiword(mouse_data)
-                        if delta != 0:
+                        if delta != 0 and self._ri_hwnd:
                             self._pending_vscroll += (-delta)
-                            if not self._vscroll_posted and self._ri_hwnd:
+                            if self._vscroll_posted:
+                                return 1
+                            if PostMessageW(self._ri_hwnd, WM_APP_INJECT_VSCROLL, 0, 0):
                                 self._vscroll_posted = True
-                                PostMessageW(self._ri_hwnd,
-                                             WM_APP_INJECT_VSCROLL, 0, 0)
-                            return 1
+                                return 1
+                            self._pending_vscroll -= (-delta)
+                        elif delta != 0:
+                            self._emit_debug("Invert vertical scroll skipped: raw input window unavailable")
 
                 elif wParam == WM_MOUSEHWHEEL:
                     delta = hiword(mouse_data)
-                    if self.invert_hscroll:
-                        if delta != 0:
-                            self._pending_hscroll += (-delta)
-                            if not self._hscroll_posted and self._ri_hwnd:
-                                self._hscroll_posted = True
-                                PostMessageW(self._ri_hwnd,
-                                             WM_APP_INJECT_HSCROLL, 0, 0)
-                            return 1
                     if delta > 0:
                         event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
                         should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
                     elif delta < 0:
                         event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                         should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+
+                    if self.invert_hscroll:
+                        # When horizontal scroll is remapped, preserve the mapped
+                        # action instead of short-circuiting into synthetic wheel injection.
+                        if delta != 0 and self._ri_hwnd and not should_block:
+                            self._pending_hscroll += (-delta)
+                            if self._hscroll_posted:
+                                return 1
+                            if PostMessageW(self._ri_hwnd, WM_APP_INJECT_HSCROLL, 0, 0):
+                                self._hscroll_posted = True
+                                return 1
+                            self._pending_hscroll -= (-delta)
+                        elif delta != 0 and not should_block:
+                            self._emit_debug("Invert horizontal scroll skipped: raw input window unavailable")
 
                 if event:
                     self._dispatch(event)
@@ -685,11 +751,15 @@ if sys.platform == "win32":
             self._hook = SetWindowsHookExW(
                 WH_MOUSE_LL, self._hook_proc, GetModuleHandleW(None), 0)
             if not self._hook:
+                self._startup_ok = False
+                self._startup_event.set()
                 print("[MouseHook] Failed to install hook!")
                 return
             print("[MouseHook] Hook installed successfully")
             self._setup_raw_input()
             self._running = True
+            self._startup_ok = True
+            self._startup_event.set()
 
             msg = wintypes.MSG()
             while self._running:
@@ -705,6 +775,7 @@ if sys.platform == "win32":
             if self._hook:
                 UnhookWindowsHookEx(self._hook)
                 self._hook = None
+            self._running = False
             print("[MouseHook] Hook removed")
 
         def _on_device_change(self):
@@ -734,6 +805,7 @@ if sys.platform == "win32":
                 self._gesture_active = True
                 self._gesture_triggered = False
                 self._emit_debug("HID gesture button down")
+                self._emit_gesture_event({"type": "button_down"})
                 if self._gesture_direction_enabled and not self._gesture_cooldown_active():
                     self._start_gesture_tracking()
                 else:
@@ -749,6 +821,10 @@ if sys.platform == "win32":
                 self._emit_debug(
                     f"HID gesture button up click_candidate={str(should_click).lower()}"
                 )
+                self._emit_gesture_event({
+                    "type": "button_up",
+                    "click_candidate": should_click,
+                })
                 if should_click:
                     self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -756,6 +832,12 @@ if sys.platform == "win32":
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
             )
+            self._emit_gesture_event({
+                "type": "move",
+                "source": "hid_rawxy",
+                "dx": delta_x,
+                "dy": delta_y,
+            })
             self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
         def _on_hid_connect(self):
@@ -766,19 +848,28 @@ if sys.platform == "win32":
 
         def start(self):
             if self._hook_thread and self._hook_thread.is_alive():
-                return
+                return True
+            self._startup_ok = False
+            self._startup_event.clear()
+            self._hook_thread = threading.Thread(target=self._run_hook, daemon=True)
+            self._hook_thread.start()
+            if not self._startup_event.wait(2):
+                print("[MouseHook] Hook startup timed out")
+                self.stop()
+                return False
+            if not self._startup_ok:
+                return False
             if HidGestureListener is not None:
-                self._hid_gesture = HidGestureListener(
+                listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
                     on_move=self._on_hid_gesture_move,
                     on_connect=self._on_hid_connect,
                     on_disconnect=self._on_hid_disconnect,
                 )
-                self._hid_gesture.start()
-            self._hook_thread = threading.Thread(target=self._run_hook, daemon=True)
-            self._hook_thread.start()
-            time.sleep(0.1)
+                if listener.start():
+                    self._hid_gesture = listener
+            return True
 
         def stop(self):
             self._running = False
@@ -792,6 +883,8 @@ if sys.platform == "win32":
             self._hook = None
             self._ri_hwnd = None
             self._thread_id = None
+            self._startup_ok = False
+            self._startup_event.clear()
 
 
 # ==================================================================
@@ -827,6 +920,7 @@ elif sys.platform == "darwin":
             self._tap = None
             self._tap_source = None
             self._debug_callback = None
+            self._gesture_callback = None
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
@@ -845,6 +939,7 @@ elif sys.platform == "darwin":
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
@@ -896,10 +991,20 @@ elif sys.platform == "darwin":
         def set_debug_callback(self, callback):
             self._debug_callback = callback
 
+        def set_gesture_callback(self, callback):
+            self._gesture_callback = callback
+
         def _emit_debug(self, message):
             if self.debug_mode and self._debug_callback:
                 try:
                     self._debug_callback(message)
+                except Exception:
+                    pass
+
+        def _emit_gesture_event(self, event):
+            if self.debug_mode and self._gesture_callback:
+                try:
+                    self._gesture_callback(event)
                 except Exception:
                     pass
 
@@ -909,8 +1014,19 @@ elif sys.platform == "darwin":
                 f"Dispatch {event.event_type}"
                 f"{_format_debug_details(event.raw_data)} callbacks={len(callbacks)}"
             )
+            if event.event_type.startswith("gesture_"):
+                self._emit_gesture_event({
+                    "type": "dispatch",
+                    "event_name": event.event_type,
+                    "callbacks": len(callbacks),
+                })
             if not callbacks:
                 self._emit_debug(f"No mapped action for {event.event_type}")
+                if event.event_type.startswith("gesture_"):
+                    self._emit_gesture_event({
+                        "type": "unmapped",
+                        "event_name": event.event_type,
+                    })
             for cb in callbacks:
                 try:
                     cb(event)
@@ -988,6 +1104,7 @@ elif sys.platform == "darwin":
         def _start_gesture_tracking(self):
             self._gesture_tracking = self._gesture_direction_enabled
             self._gesture_started_at = time.monotonic()
+            self._gesture_last_move_at = self._gesture_started_at
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -995,6 +1112,7 @@ elif sys.platform == "darwin":
         def _finish_gesture_tracking(self):
             self._gesture_tracking = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -1032,16 +1150,39 @@ elif sys.platform == "darwin":
                     f"Gesture cooldown active source={source} "
                     f"dx={delta_x} dy={delta_y}"
                 )
+                self._emit_gesture_event({
+                    "type": "cooldown_active",
+                    "source": source,
+                    "dx": delta_x,
+                    "dy": delta_y,
+                })
                 return
             if not self._gesture_tracking:
                 self._emit_debug(f"Gesture tracking started source={source}")
+                self._emit_gesture_event({
+                    "type": "tracking_started",
+                    "source": source,
+                })
                 self._start_gesture_tracking()
 
-            elapsed_ms = (time.monotonic() - self._gesture_started_at) * 1000.0
-            if elapsed_ms > self._gesture_timeout_ms:
+            now = time.monotonic()
+            idle_ms = (now - self._gesture_last_move_at) * 1000.0
+            if idle_ms > self._gesture_timeout_ms:
                 self._emit_debug(
                     f"Gesture segment reset timeout source={source} "
                     f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
+                )
+                self._start_gesture_tracking()
+
+            # Prefer device-provided RawXY over CGEventTap deltas. On fast swipes
+            # the event tap can emit a tiny starter delta before the HID stream
+            # arrives; if we keep that lock, the real swipe is discarded and the
+            # release falls through as a click.
+            if source == "hid_rawxy" and self._gesture_input_source == "event_tap":
+                self._emit_debug(
+                    "Gesture source promoted from event_tap to hid_rawxy "
+                    f"prev_accum_x={self._gesture_delta_x} "
+                    f"prev_accum_y={self._gesture_delta_y}"
                 )
                 self._start_gesture_tracking()
 
@@ -1055,10 +1196,17 @@ elif sys.platform == "darwin":
 
             self._gesture_delta_x += delta_x
             self._gesture_delta_y += delta_y
+            self._gesture_last_move_at = now
             self._emit_debug(
                 f"Gesture segment source={source} "
                 f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
             )
+            self._emit_gesture_event({
+                "type": "segment",
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            })
 
             while True:
                 gesture_event = self._detect_gesture_event()
@@ -1071,6 +1219,13 @@ elif sys.platform == "darwin":
                     f"{gesture_event} source={source} "
                     f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
                 )
+                self._emit_gesture_event({
+                    "type": "detected",
+                    "event_name": gesture_event,
+                    "source": source,
+                    "dx": self._gesture_delta_x,
+                    "dy": self._gesture_delta_y,
+                })
                 self._dispatch_queue.put(
                     MouseEvent(
                         gesture_event,
@@ -1088,6 +1243,11 @@ elif sys.platform == "darwin":
                     f"Gesture cooldown started source={source} "
                     f"for_ms={self._gesture_cooldown_ms}"
                 )
+                self._emit_gesture_event({
+                    "type": "cooldown_started",
+                    "source": source,
+                    "for_ms": self._gesture_cooldown_ms,
+                })
                 self._finish_gesture_tracking()
                 return
 
@@ -1121,6 +1281,14 @@ elif sys.platform == "darwin":
                         f"dx={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGMouseEventDeltaX)} "
                         f"dy={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGMouseEventDeltaY)}"
                     )
+                    self._emit_gesture_event({
+                        "type": "move",
+                        "source": "event_tap",
+                        "dx": Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaX),
+                        "dy": Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaY),
+                    })
                     if self._gesture_input_source == "hid_rawxy":
                         return None
                     self._accumulate_gesture_delta(
@@ -1218,6 +1386,7 @@ elif sys.platform == "darwin":
                 self._gesture_active = True
                 self._gesture_triggered = False
                 self._emit_debug("HID gesture button down")
+                self._emit_gesture_event({"type": "button_down"})
                 if self._gesture_direction_enabled and not self._gesture_cooldown_active():
                     self._start_gesture_tracking()
                 else:
@@ -1233,6 +1402,10 @@ elif sys.platform == "darwin":
                 self._emit_debug(
                     f"HID gesture button up click_candidate={str(should_click).lower()}"
                 )
+                self._emit_gesture_event({
+                    "type": "button_up",
+                    "click_candidate": should_click,
+                })
                 if should_click:
                     self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -1240,6 +1413,12 @@ elif sys.platform == "darwin":
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
             )
+            self._emit_gesture_event({
+                "type": "move",
+                "source": "hid_rawxy",
+                "dx": delta_x,
+                "dy": delta_y,
+            })
             self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
         def _on_hid_connect(self):
@@ -1251,22 +1430,9 @@ elif sys.platform == "darwin":
         def start(self):
             if not _QUARTZ_OK:
                 print("[MouseHook] Quartz not available — hook not installed")
-                return
-            self._running = True
-
-            if HidGestureListener is not None:
-                self._hid_gesture = HidGestureListener(
-                    on_down=self._on_hid_gesture_down,
-                    on_up=self._on_hid_gesture_up,
-                    on_move=self._on_hid_gesture_move,
-                    on_connect=self._on_hid_connect,
-                    on_disconnect=self._on_hid_disconnect,
-                )
-                self._hid_gesture.start()
-
-            self._dispatch_thread = threading.Thread(
-                target=self._dispatch_worker, daemon=True, name="MouseHook-dispatch")
-            self._dispatch_thread.start()
+                return False
+            if self._running:
+                return True
 
             event_mask = (
                 Quartz.CGEventMaskBit(Quartz.kCGEventMouseMoved) |
@@ -1289,7 +1455,7 @@ elif sys.platform == "darwin":
                 print("[MouseHook] ERROR: Failed to create CGEventTap!")
                 print("[MouseHook] Grant Accessibility permission in:")
                 print("[MouseHook]   System Settings -> Privacy & Security -> Accessibility")
-                return
+                return False
 
             print("[MouseHook] CGEventTap created successfully", flush=True)
 
@@ -1301,6 +1467,23 @@ elif sys.platform == "darwin":
             )
             Quartz.CGEventTapEnable(self._tap, True)
             print("[MouseHook] CGEventTap enabled and integrated with run loop", flush=True)
+            self._running = True
+
+            self._dispatch_thread = threading.Thread(
+                target=self._dispatch_worker, daemon=True, name="MouseHook-dispatch")
+            self._dispatch_thread.start()
+
+            if HidGestureListener is not None:
+                listener = HidGestureListener(
+                    on_down=self._on_hid_gesture_down,
+                    on_up=self._on_hid_gesture_up,
+                    on_move=self._on_hid_gesture_move,
+                    on_connect=self._on_hid_connect,
+                    on_disconnect=self._on_hid_disconnect,
+                )
+                if listener.start():
+                    self._hid_gesture = listener
+            return True
 
         def stop(self):
             self._running = False
@@ -1341,6 +1524,7 @@ else:
             self._hid_gesture = None
             self._device_connected = False
             self._connection_change_cb = None
+            self._gesture_callback = None
             print(f"[MouseHook] Platform \'{sys.platform}\' not supported")
 
         def register(self, event_type, callback): pass
@@ -1350,6 +1534,7 @@ else:
         def configure_gestures(self, enabled=False, threshold=50,
                                deadzone=40, timeout_ms=3000, cooldown_ms=500): pass
         def set_debug_callback(self, callback): pass
+        def set_gesture_callback(self, callback): pass
         def set_connection_change_callback(self, cb): pass
         @property
         def device_connected(self): return False

@@ -155,6 +155,16 @@ Mouser.bat
 
 > **Tip:** To run without a console window, use `pythonw.exe main_qml.py` or the `.lnk` shortcut.
 
+Temporary macOS transport override for debugging:
+
+```bash
+python main_qml.py --hid-backend=iokit
+python main_qml.py --hid-backend=hidapi
+python main_qml.py --hid-backend=auto
+```
+
+Use this only for troubleshooting. `auto` is the default behavior.
+
 ### Creating a Desktop Shortcut
 
 A `Mouser.lnk` shortcut is included. To create one manually:

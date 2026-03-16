@@ -139,8 +139,8 @@ Item {
                         }
 
                         Rectangle {
-                            width: 104
-                            height: 36
+                            Layout.preferredWidth: 104
+                            Layout.preferredHeight: 36
                             radius: 10
                             color: scrollPage.theme.accentDim
 

@@ -11,24 +11,39 @@ import "Theme.js" as Theme
 
 Item {
     id: mousePage
+    readonly property var theme: Theme.palette(uiState.darkMode)
+    property string pendingDeleteProfile: ""
 
     // ── Profile state ─────────────────────────────────────────
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
-    property var    selectedProfileApps: []
+    property var selectedProfileMappings: []
 
     Component.onCompleted: selectProfile(backend.activeProfile)
 
+    function refreshSelectedProfileMappings() {
+        selectedProfileMappings = backend.getProfileMappings(selectedProfile)
+    }
+
+    function mappingFor(key) {
+        for (var i = 0; i < selectedProfileMappings.length; i++) {
+            if (selectedProfileMappings[i].key === key)
+                return selectedProfileMappings[i]
+        }
+        return null
+    }
+
     function selectProfile(name) {
         selectedProfile = name
+        selectedProfileLabel = ""
         var profs = backend.profiles
         for (var i = 0; i < profs.length; i++) {
             if (profs[i].name === name) {
                 selectedProfileLabel = profs[i].label
-                selectedProfileApps  = profs[i].apps
                 break
             }
         }
+        refreshSelectedProfileMappings()
         // Clear hotspot selection when switching profiles
         selectedButton = ""
         selectedButtonName = ""
@@ -43,7 +58,6 @@ Item {
             for (var i = 0; i < profs.length; i++) {
                 if (profs[i].name === selectedProfile) {
                     selectedProfileLabel = profs[i].label
-                    selectedProfileApps  = profs[i].apps
                     return
                 }
             }
@@ -68,14 +82,11 @@ Item {
             selectedActionId = ""
             return
         }
-        var btns = backend.getProfileMappings(selectedProfile)
-        for (var i = 0; i < btns.length; i++) {
-            if (btns[i].key === key) {
-                selectedButton = key
-                selectedButtonName = btns[i].name
-                selectedActionId = btns[i].actionId
-                return
-            }
+        var mapping = mappingFor(key)
+        if (mapping) {
+            selectedButton = key
+            selectedButtonName = mapping.name
+            selectedActionId = mapping.actionId
         }
     }
 
@@ -88,42 +99,58 @@ Item {
         }
         selectedButton = "hscroll_left"
         selectedButtonName = "Horizontal Scroll"
-        var btns = backend.getProfileMappings(selectedProfile)
-        for (var i = 0; i < btns.length; i++) {
-            if (btns[i].key === "hscroll_left") {
-                selectedActionId = btns[i].actionId
-                break
-            }
-        }
+        var mapping = mappingFor("hscroll_left")
+        selectedActionId = mapping ? mapping.actionId : "none"
     }
 
     Connections {
         id: mappingsConn
         target: backend
         function onMappingsChanged() {
+            refreshSelectedProfileMappings()
             if (selectedButton === "") return
-            var btns = backend.getProfileMappings(selectedProfile)
-            for (var i = 0; i < btns.length; i++) {
-                if (btns[i].key === selectedButton) {
-                    selectedActionId = btns[i].actionId
-                    break
-                }
+            var mapping = mappingFor(selectedButton)
+            if (mapping) {
+                selectedActionId = mapping.actionId
             }
         }
     }
 
     function actionFor(key) {
-        var btns = backend.getProfileMappings(selectedProfile)
-        for (var i = 0; i < btns.length; i++)
-            if (btns[i].key === key) return btns[i].actionLabel
+        var mapping = mappingFor(key)
+        if (mapping)
+            return mapping.actionLabel
         return "Do Nothing"
     }
 
     function actionFor_id(key) {
-        var btns = backend.getProfileMappings(selectedProfile)
-        for (var i = 0; i < btns.length; i++)
-            if (btns[i].key === key) return btns[i].actionId
+        var mapping = mappingFor(key)
+        if (mapping)
+            return mapping.actionId
         return "none"
+    }
+
+    function actionIndexForId(actionId) {
+        var actions = backend.allActions
+        for (var i = 0; i < actions.length; i++)
+            if (actions[i].id === actionId) return i
+        return 0
+    }
+
+    function gestureSummary() {
+        if (!backend.supportsGestureDirections)
+            return actionFor("gesture")
+
+        var hasSwipeAction =
+                actionFor_id("gesture_left") !== "none"
+                || actionFor_id("gesture_right") !== "none"
+                || actionFor_id("gesture_up") !== "none"
+                || actionFor_id("gesture_down") !== "none"
+
+        if (!hasSwipeAction)
+            return "Tap: " + actionFor("gesture")
+
+        return "Tap: " + actionFor("gesture") + " | Swipes configured"
     }
 
     // ── Main two-column layout ────────────────────────────────
@@ -138,8 +165,8 @@ Item {
             id: leftPanel
             width: 220
             height: parent.height
-            color: Theme.bgCard
-            border.width: 1; border.color: Theme.border
+            color: theme.bgCard
+            border.width: 1; border.color: theme.border
 
             Column {
                 anchors.fill: parent
@@ -155,12 +182,12 @@ Item {
                             verticalCenter: parent.verticalCenter
                         }
                         text: "Profiles"
-                        font { family: Theme.fontFamily; pixelSize: 14; bold: true }
-                        color: Theme.textPrimary
+                        font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                        color: theme.textPrimary
                     }
                 }
 
-                Rectangle { width: parent.width; height: 1; color: Theme.border }
+                Rectangle { width: parent.width; height: 1; color: theme.border }
 
                 // Profile items
                 ListView {
@@ -192,7 +219,7 @@ Item {
                             Rectangle {
                                 width: 3; height: 28; radius: 2
                                 color: modelData.isActive
-                                       ? Theme.accent : "transparent"
+                                       ? theme.accent : "transparent"
                                 anchors.verticalCenter: parent.verticalCenter
                             }
 
@@ -228,11 +255,11 @@ Item {
                                 Text {
                                     text: modelData.label
                                     font {
-                                        family: Theme.fontFamily
+                                        family: uiState.fontFamily
                                         pixelSize: 12; bold: true
                                     }
                                     color: selectedProfile === modelData.name
-                                           ? Theme.accent : Theme.textPrimary
+                                           ? theme.accent : theme.textPrimary
                                     elide: Text.ElideRight
                                     width: leftPanel.width - 70
                                 }
@@ -240,8 +267,8 @@ Item {
                                     text: modelData.apps.length
                                           ? modelData.apps.join(", ")
                                           : "All applications"
-                                    font { family: Theme.fontFamily; pixelSize: 9 }
-                                    color: Theme.textSecondary
+                                    font { family: uiState.fontFamily; pixelSize: 9 }
+                                    color: theme.textSecondary
                                     elide: Text.ElideRight
                                     width: leftPanel.width - 70
                                 }
@@ -258,7 +285,7 @@ Item {
                     }
                 }
 
-                Rectangle { width: parent.width; height: 1; color: Theme.border }
+                Rectangle { width: parent.width; height: 1; color: theme.border }
 
                 // Add profile controls
                 Item {
@@ -281,20 +308,22 @@ Item {
                                     labels.push(apps[i].label)
                                 return labels
                             }
-                            Material.accent: Theme.accent
-                            font { family: Theme.fontFamily; pixelSize: 10 }
+                            Material.accent: theme.accent
+                            font { family: uiState.fontFamily; pixelSize: 10 }
                         }
 
                         Rectangle {
-                            width: 42; height: 28; radius: 8
+                            Layout.preferredWidth: 42
+                            Layout.preferredHeight: 28
+                            radius: 8
                             color: addBtnMa.containsMouse
-                                   ? Theme.accentHover : Theme.accent
+                                   ? theme.accentHover : theme.accent
 
                             Text {
                                 anchors.centerIn: parent
                                 text: "+"
-                                font { family: Theme.fontFamily; pixelSize: 16; bold: true }
-                                color: Theme.bgSidebar
+                                font { family: uiState.fontFamily; pixelSize: 16; bold: true }
+                                color: theme.bgSidebar
                             }
 
                             MouseArea {
@@ -351,8 +380,8 @@ Item {
 
                                     Text {
                                         text: "MX Master 3S"
-                                        font { family: Theme.fontFamily; pixelSize: 20; bold: true }
-                                        color: Theme.textPrimary
+                                        font { family: uiState.fontFamily; pixelSize: 20; bold: true }
+                                        color: theme.textPrimary
                                     }
 
                                     // Profile badge
@@ -367,16 +396,16 @@ Item {
                                             id: profBadgeText
                                             anchors.centerIn: parent
                                             text: selectedProfileLabel
-                                            font { family: Theme.fontFamily; pixelSize: 11 }
-                                            color: Theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.accent
                                         }
                                     }
                                 }
 
                                 Text {
                                     text: "Click a dot to configure its action"
-                                    font { family: Theme.fontFamily; pixelSize: 12 }
-                                    color: Theme.textSecondary
+                                    font { family: uiState.fontFamily; pixelSize: 12 }
+                                    color: theme.textSecondary
                                 }
                             }
                         }
@@ -393,18 +422,31 @@ Item {
                             Rectangle {
                                 visible: selectedProfile !== ""
                                          && selectedProfile !== "default"
-                                width: delText.implicitWidth + 20
-                                height: 24; radius: 8
-                                color: delMa.containsMouse ? "#aa3333" : "#662222"
+                                width: delRow.implicitWidth + 18
+                                height: 28
+                                radius: 10
+                                color: delMa.containsMouse ? theme.danger : theme.dangerBg
                                 Behavior on color { ColorAnimation { duration: 120 } }
                                 anchors.verticalCenter: parent.verticalCenter
 
-                                Text {
-                                    id: delText
+                                Row {
+                                    id: delRow
                                     anchors.centerIn: parent
-                                    text: "Delete Profile"
-                                    font { family: Theme.fontFamily; pixelSize: 10; bold: true }
-                                    color: Theme.textPrimary
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14
+                                        height: 14
+                                        name: "trash"
+                                        iconColor: uiState.darkMode ? theme.textPrimary : theme.danger
+                                    }
+
+                                    Text {
+                                        text: "Delete Profile"
+                                        font { family: uiState.fontFamily; pixelSize: 10; bold: true }
+                                        color: uiState.darkMode ? theme.textPrimary : theme.danger
+                                    }
                                 }
 
                                 MouseArea {
@@ -413,8 +455,8 @@ Item {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        backend.deleteProfile(selectedProfile)
-                                        selectProfile(backend.activeProfile)
+                                        pendingDeleteProfile = selectedProfile
+                                        deleteDialog.open()
                                     }
                                 }
                             }
@@ -427,29 +469,37 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 color: {
                                     var lvl = backend.batteryLevel
-                                    if (lvl < 20) return Qt.rgba(0.88, 0.2, 0.2, 0.18)
-                                    if (lvl <= 69) return Qt.rgba(0.9, 0.75, 0.1, 0.18)
-                                    return Qt.rgba(0, 0.83, 0.67, 0.12)
+                                    if (lvl <= 20) return Qt.rgba(0.88, 0.2, 0.2, 0.18)
+                                    if (lvl <= 40) return Qt.rgba(0.9, 0.56, 0.1, 0.18)
+                                    return Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
                                 }
 
                                 Row {
                                     id: battRow
                                     anchors.centerIn: parent
-                                    spacing: 4
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14
+                                        height: 14
+                                        name: "battery-high"
+                                        iconColor: {
+                                            var lvl = backend.batteryLevel
+                                            if (lvl <= 20) return "#e05555"
+                                            if (lvl <= 40) return "#e09045"
+                                            return theme.accent
+                                        }
+                                    }
 
                                     Text {
-                                        text: "🔋"
-                                        font { pixelSize: 11 }
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    Text {
                                         text: backend.batteryLevel + "%"
-                                        font { family: Theme.fontFamily; pixelSize: 11; bold: true }
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: {
                                             var lvl = backend.batteryLevel
-                                            if (lvl < 20) return "#e05555"
-                                            if (lvl <= 69) return "#e0b840"
-                                            return Theme.accent
+                                            if (lvl <= 20) return "#e05555"
+                                            if (lvl <= 40) return "#e09045"
+                                            return theme.accent
                                         }
                                     }
                                 }
@@ -472,15 +522,15 @@ Item {
                                     Rectangle {
                                         width: 7; height: 7; radius: 4
                                         color: backend.mouseConnected
-                                               ? Theme.accent : "#e05555"
+                                               ? theme.accent : "#e05555"
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
                                     Text {
                                         text: backend.mouseConnected
                                               ? "Connected" : "Not Connected"
-                                        font { family: Theme.fontFamily; pixelSize: 11 }
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
                                         color: backend.mouseConnected
-                                               ? Theme.accent : "#e05555"
+                                               ? theme.accent : "#e05555"
                                     }
                                 }
                             }
@@ -489,7 +539,7 @@ Item {
 
                     Rectangle {
                         width: parent.width - 56; height: 1
-                        color: Theme.border
+                        color: theme.border
                         anchors.horizontalCenter: parent.horizontalCenter
                     }
 
@@ -501,7 +551,7 @@ Item {
 
                         Rectangle {
                             anchors.fill: parent
-                            color: Theme.bg
+                            color: theme.bg
                         }
 
                         Image {
@@ -538,7 +588,7 @@ Item {
                             normX: 0.7; normY: 0.63
                             buttonKey: "gesture"
                             label: "Gesture button"
-                            sublabel: actionFor("gesture")
+                            sublabel: gestureSummary()
                             labelSide: "left"
                             labelOffX: -200; labelOffY: 60
                         }
@@ -581,7 +631,7 @@ Item {
                     // ── Separator ─────────────────────────────
                     Rectangle {
                         width: parent.width - 56; height: 1
-                        color: Theme.border
+                        color: theme.border
                         anchors.horizontalCenter: parent.horizontalCenter
                         visible: selectedButton !== ""
                     }
@@ -614,7 +664,7 @@ Item {
 
                                 Rectangle {
                                     width: 6; height: pickerTitleCol.height
-                                    radius: 3; color: Theme.accent
+                                    radius: 3; color: theme.accent
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
@@ -626,15 +676,18 @@ Item {
                                         text: selectedButtonName
                                               ? selectedButtonName + " — Choose Action"
                                               : ""
-                                        font { family: Theme.fontFamily; pixelSize: 15; bold: true }
-                                        color: Theme.textPrimary
+                                        font { family: uiState.fontFamily; pixelSize: 15; bold: true }
+                                        color: theme.textPrimary
                                     }
                                     Text {
                                         text: selectedButton === "hscroll_left"
                                               ? "Configure separate actions for scroll left and right"
+                                              : selectedButton === "gesture"
+                                                && backend.supportsGestureDirections
+                                                ? "Configure tap behavior plus swipe actions for the gesture button"
                                               : "Select what happens when you use this button"
-                                        font { family: Theme.fontFamily; pixelSize: 12 }
-                                        color: Theme.textSecondary
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
                                         visible: selectedButton !== ""
                                     }
                                 }
@@ -648,9 +701,9 @@ Item {
 
                                 Text {
                                     text: "SCROLL LEFT"
-                                    font { family: Theme.fontFamily; pixelSize: 11;
+                                    font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
-                                    color: Theme.textDim
+                                    color: theme.textDim
                                 }
 
                                 Flow {
@@ -673,9 +726,9 @@ Item {
 
                                 Text {
                                     text: "SCROLL RIGHT"
-                                    font { family: Theme.fontFamily; pixelSize: 11;
+                                    font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
-                                    color: Theme.textDim
+                                    color: theme.textDim
                                 }
 
                                 Flow {
@@ -695,12 +748,190 @@ Item {
                                 }
                             }
 
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedButton === "gesture"
+                                         && backend.supportsGestureDirections
+
+                                Text {
+                                    text: "TAP ACTION"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                ComboBox {
+                                    width: parent.width
+                                    model: backend.allActions
+                                    textRole: "label"
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    currentIndex: actionIndexForId(actionFor_id("gesture"))
+                                    onActivated: function(index) {
+                                        var aid = backend.allActions[index].id
+                                        backend.setProfileMapping(selectedProfile, "gesture", aid)
+                                        selectedActionId = aid
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: 1
+                                    color: theme.border
+                                }
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Threshold"
+                                        font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: backend.gestureThreshold + " px"
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+
+                                Slider {
+                                    width: parent.width
+                                    from: 20
+                                    to: 400
+                                    stepSize: 5
+                                    value: backend.gestureThreshold
+                                    Material.accent: theme.accent
+                                    onMoved: backend.setGestureThreshold(value)
+                                }
+
+                                Text {
+                                    text: "SWIPE ACTIONS"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe left"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_left"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_left",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe right"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_right"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_right",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe up"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_up"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_up",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe down"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_down"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_down",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+                            }
+
                             // Single button: categorized chips
                             Column {
                                 width: parent.width
                                 spacing: 14
                                 visible: selectedButton !== ""
                                          && selectedButton !== "hscroll_left"
+                                         && !(selectedButton === "gesture"
+                                              && backend.supportsGestureDirections)
 
                                 Repeater {
                                     model: backend.actionCategories
@@ -711,10 +942,10 @@ Item {
 
                                         Text {
                                             text: modelData.category
-                                            font { family: Theme.fontFamily; pixelSize: 11;
+                                            font { family: uiState.fontFamily; pixelSize: 11;
                                                    capitalization: Font.AllUppercase;
                                                    letterSpacing: 1 }
-                                            color: Theme.textDim
+                                            color: theme.textDim
                                         }
 
                                         Flow {
@@ -742,8 +973,305 @@ Item {
                         }
                     }
 
+                    Rectangle {
+                        width: parent.width - 56
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: debugCol.implicitHeight + 24
+                        radius: 14
+                        color: theme.bgCard
+                        border.width: 1
+                        border.color: theme.border
+                        visible: backend.debugMode
+
+                        Column {
+                            id: debugCol
+                            anchors.fill: parent
+                            anchors.margins: 16
+                            spacing: 12
+
+                            RowLayout {
+                                width: parent.width
+                                spacing: 12
+
+                                Column {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+
+                                    Text {
+                                        text: "Debug Events"
+                                        font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: "Collects detected buttons, gestures, and mapped actions"
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+
+                                Switch {
+                                    checked: backend.debugEventsEnabled
+                                    text: checked ? "On" : "Off"
+                                    Material.accent: theme.accent
+                                    onToggled: backend.setDebugEventsEnabled(checked)
+                                }
+
+                                Switch {
+                                    checked: backend.recordMode
+                                    text: checked ? "Rec" : "Record"
+                                    Material.accent: "#e46f4e"
+                                    onToggled: backend.setRecordMode(checked)
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: clearText.implicitWidth + 20
+                                    Layout.preferredHeight: 28
+                                    radius: 8
+                                    color: clearMa.containsMouse
+                                           ? Qt.rgba(1, 1, 1, 0.08)
+                                           : Qt.rgba(1, 1, 1, 0.04)
+
+                                    Text {
+                                        id: clearText
+                                        anchors.centerIn: parent
+                                        text: "Clear"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    MouseArea {
+                                        id: clearMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: backend.clearDebugLog()
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: clearRecText.implicitWidth + 20
+                                    Layout.preferredHeight: 28
+                                    radius: 8
+                                    color: clearRecMa.containsMouse
+                                           ? Qt.rgba(1, 1, 1, 0.08)
+                                           : Qt.rgba(1, 1, 1, 0.04)
+
+                                    Text {
+                                        id: clearRecText
+                                        anchors.centerIn: parent
+                                        text: "Clear Rec"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    MouseArea {
+                                        id: clearRecMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: backend.clearGestureRecords()
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                radius: 10
+                                color: Qt.rgba(1, 1, 1, 0.03)
+                                border.width: 1
+                                border.color: theme.border
+                                height: monitorCol.implicitHeight + 20
+
+                                Column {
+                                    id: monitorCol
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Live Gesture Monitor"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Row {
+                                        spacing: 8
+
+                                        Rectangle {
+                                            width: activeText.implicitWidth + 16
+                                            height: 24
+                                            radius: 12
+                                            color: backend.gestureActive
+                                                   ? Qt.rgba(0.89, 0.45, 0.25, 0.18)
+                                                   : Qt.rgba(1, 1, 1, 0.05)
+
+                                            Text {
+                                                id: activeText
+                                                anchors.centerIn: parent
+                                                text: backend.gestureActive ? "Held" : "Idle"
+                                                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                color: backend.gestureActive ? "#f39c6b" : theme.textSecondary
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            width: moveText.implicitWidth + 16
+                                            height: 24
+                                            radius: 12
+                                            color: backend.gestureMoveSeen
+                                                   ? Qt.rgba(0, 0.83, 0.67, 0.12)
+                                                   : Qt.rgba(1, 1, 1, 0.05)
+
+                                            Text {
+                                                id: moveText
+                                                anchors.centerIn: parent
+                                                text: backend.gestureMoveSeen ? "Move Seen" : "No Move"
+                                                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                color: backend.gestureMoveSeen ? theme.accent : theme.textSecondary
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Source: "
+                                              + (backend.gestureMoveSource ? backend.gestureMoveSource : "n/a")
+                                              + " | dx: " + backend.gestureMoveDx
+                                              + " | dy: " + backend.gestureMoveDy
+                                        font { family: "Menlo"; pixelSize: 11 }
+                                        color: theme.textSecondary
+                                    }
+
+                                    Text {
+                                        text: backend.gestureStatus
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.textPrimary
+                                        wrapMode: Text.Wrap
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 160
+                                radius: 10
+                                color: Qt.rgba(0, 0, 0, 0.18)
+                                border.width: 1
+                                border.color: theme.border
+
+                                ScrollView {
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    clip: true
+
+                                    TextArea {
+                                        id: debugLogArea
+                                        text: backend.debugLog.length
+                                              ? backend.debugLog
+                                              : "Turn on debug mode, then press buttons or use the gesture button."
+                                        readOnly: true
+                                        wrapMode: TextEdit.NoWrap
+                                        selectByMouse: true
+                                        color: backend.debugLog.length
+                                               ? theme.textPrimary
+                                               : theme.textSecondary
+                                        font.pixelSize: 11
+                                        font.family: "Menlo"
+                                        background: null
+                                        padding: 10
+
+                                        onTextChanged: {
+                                            cursorPosition = length
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 180
+                                radius: 10
+                                color: Qt.rgba(0, 0, 0, 0.18)
+                                border.width: 1
+                                border.color: theme.border
+
+                                ScrollView {
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    clip: true
+
+                                    TextArea {
+                                        text: backend.gestureRecords.length
+                                              ? backend.gestureRecords
+                                              : "Turn on Record and perform a few gesture attempts."
+                                        readOnly: true
+                                        wrapMode: TextEdit.Wrap
+                                        selectByMouse: true
+                                        color: backend.gestureRecords.length
+                                               ? theme.textPrimary
+                                               : theme.textSecondary
+                                        font.pixelSize: 11
+                                        font.family: "Menlo"
+                                        background: null
+                                        padding: 10
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Item { width: 1; height: 24 }
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: deleteDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        title: "Delete profile?"
+        width: 380
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        function confirmDelete() {
+            if (pendingDeleteProfile && pendingDeleteProfile !== "default") {
+                backend.deleteProfile(pendingDeleteProfile)
+                selectProfile(backend.activeProfile)
+            }
+            pendingDeleteProfile = ""
+        }
+
+        function cancelDelete() {
+            pendingDeleteProfile = ""
+        }
+
+        onAccepted: confirmDelete()
+        onRejected: cancelDelete()
+
+        contentItem: Column {
+            width: deleteDialog.availableWidth
+            spacing: 10
+
+            Text {
+                width: parent.width
+                text: pendingDeleteProfile
+                      ? "Delete the profile for " + selectedProfileLabel + "?"
+                      : ""
+                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                color: theme.textPrimary
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                width: parent.width
+                text: "This removes its custom button mappings. The default profile will remain."
+                font { family: uiState.fontFamily; pixelSize: 12 }
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
             }
         }
     }

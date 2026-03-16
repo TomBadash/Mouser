@@ -43,6 +43,7 @@ os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 
 _t3 = _time.perf_counter()
 from core.engine import Engine
+from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from ui.backend import Backend
 _t4 = _time.perf_counter()
 
@@ -51,6 +52,27 @@ def _print_startup_times():
     print(f"[Startup] PySide6 imports:  {(_t2-_t1)*1000:7.1f} ms")
     print(f"[Startup] Core imports:     {(_t4-_t3)*1000:7.1f} ms")
     print(f"[Startup] Total imports:    {(_t4-_t0)*1000:7.1f} ms")
+
+
+def _parse_cli_args(argv):
+    qt_argv = [argv[0]]
+    hid_backend = None
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--hid-backend":
+            if i + 1 >= len(argv):
+                raise SystemExit("Missing value for --hid-backend (expected: auto, hidapi, iokit)")
+            hid_backend = argv[i + 1].strip().lower()
+            i += 2
+            continue
+        if arg.startswith("--hid-backend="):
+            hid_backend = arg.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        qt_argv.append(arg)
+        i += 1
+    return qt_argv, hid_backend
 
 
 def _app_icon() -> QIcon:
@@ -184,9 +206,15 @@ class AppIconProvider(QQuickImageProvider):
 def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
+    argv, hid_backend = _parse_cli_args(sys.argv)
+    if hid_backend:
+        try:
+            set_hid_backend_preference(hid_backend)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid --hid-backend setting: {exc}") from exc
 
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
-    app = QApplication(sys.argv)
+    app = QApplication(argv)
     app.setApplicationName("Mouser")
     app.setOrganizationName("Mouser")
     app.setWindowIcon(_app_icon())
@@ -261,7 +289,7 @@ def main():
     toggle_action = QAction("Disable Remapping", tray_menu)
 
     def toggle_remapping():
-        enabled = not engine._enabled
+        enabled = not engine.enabled
         engine.set_enabled(enabled)
         toggle_action.setText(
             "Disable Remapping" if enabled else "Enable Remapping")
@@ -295,8 +323,7 @@ def main():
     quit_action = QAction("Quit Mouser", tray_menu)
 
     def quit_app():
-        engine.hook.stop()
-        engine._app_detector.stop()
+        engine.stop()
         tray.hide()
         app.quit()
 
@@ -318,8 +345,7 @@ def main():
     try:
         sys.exit(app.exec())
     finally:
-        engine.hook.stop()
-        engine._app_detector.stop()
+        engine.stop()
         print("[Mouser] Shut down cleanly")
 
 

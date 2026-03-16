@@ -13,7 +13,7 @@ Item {
     readonly property var theme: Theme.palette(uiState.darkMode)
 
     // ── Required properties ───────────────────────────────────
-    required property Item imgItem        // the Image element
+    required property var imgItem         // the Image element
     required property real normX          // 0-1 x in source image
     required property real normY          // 0-1 y in source image
     required property string buttonKey    // config key (e.g. "middle")
