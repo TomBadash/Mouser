@@ -28,6 +28,10 @@ Item {
                 break
             }
         }
+        clearKeySelection()
+    }
+
+    function clearKeySelection() {
         selectedKey = ""
         selectedKeyName = ""
         selectedActionId = ""
@@ -57,9 +61,7 @@ Item {
 
     function selectKey(key) {
         if (selectedKey === key) {
-            selectedKey = ""
-            selectedKeyName = ""
-            selectedActionId = ""
+            clearKeySelection()
             return
         }
         var keys = backend.getProfileKeyboardMappings(selectedProfile)

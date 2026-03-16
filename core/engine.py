@@ -151,6 +151,11 @@ class Engine:
     def _on_connection_change(self, connected):
         if not connected:
             self._current_device = None
+            if self._device_change_cb:
+                try:
+                    self._device_change_cb(None)
+                except Exception:
+                    pass
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)

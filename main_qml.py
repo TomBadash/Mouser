@@ -253,6 +253,7 @@ def main():
         tray.setToolTip(f"Mouser — {name}")
 
     backend.deviceChanged.connect(_update_tray_tooltip)
+    _update_tray_tooltip()
 
     tray_menu = QMenu()
 
