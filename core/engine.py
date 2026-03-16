@@ -33,12 +33,14 @@ class Engine:
         self._battery_read_cb = None        # UI callback for battery level
         self._dpi_read_cb = None            # UI callback for current DPI
         self._debug_cb = None               # UI callback for debug messages
+        self._gesture_event_cb = None       # UI callback for structured gesture events
         self._debug_events_enabled = bool(
             self.cfg.get("settings", {}).get("debug_mode", False)
         )
         self._battery_poll_stop = threading.Event()
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
+        self.hook.set_gesture_callback(self._emit_gesture_event)
         self._setup_hooks()
         self.hook.set_connection_change_callback(self._on_connection_change)
         # Apply persisted DPI setting
@@ -95,6 +97,13 @@ class Engine:
                     f"Mapped {event.event_type} -> {action_id} "
                     f"({self._action_label(action_id)})"
                 )
+                if event.event_type.startswith("gesture_"):
+                    self._emit_gesture_event({
+                        "type": "mapped",
+                        "event_name": event.event_type,
+                        "action_id": action_id,
+                        "action_label": self._action_label(action_id),
+                    })
                 execute_action(action_id)
         return handler
 
@@ -143,6 +152,10 @@ class Engine:
         """Register ``cb(message: str)`` invoked for debug events."""
         self._debug_cb = cb
 
+    def set_gesture_event_callback(self, cb):
+        """Register ``cb(event: dict)`` invoked for structured gesture debug events."""
+        self._gesture_event_cb = cb
+
     def set_debug_enabled(self, enabled):
         enabled = bool(enabled)
         self.cfg.setdefault("settings", {})["debug_mode"] = enabled
@@ -167,6 +180,15 @@ class Engine:
         if self._debug_cb:
             try:
                 self._debug_cb(message)
+            except Exception:
+                pass
+
+    def _emit_gesture_event(self, event):
+        if not self._debug_events_enabled:
+            return
+        if self._gesture_event_cb:
+            try:
+                self._gesture_event_cb(event)
             except Exception:
                 pass
 

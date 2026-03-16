@@ -3,7 +3,6 @@ QML Backend Bridge — connects the QML UI to the engine and config.
 Exposes properties, signals, and slots for two-way data binding.
 """
 
-import re
 import sys
 import time
 
@@ -44,6 +43,7 @@ class Backend(QObject):
     _connectionChangeRequest = Signal(bool)
     _batteryChangeRequest = Signal(int)
     _debugMessageRequest = Signal(str)
+    _gestureEventRequest = Signal(object)
 
     def __init__(self, engine=None, parent=None):
         super().__init__(parent)
@@ -76,6 +76,8 @@ class Backend(QObject):
             self._handleBatteryChange, Qt.QueuedConnection)
         self._debugMessageRequest.connect(
             self._handleDebugMessage, Qt.QueuedConnection)
+        self._gestureEventRequest.connect(
+            self._handleGestureEvent, Qt.QueuedConnection)
 
         # Wire engine callbacks
         if engine:
@@ -86,6 +88,8 @@ class Backend(QObject):
                 engine.set_battery_callback(self._onEngineBatteryRead)
             if hasattr(engine, "set_debug_callback"):
                 engine.set_debug_callback(self._onEngineDebugMessage)
+            if hasattr(engine, "set_gesture_event_callback"):
+                engine.set_gesture_event_callback(self._onEngineGestureEvent)
             if hasattr(engine, "set_debug_enabled"):
                 engine.set_debug_enabled(self.debugMode)
 
@@ -421,6 +425,10 @@ class Backend(QObject):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._debugMessageRequest.emit(message)
 
+    def _onEngineGestureEvent(self, event):
+        """Called from engine/hook thread — posts to Qt main thread."""
+        self._gestureEventRequest.emit(event)
+
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):
         """Runs on Qt main thread."""
@@ -459,7 +467,6 @@ class Backend(QObject):
     def _handleDebugMessage(self, message):
         """Runs on Qt main thread."""
         self._append_debug_line(message)
-        self._consume_gesture_debug(message)
 
     def _append_debug_line(self, message):
         timestamp = time.strftime("%H:%M:%S")
@@ -512,34 +519,14 @@ class Backend(QObject):
         self.gestureRecordsChanged.emit()
         self._current_attempt = None
 
-    def _consume_gesture_debug(self, message):
-        move_match = re.search(r"Gesture move event type=(\d+) dx=(-?\d+) dy=(-?\d+)", message)
-        rawxy_match = re.search(r"HID rawxy move dx=(-?\d+) dy=(-?\d+)", message)
-        segment_match = re.search(
-            r"Gesture segment source=([a-z_]+) accum_x=([-0-9.]+) accum_y=([-0-9.]+)",
-            message,
-        )
-        tracking_started_match = re.search(
-            r"Gesture tracking started source=([a-z_]+)",
-            message,
-        )
-        cooldown_started_match = re.search(
-            r"Gesture cooldown started source=([a-z_]+) for_ms=(\d+)",
-            message,
-        )
-        cooldown_active_match = re.search(
-            r"Gesture cooldown active source=([a-z_]+) dx=(-?\d+) dy=(-?\d+)",
-            message,
-        )
-        detect_match = re.search(
-            r"Gesture detected ([a-z_]+) source=([a-z_]+) delta_x=([-0-9.]+) delta_y=([-0-9.]+)",
-            message,
-        )
-        dispatch_match = re.search(r"Dispatch ([a-z_]+).*callbacks=(\d+)", message)
-        mapped_match = re.search(r"Mapped ([a-z_]+) -> ([a-z0-9_]+) \((.+)\)", message)
-        click_match = re.search(r"HID gesture button up click_candidate=(true|false)", message)
+    @Slot(object)
+    def _handleGestureEvent(self, event):
+        """Runs on Qt main thread."""
+        if not isinstance(event, dict):
+            return
+        event_type = event.get("type")
 
-        if message == "HID gesture button down":
+        if event_type == "button_down":
             if self._record_mode and self._current_attempt:
                 self._finalize_attempt()
             if self._record_mode:
@@ -555,39 +542,30 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if move_match:
-            dx = int(move_match.group(2))
-            dy = int(move_match.group(3))
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "move":
+            source = event.get("source", "")
+            dx = int(event.get("dx", 0))
+            dy = int(event.get("dy", 0))
+            attempt = self._ensure_record_attempt()
             self._gesture_move_seen = True
-            self._gesture_move_source = "event_tap"
+            self._gesture_move_source = source
             self._gesture_move_dx = dx
             self._gesture_move_dy = dy
-            self._gesture_status = f"Movement seen dx={dx} dy={dy}"
+            self._gesture_status = (
+                f"RawXY seen dx={dx} dy={dy}"
+                if source == "hid_rawxy"
+                else f"Movement seen dx={dx} dy={dy}"
+            )
             if attempt is not None:
-                attempt["moves"].append(f"event_tap({dx},{dy})")
+                attempt["moves"].append(f"{source}({dx},{dy})")
             self.gestureStateChanged.emit()
             return
 
-        if rawxy_match:
-            dx = int(rawxy_match.group(1))
-            dy = int(rawxy_match.group(2))
-            attempt = self._ensure_record_attempt("continuing hold")
-            self._gesture_move_seen = True
-            self._gesture_move_source = "hid_rawxy"
-            self._gesture_move_dx = dx
-            self._gesture_move_dy = dy
-            self._gesture_status = f"RawXY seen dx={dx} dy={dy}"
-            if attempt is not None:
-                attempt["moves"].append(f"hid_rawxy({dx},{dy})")
-            self.gestureStateChanged.emit()
-            return
-
-        if segment_match:
-            source = segment_match.group(1)
-            dx = int(float(segment_match.group(2)))
-            dy = int(float(segment_match.group(3)))
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "segment":
+            source = event.get("source", "")
+            dx = int(float(event.get("dx", 0)))
+            dy = int(float(event.get("dy", 0)))
+            attempt = self._ensure_record_attempt()
             self._gesture_move_seen = True
             self._gesture_move_source = source
             self._gesture_move_dx = dx
@@ -598,9 +576,9 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if tracking_started_match:
-            source = tracking_started_match.group(1)
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "tracking_started":
+            source = event.get("source", "")
+            attempt = self._ensure_record_attempt()
             self._gesture_move_source = source
             self._gesture_move_dx = 0
             self._gesture_move_dy = 0
@@ -610,10 +588,10 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if cooldown_started_match:
-            source = cooldown_started_match.group(1)
-            for_ms = cooldown_started_match.group(2)
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "cooldown_started":
+            source = event.get("source", "")
+            for_ms = str(event.get("for_ms", "0"))
+            attempt = self._ensure_record_attempt()
             self._gesture_move_source = source
             self._gesture_status = f"Cooldown {for_ms} ms"
             if attempt is not None:
@@ -621,11 +599,11 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if cooldown_active_match:
-            source = cooldown_active_match.group(1)
-            dx = int(cooldown_active_match.group(2))
-            dy = int(cooldown_active_match.group(3))
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "cooldown_active":
+            source = event.get("source", "")
+            dx = int(event.get("dx", 0))
+            dy = int(event.get("dy", 0))
+            attempt = self._ensure_record_attempt()
             self._gesture_move_source = source
             self._gesture_move_dx = dx
             self._gesture_move_dy = dy
@@ -635,12 +613,12 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if detect_match:
-            detected = detect_match.group(1)
-            source = detect_match.group(2)
-            dx = detect_match.group(3)
-            dy = detect_match.group(4)
-            attempt = self._ensure_record_attempt("continuing hold")
+        if event_type == "detected":
+            detected = event.get("event_name", "")
+            source = event.get("source", "")
+            dx = str(event.get("dx", 0))
+            dy = str(event.get("dy", 0))
+            attempt = self._ensure_record_attempt()
             self._gesture_move_seen = True
             self._gesture_move_source = source
             self._gesture_move_dx = int(float(dx))
@@ -651,8 +629,8 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if click_match:
-            click_candidate = click_match.group(1)
+        if event_type == "button_up":
+            click_candidate = str(event.get("click_candidate", False)).lower()
             self._gesture_active = False
             self._gesture_status = f"Released click_candidate={click_candidate}"
             if self._current_attempt is not None:
@@ -660,19 +638,19 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if dispatch_match:
-            event_name = dispatch_match.group(1)
-            callbacks = dispatch_match.group(2)
+        if event_type == "dispatch":
+            event_name = event.get("event_name", "")
+            callbacks = str(event.get("callbacks", 0))
             self._gesture_status = f"Dispatch {event_name} callbacks={callbacks}"
             if self._current_attempt is not None:
                 self._current_attempt["dispatch"] = f"{event_name} callbacks={callbacks}"
             self.gestureStateChanged.emit()
             return
 
-        if mapped_match:
+        if event_type == "mapped":
             action = (
-                f"{mapped_match.group(1)} -> {mapped_match.group(2)} "
-                f"({mapped_match.group(3)})"
+                f"{event.get('event_name', '')} -> {event.get('action_id', '')} "
+                f"({event.get('action_label', '')})"
             )
             self._gesture_status = f"Mapped {action}"
             if self._current_attempt is not None:
@@ -682,7 +660,8 @@ class Backend(QObject):
             self.gestureStateChanged.emit()
             return
 
-        if message.startswith("No mapped action for "):
+        if event_type == "unmapped":
+            message = f"No mapped action for {event.get('event_name', '')}"
             self._gesture_status = message
             if self._current_attempt is not None:
                 self._current_attempt["notes"].append(message)
