@@ -572,8 +572,17 @@ if sys.platform == "win32":
 
                 elif wParam == WM_MOUSEHWHEEL:
                     delta = hiword(mouse_data)
+                    if delta > 0:
+                        event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
+                        should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+                    elif delta < 0:
+                        event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
+                        should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+
                     if self.invert_hscroll:
-                        if delta != 0 and self._ri_hwnd:
+                        # When horizontal scroll is remapped, preserve the mapped
+                        # action instead of short-circuiting into synthetic wheel injection.
+                        if delta != 0 and self._ri_hwnd and not should_block:
                             self._pending_hscroll += (-delta)
                             if self._hscroll_posted:
                                 return 1
@@ -581,14 +590,8 @@ if sys.platform == "win32":
                                 self._hscroll_posted = True
                                 return 1
                             self._pending_hscroll -= (-delta)
-                        elif delta != 0:
+                        elif delta != 0 and not should_block:
                             self._emit_debug("Invert horizontal scroll skipped: raw input window unavailable")
-                    if delta > 0:
-                        event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
-                        should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
-                    elif delta < 0:
-                        event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
-                        should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
 
                 if event:
                     self._dispatch(event)
