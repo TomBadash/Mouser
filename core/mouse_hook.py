@@ -257,6 +257,7 @@ if sys.platform == "win32":
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
@@ -340,6 +341,7 @@ if sys.platform == "win32":
         def _start_gesture_tracking(self):
             self._gesture_tracking = self._gesture_direction_enabled
             self._gesture_started_at = time.monotonic()
+            self._gesture_last_move_at = self._gesture_started_at
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -347,6 +349,7 @@ if sys.platform == "win32":
         def _finish_gesture_tracking(self):
             self._gesture_tracking = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -389,8 +392,9 @@ if sys.platform == "win32":
                 self._emit_debug(f"Gesture tracking started source={source}")
                 self._start_gesture_tracking()
 
-            elapsed_ms = (time.monotonic() - self._gesture_started_at) * 1000.0
-            if elapsed_ms > self._gesture_timeout_ms:
+            now = time.monotonic()
+            idle_ms = (now - self._gesture_last_move_at) * 1000.0
+            if idle_ms > self._gesture_timeout_ms:
                 self._emit_debug(
                     f"Gesture segment reset timeout source={source} "
                     f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
@@ -407,6 +411,7 @@ if sys.platform == "win32":
 
             self._gesture_delta_x += delta_x
             self._gesture_delta_y += delta_y
+            self._gesture_last_move_at = now
             self._emit_debug(
                 f"Gesture segment source={source} "
                 f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
@@ -845,6 +850,7 @@ elif sys.platform == "darwin":
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
@@ -988,6 +994,7 @@ elif sys.platform == "darwin":
         def _start_gesture_tracking(self):
             self._gesture_tracking = self._gesture_direction_enabled
             self._gesture_started_at = time.monotonic()
+            self._gesture_last_move_at = self._gesture_started_at
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -995,6 +1002,7 @@ elif sys.platform == "darwin":
         def _finish_gesture_tracking(self):
             self._gesture_tracking = False
             self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_input_source = None
@@ -1037,8 +1045,9 @@ elif sys.platform == "darwin":
                 self._emit_debug(f"Gesture tracking started source={source}")
                 self._start_gesture_tracking()
 
-            elapsed_ms = (time.monotonic() - self._gesture_started_at) * 1000.0
-            if elapsed_ms > self._gesture_timeout_ms:
+            now = time.monotonic()
+            idle_ms = (now - self._gesture_last_move_at) * 1000.0
+            if idle_ms > self._gesture_timeout_ms:
                 self._emit_debug(
                     f"Gesture segment reset timeout source={source} "
                     f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
@@ -1055,6 +1064,7 @@ elif sys.platform == "darwin":
 
             self._gesture_delta_x += delta_x
             self._gesture_delta_y += delta_y
+            self._gesture_last_move_at = now
             self._emit_debug(
                 f"Gesture segment source={source} "
                 f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
