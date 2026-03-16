@@ -4,6 +4,7 @@ Exposes properties, signals, and slots for two-way data binding.
 """
 
 import os
+import sys
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, Qt
 
@@ -130,9 +131,17 @@ class Backend(QObject):
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
+    @Property(int, notify=settingsChanged)
+    def gestureThreshold(self):
+        return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
+
     @Property(bool, notify=settingsChanged)
     def debugMode(self):
         return bool(self._cfg.get("settings", {}).get("debug_mode", False))
+
+    @Property(bool, constant=True)
+    def supportsGestureDirections(self):
+        return sys.platform in ("darwin", "win32")
 
     @Property(str, notify=activeProfileChanged)
     def activeProfile(self):
@@ -209,6 +218,15 @@ class Backend(QObject):
     @Slot(bool)
     def setInvertHScroll(self, value):
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(int)
+    def setGestureThreshold(self, value):
+        snapped = max(20, min(400, int(round(value / 5.0) * 5)))
+        self._cfg.setdefault("settings", {})["gesture_threshold"] = snapped
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

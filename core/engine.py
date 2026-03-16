@@ -9,7 +9,7 @@ from core.mouse_hook import MouseHook, MouseEvent
 from core.key_simulator import execute_action
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
-    BUTTON_TO_EVENTS, save_config,
+    BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
 from core.app_detector import AppDetector
 
@@ -54,6 +54,14 @@ class Engine:
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        self.hook.configure_gestures(
+            enabled=any(mappings.get(key, "none") != "none"
+                        for key in GESTURE_DIRECTION_BUTTONS),
+            threshold=settings.get("gesture_threshold", 50),
+            deadzone=settings.get("gesture_deadzone", 40),
+            timeout_ms=settings.get("gesture_timeout_ms", 3000),
+            cooldown_ms=settings.get("gesture_cooldown_ms", 500),
+        )
 
         for btn_key, action_id in mappings.items():
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
@@ -212,4 +220,3 @@ class Engine:
     def stop(self):
         self._app_detector.stop()
         self.hook.stop()
-

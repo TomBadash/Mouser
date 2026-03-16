@@ -127,6 +127,29 @@ Item {
         return "none"
     }
 
+    function actionIndexForId(actionId) {
+        var actions = backend.allActions
+        for (var i = 0; i < actions.length; i++)
+            if (actions[i].id === actionId) return i
+        return 0
+    }
+
+    function gestureSummary() {
+        if (!backend.supportsGestureDirections)
+            return actionFor("gesture")
+
+        var hasSwipeAction =
+                actionFor_id("gesture_left") !== "none"
+                || actionFor_id("gesture_right") !== "none"
+                || actionFor_id("gesture_up") !== "none"
+                || actionFor_id("gesture_down") !== "none"
+
+        if (!hasSwipeAction)
+            return "Tap: " + actionFor("gesture")
+
+        return "Tap: " + actionFor("gesture") + " | Swipes configured"
+    }
+
     // ── Main two-column layout ────────────────────────────────
     Row {
         anchors.fill: parent
@@ -539,7 +562,7 @@ Item {
                             normX: 0.7; normY: 0.63
                             buttonKey: "gesture"
                             label: "Gesture button"
-                            sublabel: actionFor("gesture")
+                            sublabel: gestureSummary()
                             labelSide: "left"
                             labelOffX: -200; labelOffY: 60
                         }
@@ -633,6 +656,9 @@ Item {
                                     Text {
                                         text: selectedButton === "hscroll_left"
                                               ? "Configure separate actions for scroll left and right"
+                                              : selectedButton === "gesture"
+                                                && backend.supportsGestureDirections
+                                                ? "Configure tap behavior plus swipe actions for the gesture button"
                                               : "Select what happens when you use this button"
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textSecondary
@@ -696,12 +722,190 @@ Item {
                                 }
                             }
 
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedButton === "gesture"
+                                         && backend.supportsGestureDirections
+
+                                Text {
+                                    text: "TAP ACTION"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                ComboBox {
+                                    width: parent.width
+                                    model: backend.allActions
+                                    textRole: "label"
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    currentIndex: actionIndexForId(actionFor_id("gesture"))
+                                    onActivated: function(index) {
+                                        var aid = backend.allActions[index].id
+                                        backend.setProfileMapping(selectedProfile, "gesture", aid)
+                                        selectedActionId = aid
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: 1
+                                    color: theme.border
+                                }
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Threshold"
+                                        font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: backend.gestureThreshold + " px"
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+
+                                Slider {
+                                    width: parent.width
+                                    from: 20
+                                    to: 400
+                                    stepSize: 5
+                                    value: backend.gestureThreshold
+                                    Material.accent: theme.accent
+                                    onMoved: backend.setGestureThreshold(value)
+                                }
+
+                                Text {
+                                    text: "SWIPE ACTIONS"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe left"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_left"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_left",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe right"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_right"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_right",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe up"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_up"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_up",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        text: "Swipe down"
+                                        Layout.preferredWidth: 100
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textPrimary
+                                    }
+
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: backend.allActions
+                                        textRole: "label"
+                                        Material.accent: theme.accent
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        currentIndex: actionIndexForId(actionFor_id("gesture_down"))
+                                        onActivated: function(index) {
+                                            backend.setProfileMapping(
+                                                selectedProfile,
+                                                "gesture_down",
+                                                backend.allActions[index].id)
+                                        }
+                                    }
+                                }
+                            }
+
                             // Single button: categorized chips
                             Column {
                                 width: parent.width
                                 spacing: 14
                                 visible: selectedButton !== ""
                                          && selectedButton !== "hscroll_left"
+                                         && !(selectedButton === "gesture"
+                                              && backend.supportsGestureDirections)
 
                                 Repeater {
                                     model: backend.actionCategories
