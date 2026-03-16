@@ -11,6 +11,8 @@ import "Theme.js" as Theme
 
 Item {
     id: mousePage
+    readonly property var theme: Theme.palette(uiState.darkMode)
+    property string pendingDeleteProfile: ""
 
     // ── Profile state ─────────────────────────────────────────
     property string selectedProfile: backend.activeProfile
@@ -126,124 +128,152 @@ Item {
         return "none"
     }
 
-    // ── Main two-column layout ────────────────────────────────
-    Row {
+    RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        // ══════════════════════════════════════════════════════
-        // ── Left panel: profile list ─────────────────────────
-        // ══════════════════════════════════════════════════════
         Rectangle {
             id: leftPanel
-            width: 220
-            height: parent.height
-            color: Theme.bgCard
-            border.width: 1; border.color: Theme.border
+            Layout.preferredWidth: 240
+            Layout.minimumWidth: 220
+            Layout.fillHeight: true
+            color: theme.bgCard
+            border.width: 1
+            border.color: theme.border
 
-            Column {
+            ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
 
-                // Title bar
                 Item {
-                    width: parent.width; height: 52
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 56
 
                     Text {
                         anchors {
-                            left: parent.left; leftMargin: 16
+                            left: parent.left
+                            leftMargin: 16
                             verticalCenter: parent.verticalCenter
                         }
                         text: "Profiles"
-                        font { family: Theme.fontFamily; pixelSize: 14; bold: true }
-                        color: Theme.textPrimary
+                        font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                        color: theme.textPrimary
                     }
                 }
 
-                Rectangle { width: parent.width; height: 1; color: Theme.border }
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 1
+                    color: theme.border
+                }
 
-                // Profile items
                 ListView {
                     id: profileList
-                    width: parent.width
-                    height: parent.height - 110
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                     model: backend.profiles
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
 
                     delegate: Rectangle {
                         width: profileList.width
-                        height: 58
+                        height: 60
                         color: selectedProfile === modelData.name
-                               ? Qt.rgba(0, 0.83, 0.67, 0.08)
+                               ? Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.08 : 0.12)
                                : profItemMa.containsMouse
-                                 ? Qt.rgba(1, 1, 1, 0.03)
+                                 ? Qt.rgba(1, 1, 1, uiState.darkMode ? 0.03 : 0.65)
                                  : "transparent"
+
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Profile " + modelData.label
+
                         Behavior on color { ColorAnimation { duration: 120 } }
 
-                        Row {
+                        RowLayout {
                             anchors {
                                 fill: parent
-                                leftMargin: 6; rightMargin: 10
+                                leftMargin: 8
+                                rightMargin: 12
                             }
-                            spacing: 8
+                            spacing: 10
 
-                            // Active indicator
                             Rectangle {
-                                width: 3; height: 28; radius: 2
-                                color: modelData.isActive
-                                       ? Theme.accent : "transparent"
-                                anchors.verticalCenter: parent.verticalCenter
+                                width: 3
+                                height: 28
+                                radius: 2
+                                color: modelData.isActive ? theme.accent : "transparent"
+                                Layout.alignment: Qt.AlignVCenter
                             }
 
-                            // App icons
-                            Row {
-                                spacing: -4
-                                anchors.verticalCenter: parent.verticalCenter
-                                visible: modelData.appIcons !== undefined
-                                         && modelData.appIcons.length > 0
+                            Item {
+                                Layout.preferredWidth: 28
+                                Layout.preferredHeight: 28
+                                Layout.alignment: Qt.AlignVCenter
 
-                                Repeater {
-                                    model: modelData.appIcons
-                                    delegate: Image {
-                                        source: modelData
-                                                ? "file:///" + applicationDirPath
-                                                  + "/images/" + modelData
-                                                : ""
-                                        width: 24; height: 24
-                                        sourceSize { width: 24; height: 24 }
-                                        fillMode: Image.PreserveAspectFit
-                                        visible: modelData !== ""
-                                        smooth: true; mipmap: true
-                                        asynchronous: true
-                                        cache: true
+                                Row {
+                                    id: appIconRow
+                                    spacing: -4
+                                    anchors.centerIn: parent
+                                    visible: modelData.appIcons !== undefined && modelData.appIcons.length > 0
+
+                                    Repeater {
+                                        model: modelData.appIcons
+                                        delegate: Image {
+                                            source: modelData
+                                                    ? "file:///" + applicationDirPath + "/images/" + modelData
+                                                    : ""
+                                            width: 24
+                                            height: 24
+                                            sourceSize.width: 24
+                                            sourceSize.height: 24
+                                            fillMode: Image.PreserveAspectFit
+                                            visible: modelData !== ""
+                                            smooth: true
+                                            mipmap: true
+                                            asynchronous: true
+                                            cache: true
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 26
+                                    height: 26
+                                    radius: 9
+                                    visible: !appIconRow.visible && modelData.apps.length > 0
+                                    color: theme.bgSubtle
+                                    border.width: 1
+                                    border.color: theme.border
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.label.length ? modelData.label.charAt(0).toUpperCase() : "A"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textSecondary
                                     }
                                 }
                             }
 
                             Column {
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
                                 spacing: 2
 
                                 Text {
                                     text: modelData.label
-                                    font {
-                                        family: Theme.fontFamily
-                                        pixelSize: 12; bold: true
-                                    }
-                                    color: selectedProfile === modelData.name
-                                           ? Theme.accent : Theme.textPrimary
+                                    font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                    color: selectedProfile === modelData.name ? theme.accent : theme.textPrimary
                                     elide: Text.ElideRight
-                                    width: leftPanel.width - 70
+                                    width: leftPanel.width - 78
                                 }
+
                                 Text {
-                                    text: modelData.apps.length
-                                          ? modelData.apps.join(", ")
-                                          : "All applications"
-                                    font { family: Theme.fontFamily; pixelSize: 9 }
-                                    color: Theme.textSecondary
+                                    text: modelData.apps.length ? modelData.apps.join(", ") : "All applications"
+                                    font { family: uiState.fontFamily; pixelSize: 10 }
+                                    color: theme.textSecondary
                                     elide: Text.ElideRight
-                                    width: leftPanel.width - 70
+                                    width: leftPanel.width - 78
                                 }
                             }
                         }
@@ -258,18 +288,23 @@ Item {
                     }
                 }
 
-                Rectangle { width: parent.width; height: 1; color: Theme.border }
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 1
+                    color: theme.border
+                }
 
-                // Add profile controls
                 Item {
-                    width: parent.width; height: 52
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
 
                     RowLayout {
                         anchors {
                             fill: parent
-                            leftMargin: 8; rightMargin: 8
+                            leftMargin: 10
+                            rightMargin: 10
                         }
-                        spacing: 4
+                        spacing: 6
 
                         ComboBox {
                             id: addCombo
@@ -281,20 +316,26 @@ Item {
                                     labels.push(apps[i].label)
                                 return labels
                             }
-                            Material.accent: Theme.accent
-                            font { family: Theme.fontFamily; pixelSize: 10 }
+                            Material.accent: theme.accent
+                            font { family: uiState.fontFamily; pixelSize: 11 }
+                            Accessible.name: "Add profile for application"
                         }
 
                         Rectangle {
-                            width: 42; height: 28; radius: 8
-                            color: addBtnMa.containsMouse
-                                   ? Theme.accentHover : Theme.accent
+                            width: 40
+                            height: 32
+                            radius: 10
+                            color: addBtnMa.containsMouse ? theme.accentHover : theme.accent
 
-                            Text {
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "Add profile"
+
+                            AppIcon {
                                 anchors.centerIn: parent
-                                text: "+"
-                                font { family: Theme.fontFamily; pixelSize: 16; bold: true }
-                                color: Theme.bgSidebar
+                                width: 18
+                                height: 18
+                                name: "plus"
+                                iconColor: theme.bgSidebar
                             }
 
                             MouseArea {
@@ -313,98 +354,104 @@ Item {
             }
         }
 
-        // ══════════════════════════════════════════════════════
-        // ── Right panel: mouse image + hotspots + picker ─────
-        // ══════════════════════════════════════════════════════
         ScrollView {
-            width: parent.width - leftPanel.width
-            height: parent.height
+            id: detailsScroll
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             contentWidth: availableWidth
             clip: true
 
-            Flickable {
-                contentHeight: rightCol.implicitHeight + 32
-                boundsBehavior: Flickable.StopAtBounds
+            Column {
+                id: rightCol
+                width: detailsScroll.availableWidth
+                spacing: 0
 
-                Column {
-                    id: rightCol
+                Item {
                     width: parent.width
-                    spacing: 0
+                    height: headerContent.implicitHeight + 28
 
-                    // ── Header ────────────────────────────────
-                    Item {
-                        width: parent.width; height: 70
+                    RowLayout {
+                        id: headerContent
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            leftMargin: 28
+                            rightMargin: 28
+                            top: parent.top
+                            topMargin: 16
+                        }
+                        spacing: 16
 
-                        Row {
-                            anchors {
-                                left: parent.left; leftMargin: 28
-                                verticalCenter: parent.verticalCenter
-                            }
-                            spacing: 12
+                        Column {
+                            Layout.fillWidth: true
+                            spacing: 4
 
-                            Column {
-                                spacing: 3
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                Row {
-                                    spacing: 8
-
-                                    Text {
-                                        text: "MX Master 3S"
-                                        font { family: Theme.fontFamily; pixelSize: 20; bold: true }
-                                        color: Theme.textPrimary
-                                    }
-
-                                    // Profile badge
-                                    Rectangle {
-                                        visible: selectedProfileLabel !== ""
-                                        width: profBadgeText.implicitWidth + 16
-                                        height: 22; radius: 11
-                                        color: Qt.rgba(0, 0.83, 0.67, 0.12)
-                                        anchors.verticalCenter: parent.verticalCenter
-
-                                        Text {
-                                            id: profBadgeText
-                                            anchors.centerIn: parent
-                                            text: selectedProfileLabel
-                                            font { family: Theme.fontFamily; pixelSize: 11 }
-                                            color: Theme.accent
-                                        }
-                                    }
-                                }
+                            Row {
+                                spacing: 8
 
                                 Text {
-                                    text: "Click a dot to configure its action"
-                                    font { family: Theme.fontFamily; pixelSize: 12 }
-                                    color: Theme.textSecondary
+                                    text: "MX Master 3S"
+                                    font { family: uiState.fontFamily; pixelSize: 20; bold: true }
+                                    color: theme.textPrimary
                                 }
+
+                                Rectangle {
+                                    visible: selectedProfileLabel !== ""
+                                    width: profBadgeText.implicitWidth + 16
+                                    height: 24
+                                    radius: 12
+                                    color: Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    Text {
+                                        id: profBadgeText
+                                        anchors.centerIn: parent
+                                        text: selectedProfileLabel
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.accent
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "Click a dot to configure its action"
+                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                color: theme.textSecondary
                             }
                         }
 
-                        // Right-side status row: delete button + battery + connection
-                        Row {
-                            anchors {
-                                right: parent.right; rightMargin: 28
-                                verticalCenter: parent.verticalCenter
-                            }
+                        Flow {
+                            id: statusFlow
+                            Layout.preferredWidth: Math.min(Math.max(260, rightCol.width * 0.42), 420)
+                            Layout.alignment: Qt.AlignRight | Qt.AlignTop
+                            width: Layout.preferredWidth
                             spacing: 8
 
-                            // Delete profile button (not for default)
                             Rectangle {
-                                visible: selectedProfile !== ""
-                                         && selectedProfile !== "default"
-                                width: delText.implicitWidth + 20
-                                height: 24; radius: 8
-                                color: delMa.containsMouse ? "#aa3333" : "#662222"
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                                anchors.verticalCenter: parent.verticalCenter
+                                visible: selectedProfile !== "" && selectedProfile !== "default"
+                                width: delRow.implicitWidth + 18
+                                height: 28
+                                radius: 10
+                                color: delMa.containsMouse ? theme.danger : theme.dangerBg
 
-                                Text {
-                                    id: delText
+                                Row {
+                                    id: delRow
                                     anchors.centerIn: parent
-                                    text: "Delete Profile"
-                                    font { family: Theme.fontFamily; pixelSize: 10; bold: true }
-                                    color: Theme.textPrimary
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14
+                                        height: 14
+                                        name: "trash"
+                                        iconColor: uiState.darkMode ? theme.textPrimary : theme.danger
+                                    }
+
+                                    Text {
+                                        text: "Delete Profile"
+                                        font { family: uiState.fontFamily; pixelSize: 10; bold: true }
+                                        color: uiState.darkMode ? theme.textPrimary : theme.danger
+                                    }
                                 }
 
                                 MouseArea {
@@ -413,339 +460,388 @@ Item {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        backend.deleteProfile(selectedProfile)
-                                        selectProfile(backend.activeProfile)
+                                        pendingDeleteProfile = selectedProfile
+                                        deleteDialog.open()
                                     }
                                 }
                             }
 
-                            // Battery badge
                             Rectangle {
                                 visible: backend.batteryLevel >= 0
                                 width: battRow.implicitWidth + 16
-                                height: 24; radius: 12
-                                anchors.verticalCenter: parent.verticalCenter
+                                height: 28
+                                radius: 12
                                 color: {
                                     var lvl = backend.batteryLevel
                                     if (lvl <= 20) return Qt.rgba(0.88, 0.2, 0.2, 0.18)
                                     if (lvl <= 40) return Qt.rgba(0.9, 0.56, 0.1, 0.18)
-                                    return Qt.rgba(0, 0.83, 0.67, 0.12)
+                                    return Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
                                 }
 
                                 Row {
                                     id: battRow
                                     anchors.centerIn: parent
-                                    spacing: 4
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14
+                                        height: 14
+                                        name: "battery-high"
+                                        iconColor: {
+                                            var lvl = backend.batteryLevel
+                                            if (lvl < 20) return "#e05555"
+                                            if (lvl <= 69) return "#e0b840"
+                                            return theme.accent
+                                        }
+                                    }
 
                                     Text {
-                                        text: backend.batteryLevel <= 20 ? "Low"
-                                              : backend.batteryLevel <= 40 ? "Med" : "Bat"
-                                        font { family: Theme.fontFamily; pixelSize: 10 }
-                                        color: Theme.textDim
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    Text {
                                         text: backend.batteryLevel + "%"
-                                        font { family: Theme.fontFamily; pixelSize: 11; bold: true }
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: {
                                             var lvl = backend.batteryLevel
                                             if (lvl <= 20) return "#e05555"
                                             if (lvl <= 40) return "#e09045"
-                                            return Theme.accent
+                                            return theme.accent
                                         }
                                     }
                                 }
                             }
 
-                            // Connection status badge
                             Rectangle {
                                 width: statusRow.implicitWidth + 16
-                                height: 24; radius: 12
-                                anchors.verticalCenter: parent.verticalCenter
+                                height: 28
+                                radius: 12
                                 color: backend.mouseConnected
-                                       ? Qt.rgba(0, 0.83, 0.67, 0.12)
+                                       ? Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
                                        : Qt.rgba(0.9, 0.3, 0.3, 0.15)
 
                                 Row {
                                     id: statusRow
                                     anchors.centerIn: parent
-                                    spacing: 5
+                                    spacing: 6
 
                                     Rectangle {
-                                        width: 7; height: 7; radius: 4
-                                        color: backend.mouseConnected
-                                               ? Theme.accent : "#e05555"
+                                        width: 8
+                                        height: 8
+                                        radius: 4
+                                        color: backend.mouseConnected ? theme.accent : "#e05555"
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
+
                                     Text {
-                                        text: backend.mouseConnected
-                                              ? "Connected" : "Not Connected"
-                                        font { family: Theme.fontFamily; pixelSize: 11 }
-                                        color: backend.mouseConnected
-                                               ? Theme.accent : "#e05555"
+                                        text: backend.mouseConnected ? "Connected" : "Not Connected"
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: backend.mouseConnected ? theme.accent : "#e05555"
                                     }
                                 }
                             }
                         }
                     }
+                }
+
+                Rectangle {
+                    width: parent.width - 56
+                    height: 1
+                    color: theme.border
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                Item {
+                    id: mouseImageArea
+                    width: parent.width
+                    height: Math.max(380, Math.min(460, parent.width * 0.52))
 
                     Rectangle {
-                        width: parent.width - 56; height: 1
-                        color: Theme.border
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.fill: parent
+                        color: theme.bg
                     }
 
-                    // ── Mouse image with hotspots ─────────────
-                    Item {
-                        id: mouseImageArea
-                        width: parent.width
-                        height: 420
+                    Image {
+                        id: mouseImg
+                        source: "file:///" + applicationDirPath + "/images/mouse.png"
+                        fillMode: Image.PreserveAspectFit
+                        width: Math.min(mouseImageArea.width - 90, 480)
+                        height: Math.min(mouseImageArea.height - 56, 360)
+                        anchors.centerIn: parent
+                        smooth: true
+                        mipmap: true
+                        asynchronous: true
+                        cache: true
 
-                        Rectangle {
-                            anchors.fill: parent
-                            color: Theme.bg
-                        }
-
-                        Image {
-                            id: mouseImg
-                            source: "file:///" + applicationDirPath + "/images/mouse.png"
-                            fillMode: Image.PreserveAspectFit
-                            width: 460
-                            height: 360
-                            anchors.centerIn: parent
-                            smooth: true
-                            mipmap: true
-                            asynchronous: true
-                            cache: true
-
-                            property real offX: (width - paintedWidth) / 2
-                            property real offY: (height - paintedHeight) / 2
-                        }
-
-                        // Hotspot dots
-                        HotspotDot {
-                            anchors.fill: mouseImageArea
-                            imgItem: mouseImg
-                            normX: 0.35; normY: 0.4
-                            buttonKey: "middle"
-                            label: "Middle button"
-                            sublabel: actionFor("middle")
-                            labelSide: "right"
-                            labelOffX: 100; labelOffY: -160
-                        }
-
-                        HotspotDot {
-                            anchors.fill: mouseImageArea
-                            imgItem: mouseImg
-                            normX: 0.7; normY: 0.63
-                            buttonKey: "gesture"
-                            label: "Gesture button"
-                            sublabel: actionFor("gesture")
-                            labelSide: "left"
-                            labelOffX: -200; labelOffY: 60
-                        }
-
-                        HotspotDot {
-                            anchors.fill: mouseImageArea
-                            imgItem: mouseImg
-                            normX: 0.6; normY: 0.48
-                            buttonKey: "xbutton2"
-                            label: "Forward button"
-                            sublabel: actionFor("xbutton2")
-                            labelSide: "left"
-                            labelOffX: -300; labelOffY: 0
-                        }
-
-                        HotspotDot {
-                            anchors.fill: mouseImageArea
-                            imgItem: mouseImg
-                            normX: 0.65; normY: 0.4
-                            buttonKey: "xbutton1"
-                            label: "Back button"
-                            sublabel: actionFor("xbutton1")
-                            labelSide: "right"
-                            labelOffX: 200; labelOffY: 50
-                        }
-
-                        HotspotDot {
-                            anchors.fill: mouseImageArea
-                            imgItem: mouseImg
-                            normX: 0.6; normY: 0.375
-                            buttonKey: "hscroll_left"
-                            isHScroll: true
-                            label: "Horizontal scroll"
-                            sublabel: "L: " + actionFor("hscroll_left") + " | R: " + actionFor("hscroll_right")
-                            labelSide: "right"
-                            labelOffX: 200; labelOffY: -50
-                        }
+                        property real offX: (width - paintedWidth) / 2
+                        property real offY: (height - paintedHeight) / 2
                     }
 
-                    // ── Separator ─────────────────────────────
-                    Rectangle {
-                        width: parent.width - 56; height: 1
-                        color: Theme.border
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        visible: selectedButton !== ""
+                    HotspotDot {
+                        anchors.fill: mouseImageArea
+                        imgItem: mouseImg
+                        normX: 0.35; normY: 0.4
+                        buttonKey: "middle"
+                        label: "Middle button"
+                        sublabel: actionFor("middle")
+                        labelSide: "right"
+                        labelOffX: 100; labelOffY: -160
                     }
 
-                    // ── Action picker ─────────────────────────
-                    Rectangle {
-                        id: actionPicker
-                        width: parent.width - 56
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        height: selectedButton !== ""
-                                ? pickerCol.implicitHeight + 32 : 0
-                        clip: true
-                        color: "transparent"
-                        visible: height > 0
+                    HotspotDot {
+                        anchors.fill: mouseImageArea
+                        imgItem: mouseImg
+                        normX: 0.7; normY: 0.63
+                        buttonKey: "gesture"
+                        label: "Gesture button"
+                        sublabel: actionFor("gesture")
+                        labelSide: "left"
+                        labelOffX: -200; labelOffY: 60
+                    }
 
-                        Behavior on height {
-                            NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
+                    HotspotDot {
+                        anchors.fill: mouseImageArea
+                        imgItem: mouseImg
+                        normX: 0.6; normY: 0.48
+                        buttonKey: "xbutton2"
+                        label: "Forward button"
+                        sublabel: actionFor("xbutton2")
+                        labelSide: "left"
+                        labelOffX: -300; labelOffY: 0
+                    }
+
+                    HotspotDot {
+                        anchors.fill: mouseImageArea
+                        imgItem: mouseImg
+                        normX: 0.65; normY: 0.4
+                        buttonKey: "xbutton1"
+                        label: "Back button"
+                        sublabel: actionFor("xbutton1")
+                        labelSide: "right"
+                        labelOffX: 200; labelOffY: 50
+                    }
+
+                    HotspotDot {
+                        anchors.fill: mouseImageArea
+                        imgItem: mouseImg
+                        normX: 0.6; normY: 0.375
+                        buttonKey: "hscroll_left"
+                        isHScroll: true
+                        label: "Horizontal scroll"
+                        sublabel: "L: " + actionFor("hscroll_left") + " | R: " + actionFor("hscroll_right")
+                        labelSide: "right"
+                        labelOffX: 200; labelOffY: -50
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width - 56
+                    height: 1
+                    color: theme.border
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: selectedButton !== ""
+                }
+
+                Rectangle {
+                    id: actionPicker
+                    width: parent.width - 56
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: selectedButton !== "" ? pickerCol.implicitHeight + 32 : 0
+                    clip: true
+                    color: "transparent"
+                    visible: height > 0
+
+                    Behavior on height {
+                        NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
+                    }
+
+                    Column {
+                        id: pickerCol
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: parent.top
+                            topMargin: 16
+                        }
+                        spacing: 16
+
+                        Row {
+                            spacing: 12
+
+                            Rectangle {
+                                width: 6
+                                height: pickerTitleCol.height
+                                radius: 3
+                                color: theme.accent
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Column {
+                                id: pickerTitleCol
+                                spacing: 2
+
+                                Text {
+                                    text: selectedButtonName ? selectedButtonName + " — Choose Action" : ""
+                                    font { family: uiState.fontFamily; pixelSize: 15; bold: true }
+                                    color: theme.textPrimary
+                                }
+
+                                Text {
+                                    text: selectedButton === "hscroll_left"
+                                          ? "Configure separate actions for scroll left and right"
+                                          : "Select what happens when you use this button"
+                                    font { family: uiState.fontFamily; pixelSize: 12 }
+                                    color: theme.textSecondary
+                                    visible: selectedButton !== ""
+                                }
+                            }
                         }
 
                         Column {
-                            id: pickerCol
-                            anchors {
-                                left: parent.left; right: parent.right
-                                top: parent.top; topMargin: 16
-                            }
-                            spacing: 16
+                            width: parent.width
+                            spacing: 14
+                            visible: selectedButton === "hscroll_left"
 
-                            Row {
-                                spacing: 12
-
-                                Rectangle {
-                                    width: 6; height: pickerTitleCol.height
-                                    radius: 3; color: Theme.accent
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                Column {
-                                    id: pickerTitleCol
-                                    spacing: 2
-
-                                    Text {
-                                        text: selectedButtonName
-                                              ? selectedButtonName + " — Choose Action"
-                                              : ""
-                                        font { family: Theme.fontFamily; pixelSize: 15; bold: true }
-                                        color: Theme.textPrimary
-                                    }
-                                    Text {
-                                        text: selectedButton === "hscroll_left"
-                                              ? "Configure separate actions for scroll left and right"
-                                              : "Select what happens when you use this button"
-                                        font { family: Theme.fontFamily; pixelSize: 12 }
-                                        color: Theme.textSecondary
-                                        visible: selectedButton !== ""
-                                    }
-                                }
+                            Text {
+                                text: "SCROLL LEFT"
+                                font { family: uiState.fontFamily; pixelSize: 11; capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                color: theme.textDim
                             }
 
-                            // Horizontal scroll: left + right rows
-                            Column {
+                            Flow {
                                 width: parent.width
-                                spacing: 14
-                                visible: selectedButton === "hscroll_left"
-
-                                Text {
-                                    text: "SCROLL LEFT"
-                                    font { family: Theme.fontFamily; pixelSize: 11;
-                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
-                                    color: Theme.textDim
-                                }
-
-                                Flow {
-                                    width: parent.width; spacing: 8
-                                    Repeater {
-                                        model: backend.allActions
-                                        delegate: ActionChip {
-                                            actionId: modelData.id
-                                            actionLabel: modelData.label
-                                            isCurrent: modelData.id === actionFor_id("hscroll_left")
-                                            onPicked: function(aid) {
-                                                backend.setProfileMapping(
-                                                    selectedProfile, "hscroll_left", aid)
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Item { width: 1; height: 4 }
-
-                                Text {
-                                    text: "SCROLL RIGHT"
-                                    font { family: Theme.fontFamily; pixelSize: 11;
-                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
-                                    color: Theme.textDim
-                                }
-
-                                Flow {
-                                    width: parent.width; spacing: 8
-                                    Repeater {
-                                        model: backend.allActions
-                                        delegate: ActionChip {
-                                            actionId: modelData.id
-                                            actionLabel: modelData.label
-                                            isCurrent: modelData.id === actionFor_id("hscroll_right")
-                                            onPicked: function(aid) {
-                                                backend.setProfileMapping(
-                                                    selectedProfile, "hscroll_right", aid)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Single button: categorized chips
-                            Column {
-                                width: parent.width
-                                spacing: 14
-                                visible: selectedButton !== ""
-                                         && selectedButton !== "hscroll_left"
+                                spacing: 8
 
                                 Repeater {
-                                    model: backend.actionCategories
+                                    model: backend.allActions
+                                    delegate: ActionChip {
+                                        actionId: modelData.id
+                                        actionLabel: modelData.label
+                                        isCurrent: modelData.id === actionFor_id("hscroll_left")
+                                        onPicked: function(aid) {
+                                            backend.setProfileMapping(selectedProfile, "hscroll_left", aid)
+                                        }
+                                    }
+                                }
+                            }
 
-                                    delegate: Column {
+                            Item { width: 1; height: 4 }
+
+                            Text {
+                                text: "SCROLL RIGHT"
+                                font { family: uiState.fontFamily; pixelSize: 11; capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                color: theme.textDim
+                            }
+
+                            Flow {
+                                width: parent.width
+                                spacing: 8
+
+                                Repeater {
+                                    model: backend.allActions
+                                    delegate: ActionChip {
+                                        actionId: modelData.id
+                                        actionLabel: modelData.label
+                                        isCurrent: modelData.id === actionFor_id("hscroll_right")
+                                        onPicked: function(aid) {
+                                            backend.setProfileMapping(selectedProfile, "hscroll_right", aid)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Column {
+                            width: parent.width
+                            spacing: 14
+                            visible: selectedButton !== "" && selectedButton !== "hscroll_left"
+
+                            Repeater {
+                                model: backend.actionCategories
+
+                                delegate: Column {
+                                    width: parent.width
+                                    spacing: 8
+
+                                    Text {
+                                        text: modelData.category
+                                        font { family: uiState.fontFamily; pixelSize: 11; capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Flow {
                                         width: parent.width
                                         spacing: 8
 
-                                        Text {
-                                            text: modelData.category
-                                            font { family: Theme.fontFamily; pixelSize: 11;
-                                                   capitalization: Font.AllUppercase;
-                                                   letterSpacing: 1 }
-                                            color: Theme.textDim
-                                        }
-
-                                        Flow {
-                                            width: parent.width; spacing: 8
-                                            Repeater {
-                                                model: modelData.actions
-                                                delegate: ActionChip {
-                                                    actionId: modelData.id
-                                                    actionLabel: modelData.label
-                                                    isCurrent: modelData.id === selectedActionId
-                                                    onPicked: function(aid) {
-                                                        backend.setProfileMapping(
-                                                            selectedProfile,
-                                                            selectedButton, aid)
-                                                        selectedActionId = aid
-                                                    }
+                                        Repeater {
+                                            model: modelData.actions
+                                            delegate: ActionChip {
+                                                actionId: modelData.id
+                                                actionLabel: modelData.label
+                                                isCurrent: modelData.id === selectedActionId
+                                                onPicked: function(aid) {
+                                                    backend.setProfileMapping(selectedProfile, selectedButton, aid)
+                                                    selectedActionId = aid
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-
-                            Item { width: 1; height: 8 }
                         }
-                    }
 
-                    Item { width: 1; height: 24 }
+                        Item { width: 1; height: 8 }
+                    }
                 }
+
+                Item { width: 1; height: 24 }
+            }
+        }
+    }
+
+    Dialog {
+        id: deleteDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        title: "Delete profile?"
+        width: 380
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        function confirmDelete() {
+            if (pendingDeleteProfile && pendingDeleteProfile !== "default") {
+                backend.deleteProfile(pendingDeleteProfile)
+                selectProfile(backend.activeProfile)
+            }
+            pendingDeleteProfile = ""
+        }
+
+        function cancelDelete() {
+            pendingDeleteProfile = ""
+        }
+
+        onAccepted: confirmDelete()
+        onRejected: cancelDelete()
+
+        contentItem: Column {
+            width: deleteDialog.availableWidth
+            spacing: 10
+
+            Text {
+                width: parent.width
+                text: pendingDeleteProfile
+                      ? "Delete the profile for " + selectedProfileLabel + "?"
+                      : ""
+                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                color: theme.textPrimary
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                width: parent.width
+                text: "This removes its custom button mappings. The default profile will remain."
+                font { family: uiState.fontFamily; pixelSize: 12 }
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
             }
         }
     }
