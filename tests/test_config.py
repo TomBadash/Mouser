@@ -170,6 +170,56 @@ class AppCatalogTests(unittest.TestCase):
         self.assertEqual(resolved["path"], app_path)
         self.assertIn("Google Chrome", resolved["aliases"])
 
+    def test_resolve_app_spec_for_windows_exe_path_uses_curated_label(self):
+        app_path = "/Program Files/Google/Chrome/Application/chrome.exe"
+
+        with (
+            patch.object(app_catalog.sys, "platform", "win32"),
+            patch.object(app_catalog.os.path, "exists", return_value=False),
+        ):
+            resolved = app_catalog.resolve_app_spec(app_path)
+
+        self.assertEqual(resolved["id"], "chrome.exe")
+        self.assertEqual(resolved["label"], "Google Chrome")
+        self.assertEqual(resolved["path"], app_path)
+        self.assertIn("chrome.exe", resolved["aliases"])
+
+    def test_resolve_app_spec_for_windows_terminal_alias(self):
+        with patch.object(app_catalog, "get_app_catalog", return_value=[]):
+            resolved = app_catalog.resolve_app_spec("wt.exe")
+
+        self.assertEqual(resolved["id"], "WindowsTerminal.exe")
+        self.assertEqual(resolved["label"], "Windows Terminal")
+
+    def test_get_profile_for_app_matches_windows_full_path(self):
+        cfg = {
+            "app_overrides": {},
+            "profiles": {
+                "default": {"apps": []},
+                "terminal": {"apps": ["WindowsTerminal.exe"]},
+            },
+        }
+
+        with patch.object(
+            config,
+            "resolve_app_for_config",
+            return_value={
+                "id": "WindowsTerminal.exe",
+                "aliases": [
+                    "WindowsTerminal.exe",
+                    "wt.exe",
+                    r"C:\\Users\\luca\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe",
+                ],
+            },
+        ):
+            self.assertEqual(
+                config.get_profile_for_app(
+                    cfg,
+                    r"C:\\Users\\luca\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe",
+                ),
+                "terminal",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

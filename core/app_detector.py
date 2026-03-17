@@ -66,7 +66,7 @@ if sys.platform == "win32":
         user32.GetWindowTextW(hwnd, buf, length + 1)
         return buf.value
 
-    def _exe_from_pid(pid: int) -> str | None:
+    def _path_from_pid(pid: int) -> str | None:
         hproc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not hproc:
             return None
@@ -74,7 +74,7 @@ if sys.platform == "win32":
             buf = ctypes.create_unicode_buffer(MAX_PATH)
             size = wt.DWORD(MAX_PATH)
             if kernel32.QueryFullProcessImageNameW(hproc, 0, buf, ctypes.byref(size)):
-                return os.path.basename(buf.value)
+                return buf.value
         finally:
             kernel32.CloseHandle(hproc)
         return None
@@ -88,9 +88,9 @@ if sys.platform == "win32":
             child_pid = wt.DWORD()
             user32.GetWindowThreadProcessId(child_hwnd, ctypes.byref(child_pid))
             if child_pid.value != host_pid.value:
-                exe = _exe_from_pid(child_pid.value)
-                if exe and exe.lower() != "applicationframehost.exe":
-                    result[0] = exe
+                exe_path = _path_from_pid(child_pid.value)
+                if exe_path and os.path.basename(exe_path).lower() != "applicationframehost.exe":
+                    result[0] = exe_path
                     return False
             return True
 
@@ -122,8 +122,8 @@ if sys.platform == "win32":
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             if not pid.value:
                 return True
-            exe = _exe_from_pid(pid.value)
-            if exe and exe.lower() == "applicationframehost.exe":
+            exe_path = _path_from_pid(pid.value)
+            if exe_path and os.path.basename(exe_path).lower() == "applicationframehost.exe":
                 real = _resolve_uwp_child(hwnd)
                 if real:
                     result[0] = real
@@ -134,7 +134,7 @@ if sys.platform == "win32":
         return result[0]
 
     def get_foreground_exe() -> str | None:
-        """Return the .exe filename of the current foreground window, or None."""
+        """Return the foreground app path on Windows, or None."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
@@ -142,10 +142,10 @@ if sys.platform == "win32":
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == 0:
             return None
-        exe = _exe_from_pid(pid.value)
-        if not exe:
+        exe_path = _path_from_pid(pid.value)
+        if not exe_path:
             return None
-        exe_lower = exe.lower()
+        exe_lower = os.path.basename(exe_path).lower()
         if exe_lower == "applicationframehost.exe":
             real = _resolve_uwp_child(hwnd)
             # If we can't resolve the real app (e.g. fullscreen UWP),
@@ -161,7 +161,7 @@ if sys.platform == "win32":
                     return real
                 real = _find_uwp_app_global()
                 return real  # None keeps last profile
-        return exe
+        return exe_path
 
 elif sys.platform == "darwin":
     def get_foreground_exe() -> str | None:
