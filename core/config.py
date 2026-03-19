@@ -5,13 +5,21 @@ Supports per-application profiles (for future use).
 
 import json
 import os
+import stat
 import sys
+import tempfile
 from urllib.parse import quote
 from core import app_catalog
 
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Mouser")
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
+elif sys.platform == "linux":
+    CONFIG_DIR = os.path.join(
+        os.environ.get("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")),
+        "Mouser",
+    )
+else:
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Mouser")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 # Which mouse events map to which friendly button names
@@ -133,7 +141,7 @@ def get_icon_for_exe(exe_name: str) -> str:
 
 
 def ensure_config_dir():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
 
 
 def load_config():
@@ -146,6 +154,7 @@ def load_config():
             # Merge any missing keys from default
             cfg = _migrate(cfg)
             cfg = _merge_defaults(cfg, DEFAULT_CONFIG)
+            cfg = _validate_types(cfg, DEFAULT_CONFIG)
             return cfg
         except Exception as e:
             print(f"[Config] Error loading config: {e}")
@@ -153,10 +162,23 @@ def load_config():
 
 
 def save_config(cfg):
-    """Persist config to disk."""
+    """Persist config to disk via atomic write with restrictive permissions."""
     ensure_config_dir()
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=CONFIG_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        if sys.platform != "win32":
+            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
+        os.replace(tmp_path, CONFIG_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_active_mappings(cfg):
@@ -276,4 +298,24 @@ def _merge_defaults(cfg, defaults):
             cfg[key] = val
         elif isinstance(val, dict) and isinstance(cfg.get(key), dict):
             _merge_defaults(cfg[key], val)
+    return cfg
+
+
+def _validate_types(cfg, defaults, path=""):
+    """Reset values whose type doesn't match the defaults template."""
+    for key, default_val in defaults.items():
+        if key not in cfg:
+            continue
+        if isinstance(default_val, dict):
+            if isinstance(cfg[key], dict):
+                _validate_types(cfg[key], default_val, f"{path}.{key}")
+            else:
+                print(f"[Config] Type mismatch at {path}.{key}: "
+                      f"expected dict, got {type(cfg[key]).__name__}")
+                cfg[key] = json.loads(json.dumps(default_val))
+        elif not isinstance(cfg[key], type(default_val)):
+            print(f"[Config] Type mismatch at {path}.{key}: "
+                  f"expected {type(default_val).__name__}, "
+                  f"got {type(cfg[key]).__name__}")
+            cfg[key] = default_val
     return cfg

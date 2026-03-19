@@ -32,6 +32,38 @@ try:
 except ImportError:
     HIDAPI_OK = False
 
+# Support both "pip install hidapi" (hid.device) and "pip install hid" (hid.Device)
+_HID_API_STYLE = None
+if HIDAPI_OK:
+    if hasattr(_hid, 'device'):
+        _HID_API_STYLE = "hidapi"
+    elif hasattr(_hid, 'Device'):
+        _HID_API_STYLE = "hid"
+
+
+class _HidDeviceCompat:
+    """Wraps the ``hid`` package Device to match the ``hidapi`` interface."""
+
+    def __init__(self, path):
+        if isinstance(path, memoryview):
+            path = bytes(path)
+        elif isinstance(path, str):
+            path = path.encode()
+        self._dev = _hid.Device(path=path)
+
+    def set_nonblocking(self, enabled):
+        self._dev.nonblocking = bool(enabled)
+
+    def write(self, data):
+        return self._dev.write(bytes(data))
+
+    def read(self, size, timeout_ms=0):
+        data = self._dev.read(size, timeout=timeout_ms if timeout_ms else None)
+        return data if data else None
+
+    def close(self):
+        self._dev.close()
+
 _MAC_NATIVE_OK = False
 if sys.platform == "darwin":
     try:
@@ -734,13 +766,25 @@ class HidGestureListener:
             print("[HidGesture] Failed to read REPROG_V4 control count")
             return controls
         _, _, _, _, params = resp
+        _MAX_REPROG_CONTROLS = 32
         count = params[0] if params else 0
+        if count > _MAX_REPROG_CONTROLS:
+            print(f"[HidGesture] Suspicious control count {count}, "
+                  f"capping to {_MAX_REPROG_CONTROLS}")
+            count = _MAX_REPROG_CONTROLS
         print(f"[HidGesture] REPROG_V4 exposes {count} controls")
+        consecutive_failures = 0
         for index in range(count):
-            key_resp = self._request(self._feat_idx, 1, [index])
+            key_resp = self._request(self._feat_idx, 1, [index], timeout_ms=500)
             if not key_resp:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    print(f"[HidGesture] {consecutive_failures} consecutive "
+                          f"failures, aborting discovery")
+                    break
                 print(f"[HidGesture] Failed to read control info for index {index}")
                 continue
+            consecutive_failures = 0
             _, _, _, _, key_params = key_resp
             if len(key_params) < 9:
                 print(f"[HidGesture] Short control info for index {index}: "
@@ -1104,8 +1148,11 @@ class HidGestureListener:
                     else:
                         if not HIDAPI_OK:
                             continue
-                        d = _hid.device()
-                        d.open_path(open_info["path"])
+                        if _HID_API_STYLE == "hidapi":
+                            d = _hid.device()
+                            d.open_path(open_info["path"])
+                        else:
+                            d = _HidDeviceCompat(open_info["path"])
                         d.set_nonblocking(False)
                     self._dev = d
                     print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport}")

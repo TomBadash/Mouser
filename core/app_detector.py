@@ -181,6 +181,23 @@ elif sys.platform == "darwin":
         except Exception:
             return None
 
+elif sys.platform == "linux":
+    import subprocess as _subprocess
+
+    def get_foreground_exe() -> str | None:
+        """Return the foreground app executable path on Linux (X11)."""
+        try:
+            result = _subprocess.run(
+                ["xdotool", "getactivewindow", "getwindowpid"],
+                capture_output=True, text=True, timeout=1,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pid = int(result.stdout.strip())
+                return os.readlink(f"/proc/{pid}/exe")
+        except (FileNotFoundError, ValueError, OSError, _subprocess.TimeoutExpired):
+            pass
+        return None
+
 else:
     def get_foreground_exe() -> str | None:
         return None
