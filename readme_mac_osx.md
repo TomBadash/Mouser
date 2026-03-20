@@ -44,7 +44,7 @@ If Accessibility is not granted, Mouser will print:
 | Key simulation | SendInput (VK codes) | CGEvent (CGKeyCodes) |
 | Media keys | VK_MEDIA_* constants | NSEvent (NX key IDs) |
 | App detection | GetForegroundWindow | NSWorkspace.frontmostApplication |
-| Gesture button | Raw Input + HID++ | HID++ only |
+| Gesture button | HID++ + Raw Input fallback | HID++ + event-tap movement |
 | Scroll inversion | Coalesced SendInput | CGEventCreateScrollWheelEvent |
 | Modifier key | Ctrl | Cmd (⌘) |
 | Config location | `%APPDATA%\Mouser` | `~/Library/Application Support/Mouser` |

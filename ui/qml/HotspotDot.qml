@@ -10,9 +10,10 @@ import "Theme.js" as Theme
 
 Item {
     id: hotspot
+    readonly property var theme: Theme.palette(uiState.darkMode)
 
     // ── Required properties ───────────────────────────────────
-    required property Item imgItem        // the Image element
+    required property var imgItem         // the Image element
     required property real normX          // 0-1 x in source image
     required property real normY          // 0-1 y in source image
     required property string buttonKey    // config key (e.g. "middle")
@@ -30,6 +31,40 @@ Item {
 
     property bool isSelected: mousePage.selectedButton === buttonKey
     property bool isHovered: dotMa.containsMouse
+    property real labelWidth: labelCol.implicitWidth + 20
+    property real labelHeight: labelCol.implicitHeight + 14
+    property real leftCandidateX: cx + labelOffX - labelWidth - 14
+    property real rightCandidateX: cx + labelOffX + 6
+    property bool leftFits: leftCandidateX >= 8
+    property bool rightFits: rightCandidateX + labelWidth <= width - 8
+    property string effectiveLabelSide: labelSide === "left"
+                                       ? (leftFits || !rightFits ? "left" : "right")
+                                       : (rightFits || !leftFits ? "right" : "left")
+    property real unclampedLabelX: effectiveLabelSide === "left"
+                                   ? leftCandidateX : rightCandidateX
+    property real labelX: Math.max(8, Math.min(width - labelWidth - 8, unclampedLabelX))
+    property real labelY: Math.max(8, Math.min(height - labelHeight - 8, cy + labelOffY - 8))
+    property real labelCenterX: labelX + labelWidth / 2
+    property bool sourceIsRightOfLabel: cx >= labelCenterX
+    property real lineEndX: sourceIsRightOfLabel
+                            ? labelX + labelWidth - 6
+                            : labelX + 6
+    property real lineEndY: labelY + labelHeight / 2
+
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: label
+
+    function triggerSelection() {
+        if (isHScroll)
+            mousePage.selectHScroll()
+        else
+            mousePage.selectButton(buttonKey)
+    }
+
+    Keys.onReturnPressed: triggerSelection()
+    Keys.onEnterPressed: triggerSelection()
+    Keys.onSpacePressed: triggerSelection()
 
     // ── Glow ring ─────────────────────────────────────────────
     Rectangle {
@@ -38,9 +73,11 @@ Item {
         y: cy - height / 2
         width: 30; height: 30; radius: 15
         color: "transparent"
-        border.width: isSelected ? 2 : 1
-        border.color: isSelected ? Theme.accent : Qt.rgba(0, 0.83, 0.67, 0.3)
-        opacity: isSelected || isHovered ? 1 : 0.6
+        border.width: isSelected || hotspot.activeFocus ? 2 : 1
+        border.color: isSelected || hotspot.activeFocus
+                      ? theme.accent
+                      : Qt.rgba(0, 0.83, 0.67, 0.3)
+        opacity: isSelected || isHovered || hotspot.activeFocus ? 1 : 0.6
 
         Behavior on opacity { NumberAnimation { duration: 200 } }
         Behavior on border.width { NumberAnimation { duration: 150 } }
@@ -60,9 +97,9 @@ Item {
         x: cx - width / 2
         y: cy - height / 2
         width: 16; height: 16; radius: 8
-        color: isSelected ? Theme.accentHover : Theme.accent
+        color: isSelected ? theme.accentHover : theme.accent
         border.width: 2
-        border.color: Qt.rgba(0, 0, 0, 0.3)
+        border.color: hotspot.activeFocus ? theme.textPrimary : Qt.rgba(0, 0, 0, 0.3)
 
         scale: isHovered ? 1.2 : 1.0
         Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutQuad } }
@@ -77,28 +114,23 @@ Item {
         width: 36; height: 36
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: {
-            if (isHScroll)
-                mousePage.selectHScroll()
-            else
-                mousePage.selectButton(buttonKey)
-        }
+        onClicked: hotspot.triggerSelection()
     }
 
     // ── Connecting line ───────────────────────────────────────
     Canvas {
         id: lineCanvas
         anchors.fill: parent
-        z: -1
+        z: 0
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            ctx.strokeStyle = isSelected ? Theme.accent : Qt.rgba(0, 0.83, 0.67, 0.35)
+            ctx.strokeStyle = isSelected ? theme.accent : Qt.rgba(0, 0.83, 0.67, 0.35)
             ctx.lineWidth = 1
             ctx.setLineDash([4, 3])
             ctx.beginPath()
             ctx.moveTo(cx, cy)
-            ctx.lineTo(cx + labelOffX, cy + labelOffY)
+            ctx.lineTo(lineEndX, lineEndY)
             ctx.stroke()
         }
 
@@ -108,6 +140,8 @@ Item {
             function onCxChanged() { lineCanvas.requestPaint() }
             function onCyChanged() { lineCanvas.requestPaint() }
             function onIsSelectedChanged() { lineCanvas.requestPaint() }
+            function onLabelXChanged() { lineCanvas.requestPaint() }
+            function onLabelYChanged() { lineCanvas.requestPaint() }
         }
         Component.onCompleted: requestPaint()
     }
@@ -115,13 +149,18 @@ Item {
     // ── Annotation label ──────────────────────────────────────
     Rectangle {
         id: labelBg
-        x: cx + labelOffX - (labelSide === "left" ? labelCol.width + 14 : -6)
-        y: cy + labelOffY - 8
-        width: labelCol.width + 20
-        height: labelCol.height + 14
+        z: 2
+        x: labelX
+        y: labelY
+        width: labelWidth
+        height: labelHeight
         radius: 8
-        color: isSelected ? Qt.rgba(0, 0.83, 0.67, 0.12) : Qt.rgba(0, 0, 0, 0.35)
-        border.width: isSelected ? 1 : 0
+        color: isSelected
+               ? (uiState.darkMode
+                  ? Qt.rgba(0, 0.83, 0.67, 0.12)
+                  : Qt.rgba(0.82, 0.97, 0.93, 0.9))
+                          : uiState.darkMode ? Qt.rgba(0, 0, 0, 0.35) : Qt.rgba(1, 1, 1, 0.92)
+        border.width: isSelected || hotspot.activeFocus ? 1 : 0
         border.color: Qt.rgba(0, 0.83, 0.67, 0.3)
 
         Behavior on color { ColorAnimation { duration: 200 } }
@@ -136,14 +175,14 @@ Item {
 
             Text {
                 text: hotspot.label
-                font { family: Theme.fontFamily; pixelSize: 12; bold: true }
-                color: isSelected ? Theme.accent : Theme.textPrimary
+                font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                color: isSelected ? theme.accent : theme.textPrimary
             }
 
             Text {
                 text: hotspot.sublabel
-                font { family: Theme.fontFamily; pixelSize: 10 }
-                color: Theme.textSecondary
+                font { family: uiState.fontFamily; pixelSize: 10 }
+                color: theme.textSecondary
                 visible: text !== ""
                 width: Math.min(implicitWidth, 220)
                 elide: Text.ElideRight
@@ -154,20 +193,16 @@ Item {
         MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                if (isHScroll)
-                    mousePage.selectHScroll()
-                else
-                    mousePage.selectButton(buttonKey)
-            }
+            onClicked: hotspot.triggerSelection()
         }
     }
 
     // ── Small dot at the end of the line ──────────────────────
     Rectangle {
-        x: cx + labelOffX - 3
-        y: cy + labelOffY - 3
+        z: 1
+        x: lineEndX - 3
+        y: lineEndY - 3
         width: 6; height: 6; radius: 3
-        color: isSelected ? Theme.accent : Qt.rgba(0, 0.83, 0.67, 0.5)
+        color: isSelected ? theme.accent : Qt.rgba(0, 0.83, 0.67, 0.5)
     }
 }

@@ -290,6 +290,8 @@ if sys.platform == "win32":
 # ==================================================================
 
 elif sys.platform == "darwin":
+    import ctypes
+
     try:
         import Quartz
         _QUARTZ_OK = True
@@ -412,6 +414,112 @@ elif sys.platform == "darwin":
     _NX_VOL_UP = 0
     _NX_VOL_DOWN = 1
 
+    _KCFSTRING_ENCODING_UTF8 = 0x08000100
+    _MAC_ACTION_FALLBACKS = {
+        "mission_control": [kVK_Control, kVK_UpArrow],
+        "app_expose": [kVK_Control, kVK_DownArrow],
+        "space_left": [kVK_Control, kVK_LeftArrow],
+        "space_right": [kVK_Control, kVK_RightArrow],
+        "show_desktop": [kVK_F11],
+        "launchpad": [kVK_F4],
+    }
+    _SYMBOLIC_HOTKEY_SPACE_LEFT = 79
+    _SYMBOLIC_HOTKEY_SPACE_RIGHT = 81
+
+    try:
+        _APP_SERVICES = ctypes.CDLL(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        _CORE_FOUNDATION = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+
+        _APP_SERVICES.CoreDockSendNotification.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        _APP_SERVICES.CoreDockSendNotification.restype = ctypes.c_int
+        _APP_SERVICES.CGSGetSymbolicHotKeyValue.argtypes = [
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint16),
+            ctypes.POINTER(ctypes.c_uint16),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        _APP_SERVICES.CGSGetSymbolicHotKeyValue.restype = ctypes.c_int
+        _APP_SERVICES.CGSIsSymbolicHotKeyEnabled.argtypes = [ctypes.c_uint32]
+        _APP_SERVICES.CGSIsSymbolicHotKeyEnabled.restype = ctypes.c_bool
+        _APP_SERVICES.CGSSetSymbolicHotKeyEnabled.argtypes = [ctypes.c_uint32, ctypes.c_bool]
+        _APP_SERVICES.CGSSetSymbolicHotKeyEnabled.restype = ctypes.c_int
+        _CORE_FOUNDATION.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32,
+        ]
+        _CORE_FOUNDATION.CFStringCreateWithCString.restype = ctypes.c_void_p
+        _CORE_FOUNDATION.CFRelease.argtypes = [ctypes.c_void_p]
+        _CORE_FOUNDATION.CFRelease.restype = None
+        _PRIVATE_MAC_APIS_OK = True
+    except Exception:
+        _APP_SERVICES = None
+        _CORE_FOUNDATION = None
+        _PRIVATE_MAC_APIS_OK = False
+
+    def _dock_notification(notification_name):
+        if not _PRIVATE_MAC_APIS_OK:
+            return False
+        cf_string = _CORE_FOUNDATION.CFStringCreateWithCString(
+            None, notification_name.encode("utf-8"), _KCFSTRING_ENCODING_UTF8
+        )
+        if not cf_string:
+            return False
+        try:
+            return _APP_SERVICES.CoreDockSendNotification(cf_string, 0) == 0
+        finally:
+            _CORE_FOUNDATION.CFRelease(cf_string)
+
+    def _post_symbolic_hotkey(hotkey):
+        if not (_PRIVATE_MAC_APIS_OK and _QUARTZ_OK):
+            return False
+        key_equivalent = ctypes.c_uint16()
+        virtual_key = ctypes.c_uint16()
+        modifiers = ctypes.c_uint32()
+        err = _APP_SERVICES.CGSGetSymbolicHotKeyValue(
+            hotkey,
+            ctypes.byref(key_equivalent),
+            ctypes.byref(virtual_key),
+            ctypes.byref(modifiers),
+        )
+        if err != 0:
+            return False
+
+        was_enabled = bool(_APP_SERVICES.CGSIsSymbolicHotKeyEnabled(hotkey))
+        if not was_enabled:
+            _APP_SERVICES.CGSSetSymbolicHotKeyEnabled(hotkey, True)
+        try:
+            key_down = Quartz.CGEventCreateKeyboardEvent(None, virtual_key.value, True)
+            key_up = Quartz.CGEventCreateKeyboardEvent(None, virtual_key.value, False)
+            if not key_down or not key_up:
+                return False
+            Quartz.CGEventSetFlags(key_down, modifiers.value)
+            Quartz.CGEventSetFlags(key_up, modifiers.value)
+            Quartz.CGEventPost(Quartz.kCGSessionEventTap, key_down)
+            Quartz.CGEventPost(Quartz.kCGSessionEventTap, key_up)
+            time.sleep(0.05)
+            return True
+        finally:
+            if not was_enabled:
+                _APP_SERVICES.CGSSetSymbolicHotKeyEnabled(hotkey, False)
+
+    def _execute_mac_action(action_id):
+        if action_id == "mission_control":
+            return _dock_notification("com.apple.expose.awake")
+        if action_id == "app_expose":
+            return _dock_notification("com.apple.expose.front.awake")
+        if action_id == "show_desktop":
+            return _dock_notification("com.apple.showdesktop.awake")
+        if action_id == "launchpad":
+            return _dock_notification("com.apple.launchpad.toggle")
+        if action_id == "space_left":
+            return _post_symbolic_hotkey(_SYMBOLIC_HOTKEY_SPACE_LEFT)
+        if action_id == "space_right":
+            return _post_symbolic_hotkey(_SYMBOLIC_HOTKEY_SPACE_RIGHT)
+        return False
+
     ACTIONS = {
         "alt_tab": {
             "label": "Cmd + Tab (Switch Windows)",
@@ -488,6 +596,36 @@ elif sys.platform == "darwin":
             "keys": [kVK_Control, kVK_UpArrow],
             "category": "Navigation",
         },
+        "mission_control": {
+            "label": "Mission Control",
+            "keys": _MAC_ACTION_FALLBACKS["mission_control"],
+            "category": "Navigation",
+        },
+        "app_expose": {
+            "label": "App Expose",
+            "keys": _MAC_ACTION_FALLBACKS["app_expose"],
+            "category": "Navigation",
+        },
+        "space_left": {
+            "label": "Previous Space",
+            "keys": _MAC_ACTION_FALLBACKS["space_left"],
+            "category": "Navigation",
+        },
+        "space_right": {
+            "label": "Next Space",
+            "keys": _MAC_ACTION_FALLBACKS["space_right"],
+            "category": "Navigation",
+        },
+        "show_desktop": {
+            "label": "Show Desktop",
+            "keys": _MAC_ACTION_FALLBACKS["show_desktop"],
+            "category": "Navigation",
+        },
+        "launchpad": {
+            "label": "Launchpad",
+            "keys": _MAC_ACTION_FALLBACKS["launchpad"],
+            "category": "Navigation",
+        },
         "volume_up": {
             "label": "Volume Up",
             "keys": [],
@@ -534,6 +672,8 @@ elif sys.platform == "darwin":
     def execute_action(action_id):
         action = ACTIONS.get(action_id)
         if not action:
+            return
+        if _execute_mac_action(action_id):
             return
         if action.get("mac_fn") is not None:
             _send_media_key(action["mac_fn"])

@@ -9,122 +9,200 @@ ApplicationWindow {
     visible: true
     width: 1060
     height: 700
-    minimumWidth: 900
-    minimumHeight: 600
-    title: "Mouser — MX Master 3S"
-    color: Theme.bg
+    minimumWidth: 920
+    minimumHeight: 620
+    title: backend.mouseConnected
+           ? "Mouser — " + backend.deviceDisplayName
+           : "Mouser"
 
-    Material.theme: Material.Dark
-    Material.accent: Theme.accent
-
-    // ── Navigation state ──────────────────────────────────────
+    property string appearanceMode: uiState.appearanceMode
+    readonly property bool darkMode: appearanceMode === "dark"
+                                    || (appearanceMode === "system"
+                                        && uiState.systemDarkMode)
+    readonly property var theme: Theme.palette(darkMode)
     property int currentPage: 0
+    property Item hoveredNavItem: null
+    property string hoveredNavText: ""
+    property real hoveredNavCenterX: 0
+    property real hoveredNavCenterY: 0
 
-    Row {
+    color: theme.bg
+
+    Material.theme: darkMode ? Material.Dark : Material.Light
+    Material.accent: theme.accent
+    Material.background: theme.bg
+    Material.foreground: theme.textPrimary
+
+    RowLayout {
         anchors.fill: parent
+        spacing: 0
 
-        // ── Sidebar ───────────────────────────────────────────
         Rectangle {
             id: sidebar
-            width: 64
-            height: parent.height
-            color: Theme.bgSidebar
+            Layout.preferredWidth: 72
+            Layout.fillHeight: true
+            color: root.theme.bgSidebar
 
             Column {
-                anchors.fill: parent
-                anchors.topMargin: 20
-                spacing: 4
+                anchors {
+                    fill: parent
+                    topMargin: 20
+                }
+                spacing: 6
 
-                // Brand logo
                 Rectangle {
-                    width: 42; height: 42
-                    radius: 12
-                    color: Theme.accent
+                    width: 44
+                    height: 44
+                    radius: 14
+                    color: root.theme.accent
                     anchors.horizontalCenter: parent.horizontalCenter
 
                     Text {
                         anchors.centerIn: parent
                         text: "M"
-                        font { family: Theme.fontFamily; pixelSize: 20; bold: true }
-                        color: Theme.bgSidebar
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 20
+                            bold: true
+                        }
+                        color: root.theme.bgSidebar
                     }
                 }
 
-                Item { width: 1; height: 20 }
+                Item { width: 1; height: 18 }
 
-                // Nav items
                 Repeater {
                     model: [
-                        { label: "🖱", tip: "Mouse & Profiles", page: 0 },
-                        { label: "⚙",  tip: "Point & Scroll",  page: 1 }
+                        { icon: "mouse-simple", tip: "Mouse & Profiles", page: 0 },
+                        { icon: "sliders-horizontal", tip: "Point & Scroll", page: 1 }
                     ]
-                    delegate: Item {
+
+                    delegate: FocusScope {
+                        id: navItem
                         width: sidebar.width
-                        height: 52
+                        height: 56
+                        activeFocusOnTab: true
+
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.tip
+                        Accessible.description: "Open " + modelData.tip
+
+                        Keys.onReturnPressed: root.currentPage = modelData.page
+                        Keys.onEnterPressed: root.currentPage = modelData.page
+                        Keys.onSpacePressed: root.currentPage = modelData.page
 
                         Rectangle {
                             anchors.centerIn: parent
-                            width: 44; height: 44
-                            radius: 12
-                            color: currentPage === modelData.page
-                                   ? Qt.rgba(0, 0.83, 0.67, 0.12)
-                                   : navMa.containsMouse
-                                     ? Qt.rgba(1, 1, 1, 0.05)
+                            width: 46
+                            height: 46
+                            radius: 14
+                            color: root.currentPage === modelData.page
+                                   ? Qt.rgba(0, 0.83, 0.67, root.darkMode ? 0.14 : 0.16)
+                                   : navMouse.containsMouse || navItem.activeFocus
+                                     ? Qt.rgba(1, 1, 1, root.darkMode ? 0.06 : 0.22)
                                      : "transparent"
+
+                            border.width: navItem.activeFocus ? 1 : 0
+                            border.color: root.theme.accent
+
                             Behavior on color { ColorAnimation { duration: 150 } }
 
-                            Text {
+                            AppIcon {
                                 anchors.centerIn: parent
-                                text: modelData.label
-                                font.pixelSize: 20
+                                width: 22
+                                height: 22
+                                name: modelData.icon
+                                iconColor: root.currentPage === modelData.page
+                                           ? root.theme.accent
+                                           : navMouse.containsMouse || navItem.activeFocus
+                                             ? root.theme.textPrimary
+                                             : root.theme.textSecondary
                             }
                         }
 
-                        // Active indicator bar
                         Rectangle {
-                            width: 3; height: 24; radius: 2
-                            color: Theme.accent
+                            width: 3
+                            height: 24
+                            radius: 2
+                            color: root.theme.accent
                             anchors {
                                 left: parent.left
                                 verticalCenter: parent.verticalCenter
                             }
-                            visible: currentPage === modelData.page
+                            visible: root.currentPage === modelData.page
                         }
 
                         MouseArea {
-                            id: navMa
+                            id: navMouse
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: currentPage = modelData.page
-                        }
-
-                        ToolTip {
-                            visible: navMa.containsMouse
-                            text: modelData.tip
-                            delay: 500
+                            onClicked: root.currentPage = modelData.page
+                            onContainsMouseChanged: {
+                                if (containsMouse) {
+                                    var p = navItem.mapToItem(overlayLayer, navItem.width, navItem.height / 2)
+                                    root.hoveredNavItem = navItem
+                                    root.hoveredNavText = modelData.tip
+                                    root.hoveredNavCenterX = p.x
+                                    root.hoveredNavCenterY = p.y
+                                } else if (root.hoveredNavItem === navItem) {
+                                    root.hoveredNavItem = null
+                                    root.hoveredNavText = ""
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── Content Area ──────────────────────────────────────
         StackLayout {
             id: contentStack
-            width: parent.width - sidebar.width
-            height: parent.height
-            currentIndex: currentPage
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: root.currentPage
 
             MousePage {}
             Loader {
-                active: currentPage === 1 || item   // load on first visit, keep alive
+                active: root.currentPage === 1 || item
                 source: "ScrollPage.qml"
             }
         }
     }
 
-    // ── Status toast ──────────────────────────────────────────
+    Item {
+        id: overlayLayer
+        anchors.fill: parent
+        z: 999
+
+        Rectangle {
+            id: navTooltip
+            x: root.hoveredNavCenterX + 10
+            y: Math.max(8, Math.min(root.height - height - 8, root.hoveredNavCenterY - height / 2))
+            visible: root.hoveredNavItem !== null
+            opacity: visible ? 1 : 0
+            radius: 10
+            color: root.theme.tooltipBg
+            border.width: 1
+            border.color: Qt.rgba(1, 1, 1, root.darkMode ? 0.06 : 0.12)
+            width: navTooltipText.implicitWidth + 22
+            height: navTooltipText.implicitHeight + 14
+
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+
+            Text {
+                id: navTooltipText
+                anchors.centerIn: parent
+                text: root.hoveredNavText
+                font {
+                    family: uiState.fontFamily
+                    pixelSize: 12
+                }
+                color: root.theme.tooltipText
+            }
+        }
+    }
+
     Rectangle {
         id: toast
         anchors {
@@ -133,17 +211,21 @@ ApplicationWindow {
             bottomMargin: 24
         }
         width: toastText.implicitWidth + 32
-        height: 36
-        radius: 18
-        color: Theme.accent
+        height: 38
+        radius: 19
+        color: root.theme.accent
         opacity: 0
         visible: opacity > 0
 
         Text {
             id: toastText
             anchors.centerIn: parent
-            font { family: Theme.fontFamily; pixelSize: 12; bold: true }
-            color: Theme.bgSidebar
+            font {
+                family: uiState.fontFamily
+                pixelSize: 12
+                bold: true
+            }
+            color: root.theme.bgSidebar
         }
 
         Behavior on opacity { NumberAnimation { duration: 200 } }
@@ -161,13 +243,11 @@ ApplicationWindow {
         }
     }
 
-    // ── Close to tray ─────────────────────────────────────────
     onClosing: function(close) {
         close.accepted = false
         root.hide()
     }
 
-    // ── Backend connections ────────────────────────────────────
     Connections {
         target: backend
         function onStatusMessage(msg) { toast.show(msg) }

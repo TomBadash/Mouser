@@ -49,8 +49,24 @@ if sys.platform == "win32":
     WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     user32.EnumChildWindows.argtypes = [wt.HWND, WNDENUMPROC, wt.LPARAM]
     user32.EnumChildWindows.restype = wt.BOOL
+    user32.EnumWindows.argtypes = [WNDENUMPROC, wt.LPARAM]
+    user32.EnumWindows.restype = wt.BOOL
+    user32.IsWindowVisible.argtypes = [wt.HWND]
+    user32.IsWindowVisible.restype = wt.BOOL
+    user32.GetWindowTextW.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowTextLengthW.argtypes = [wt.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
 
-    def _exe_from_pid(pid: int) -> str | None:
+    def _get_window_title(hwnd) -> str:
+        length = user32.GetWindowTextLengthW(hwnd)
+        if not length:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        return buf.value
+
+    def _path_from_pid(pid: int) -> str | None:
         hproc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not hproc:
             return None
@@ -58,7 +74,7 @@ if sys.platform == "win32":
             buf = ctypes.create_unicode_buffer(MAX_PATH)
             size = wt.DWORD(MAX_PATH)
             if kernel32.QueryFullProcessImageNameW(hproc, 0, buf, ctypes.byref(size)):
-                return os.path.basename(buf.value)
+                return buf.value
         finally:
             kernel32.CloseHandle(hproc)
         return None
@@ -69,23 +85,56 @@ if sys.platform == "win32":
         result = [None]
 
         def _enum_cb(child_hwnd, _lparam):
-            cls = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(child_hwnd, cls, 256)
-            if cls.value == "Windows.UI.Core.CoreWindow":
-                child_pid = wt.DWORD()
-                user32.GetWindowThreadProcessId(child_hwnd, ctypes.byref(child_pid))
-                if child_pid.value != host_pid.value:
-                    exe = _exe_from_pid(child_pid.value)
-                    if exe:
-                        result[0] = exe
-                        return False
+            child_pid = wt.DWORD()
+            user32.GetWindowThreadProcessId(child_hwnd, ctypes.byref(child_pid))
+            if child_pid.value != host_pid.value:
+                exe_path = _path_from_pid(child_pid.value)
+                if exe_path and os.path.basename(exe_path).lower() != "applicationframehost.exe":
+                    result[0] = exe_path
+                    return False
             return True
 
         user32.EnumChildWindows(hwnd, WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
+    # Window classes that belong to genuine explorer.exe usage
+    _EXPLORER_CLASSES = frozenset({
+        "CabinetWClass",           # File Explorer windows
+        "Shell_TrayWnd",           # Taskbar
+        "Shell_SecondaryTrayWnd",  # Taskbar on secondary monitors
+        "Progman",                 # Desktop
+        "WorkerW",                 # Desktop worker
+    })
+
+    def _get_window_class(hwnd) -> str:
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        return cls.value
+
+    def _find_uwp_app_global() -> str | None:
+        """Enumerate all top-level windows to find a UWP app behind an overlay."""
+        result = [None]
+
+        def _enum_cb(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            pid = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if not pid.value:
+                return True
+            exe_path = _path_from_pid(pid.value)
+            if exe_path and os.path.basename(exe_path).lower() == "applicationframehost.exe":
+                real = _resolve_uwp_child(hwnd)
+                if real:
+                    result[0] = real
+                    return False
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+        return result[0]
+
     def get_foreground_exe() -> str | None:
-        """Return the .exe filename of the current foreground window, or None."""
+        """Return the foreground app path on Windows, or None."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
@@ -93,28 +142,42 @@ if sys.platform == "win32":
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == 0:
             return None
-        exe = _exe_from_pid(pid.value)
-        if not exe:
+        exe_path = _path_from_pid(pid.value)
+        if not exe_path:
             return None
-        if exe.lower() == "applicationframehost.exe":
+        exe_lower = os.path.basename(exe_path).lower()
+        if exe_lower == "applicationframehost.exe":
             real = _resolve_uwp_child(hwnd)
-            if real:
-                return real
-        return exe
+            # If we can't resolve the real app (e.g. fullscreen UWP),
+            # return None so the detector keeps the last known profile.
+            return real
+        if exe_lower == "explorer.exe":
+            wc = _get_window_class(hwnd)
+            if wc not in _EXPLORER_CLASSES:
+                title = _get_window_title(hwnd)
+                print(f"[AppDetect] FG: explorer.exe class={wc} title='{title}'")
+                real = _resolve_uwp_child(hwnd)
+                if real:
+                    return real
+                real = _find_uwp_app_global()
+                return real  # None keeps last profile
+        return exe_path
 
 elif sys.platform == "darwin":
     def get_foreground_exe() -> str | None:
-        """Return the bundle-exe name of the frontmost app on macOS."""
+        """Return a stable app identifier for the frontmost app on macOS."""
         try:
             from AppKit import NSWorkspace
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
                 return None
+            ident = app.bundleIdentifier()
+            if ident:
+                return ident
             url = app.executableURL()
             if url:
                 return os.path.basename(url.path())
-            ident = app.bundleIdentifier()
-            return ident or app.localizedName()
+            return app.localizedName()
         except Exception:
             return None
 

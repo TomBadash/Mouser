@@ -34,6 +34,7 @@ a = Analysis(
         "PySide6.QtQml",
         "PySide6.QtNetwork",
         "PySide6.QtOpenGL",
+        "PySide6.QtSvg",
     ],
     hookspath=[],
     hooksconfig={},
@@ -68,8 +69,6 @@ a = Analysis(
         "PySide6.QtRemoteObjects",
         "PySide6.QtScxml",
         "PySide6.QtSql",
-        "PySide6.QtSvg",
-        "PySide6.QtSvgWidgets",
         "PySide6.QtTextToSpeech",
         "PySide6.QtQuick3D",
         "PySide6.QtVirtualKeyboard",
@@ -123,7 +122,7 @@ _qt_keep = {
     "Qt6QuickTemplates2", "Qt6QuickLayouts", "Qt6QuickEffects",
     "Qt6QuickShapes",
     # Rendering
-    "Qt6ShaderTools",
+    "Qt6ShaderTools", "Qt6Svg",
     # PySide6 runtime
     "pyside6.abi3", "pyside6qml.abi3", "shiboken6.abi3",
     # VC runtime

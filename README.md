@@ -1,11 +1,12 @@
-# Mouser — MX Master 3S Button Remapper
+# Mouser — Logitech Mouse Remapper
 
 <p align="center">
   <img src="images/logo_icon.png" width="128" alt="Mouser logo" />
 </p>
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
-remapping every programmable button on the **Logitech MX Master 3S** mouse.
+remapping Logitech HID++ mice. The current best experience is on the **MX Master**
+family, with early detection and fallback UI support for additional Logitech models.
 
 No telemetry. No cloud. No Logitech account required.
 
@@ -13,16 +14,16 @@ No telemetry. No cloud. No Logitech account required.
 
 ## Features
 
-- **macOS support** — **full macOS compatibility added thanks to [andrew-sz](https://github.com/andrew-sz)**, using CGEventTap for mouse hooking, Quartz CGEvent for key simulation, and NSWorkspace for app detection. See [macOS Setup Guide](readme_mac_osx.md) for details.
-- **Remap all 6 programmable buttons** — middle click, gesture button, back, forward, horizontal scroll left/right
+- **macOS support** — full macOS compatibility using CGEventTap for mouse hooking, Quartz CGEvent for key simulation, and NSWorkspace for app detection. See [macOS Setup Guide](readme_mac_osx.md) for details.
+- **Remap supported programmable controls** — MX Master-family layouts expose middle click, gesture button, back, forward, and horizontal scroll actions
 - **Per-application profiles** — automatically switch button mappings when you switch apps (e.g., different bindings for Chrome vs. VS Code)
 - **22 built-in actions** across navigation, browser, editing, and media categories
 - **DPI / pointer speed control** — slider from 200–8000 DPI with quick presets, synced to the device via HID++
 - **Scroll direction inversion** — independent toggles for vertical and horizontal scroll
-- **Gesture button support** — full HID++ 2.0 divert on Bluetooth (no Logitech software needed)
+- **Device-aware HID++ gesture support** — discovers `REPROG_CONTROLS_V4`, ranks gesture candidates per device, and diverts the best control it can find
 - **Auto-reconnection** — automatically detects when the mouse is turned off/on or disconnected/reconnected and restores full functionality without restarting the app
 - **Live connection status** — the UI shows a real-time "Connected" / "Not Connected" badge that updates as the mouse connects or disconnects
-- **Modern Qt Quick UI** — dark Material theme with interactive mouse diagram and per-button action picker
+- **Device-aware Qt Quick UI** — interactive MX Master layout today, plus a generic fallback card and experimental manual map picker for other detected devices
 - **System tray** — runs in background, hides to tray on close, toggle remapping on/off from tray menu
 - **Auto-detect foreground app** — polls the active window and switches profiles instantly
 - **Zero external services** — config is a local JSON file, all processing happens on your machine
@@ -33,18 +34,18 @@ No telemetry. No cloud. No Logitech account required.
   <img src="images/Screenshot.png" alt="Mouser UI" />
 </p>
 
-_The UI shows an interactive diagram of the MX Master 3S. Click any button's hotspot dot to change its action._
+_The UI is now device-aware. MX Master-family mice get the interactive diagram; other detected Logitech mice fall back to a generic device card with an experimental map override picker._
 
-## Supported Device
+## Current Device Coverage
 
-| Property | Value |
-|---|---|
-| Device | Logitech MX Master 3S |
-| Product ID | `0xB034` |
-| Protocol | HID++ 4.5 (Bluetooth) |
-| Connection | Bluetooth (USB receiver also works for basic buttons) |
+| Family / model | Detection + HID++ probing | UI support |
+|---|---|---|
+| MX Master 3S / 3 / 2S / MX Master | Yes | Dedicated interactive `mx_master` layout |
+| MX Anywhere 3S / 3 / 2S | Yes | Generic fallback card, experimental manual override |
+| MX Vertical | Yes | Generic fallback card |
+| Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> **Note:** The architecture is designed to be extensible to other Logitech HID++ mice, but only the MX Master 3S is tested.
+> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
 
 ## Default Mappings
 
@@ -73,33 +74,35 @@ _The UI shows an interactive diagram of the MX Master 3S. Click any button's hot
 
 > **No install required.** Just download, extract, and double-click.
 
+<p align="center">
+  <a href="https://github.com/TomBadash/Mouser/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Mouser.zip-00d4aa?style=for-the-badge&logo=windows" alt="Download" />
+  </a>
+  <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/total?style=for-the-badge&color=00d4aa&label=Total%20Downloads" alt="Downloads" />
+</p>
+
 ### Steps
 
-1. **Download** → [**Mouser.zip**](https://github.com/TomBadash/MouseControl/releases/latest/download/Mouser.zip) (44 MB)
-2. **Extract** the zip to any folder (Desktop, Documents, wherever you like)
-3. **Run** `Mouser.exe`
+1. Go to the [**latest release page**](https://github.com/TomBadash/Mouser/releases/latest)
+2. Click **Mouser.zip** to download it
+3. **Extract** the zip to any folder (Desktop, Documents, wherever you like)
+4. **Run** `Mouser.exe`
 
-That's it — the app will open and start remapping your mouse buttons immediately.
+That's it. The app will open and start remapping your mouse buttons immediately.
 
 ### What to expect
 
-- The **settings window** opens showing your mouse diagram
+- The **settings window** opens showing the current device-aware mouse page
 - A **system tray icon** appears near the clock (bottom-right)
 - Button remapping is **active immediately**
-- Closing the window **doesn't quit** the app — it keeps running in the tray
-- To fully quit: right-click the tray icon → **Quit Mouser**
+- Closing the window does not quit the app — it keeps running in the tray
+- To fully quit: right-click the tray icon and select **Quit Mouser**
 
 ### First-time notes
 
-- **Windows SmartScreen** may show a warning the first time → click **More info → Run anyway**
-- **Logitech Options+** must not be running (it conflicts with HID++ access)
+- **Windows SmartScreen** may show a warning the first time — click **More info** then **Run anyway**
+- **Logitech Options+** must not be running (it conflicts with HID++ access and will cause Mouser to malfunction or crash)
 - Config is saved automatically to `%APPDATA%\Mouser`
-
-<p align="center">
-  <a href="https://github.com/TomBadash/MouseControl/releases/latest/download/Mouser.zip">
-    <img src="https://img.shields.io/badge/Download-Mouser.zip-00d4aa?style=for-the-badge&logo=windows" alt="Download" />
-  </a>
-</p>
 
 ---
 
@@ -109,7 +112,7 @@ That's it — the app will open and start remapping your mouse buttons immediate
 
 - **Windows 10/11** or **macOS 12+ (Monterey)**
 - **Python 3.10+** (tested with 3.14)
-- **Logitech MX Master 3S** paired via Bluetooth or USB receiver
+- **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. MX Master-family devices currently have the most complete UI support.
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 
@@ -117,8 +120,8 @@ That's it — the app will open and start remapping your mouse buttons immediate
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/TomBadash/MouseControl.git
-cd MouseControl
+git clone https://github.com/TomBadash/Mouser.git
+cd Mouser
 
 # 2. Create a virtual environment
 python -m venv .venv
@@ -154,6 +157,18 @@ Mouser.bat
 ```
 
 > **Tip:** To run without a console window, use `pythonw.exe main_qml.py` or the `.lnk` shortcut.
+
+Temporary macOS transport override for debugging:
+
+```bash
+python main_qml.py --hid-backend=iokit
+python main_qml.py --hid-backend=hidapi
+python main_qml.py --hid-backend=auto
+```
+
+Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`;
+`hidapi` and `auto` remain available as manual overrides for debugging. Other
+platforms continue to default to `auto`.
 
 ### Creating a Desktop Shortcut
 
@@ -192,10 +207,10 @@ The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
 ### Architecture
 
 ```
-┌─────────────┐     ┌──────────┐     ┌────────────────┐
-│  Mouse HW   │────▶│ Mouse    │────▶│ Engine         │
-│ (MX Master) │     │ Hook     │     │ (orchestrator) │
-└─────────────┘     └──────────┘     └───────┬────────┘
+┌────────────────┐     ┌──────────┐     ┌────────────────┐
+│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
+│ / HID++ device │     │ Hook     │     │ (orchestrator) │
+└────────────────┘     └──────────┘     └───────┬────────┘
                          ▲                    │
                     block/pass           ┌────▼────────┐
                                          │ Key         │
@@ -212,7 +227,12 @@ The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
 
 ### Mouse Hook (`mouse_hook.py`)
 
-A **low-level Windows mouse hook** (`SetWindowsHookExW` with `WH_MOUSE_LL`) runs on a dedicated background thread with its own Win32 message pump. It intercepts:
+Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstraction:
+
+- **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
+- **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
+
+Both paths feed the same internal event model and intercept:
 
 - `WM_XBUTTONDOWN/UP` — side buttons (back/forward)
 - `WM_MBUTTONDOWN/UP` — middle click
@@ -221,13 +241,19 @@ A **low-level Windows mouse hook** (`SetWindowsHookExW` with `WH_MOUSE_LL`) runs
 
 Intercepted events are either **blocked** (hook returns 1) and replaced with an action, or **passed through** to the application.
 
-### Gesture Button Detection (3-tier)
+### Device Catalog & Layout Registry
 
-The MX Master 3S gesture button doesn't send standard mouse events. Mouser uses a 3-tier detection system:
+- `core/logi_devices.py` resolves known product IDs and model aliases into a `ConnectedDeviceInfo` record with display name, DPI range, preferred gesture CIDs, and default UI layout key
+- `core/device_layouts.py` stores image assets, hotspot coordinates, layout notes, and whether a layout is interactive or only a generic fallback
+- `ui/backend.py` combines auto-detected device info with any persisted per-device layout override and exposes the effective layout to QML
 
-1. **HID++ 2.0** (primary, Bluetooth) — Opens the Logitech HID collection, discovers `REPROG_CONTROLS_V4` (feature `0x1B04`), and diverts CID `0x00C3` (gesture button). Best reliability.
-2. **Raw Input** (fallback) — Registers for raw mouse input and detects extra button bits beyond the standard 5.
-3. **Middle-click fallback** — When gesture button has an action but middle-click is unassigned, middle-click events route to the gesture action.
+### Gesture Button Detection
+
+Logitech gesture/thumb buttons do not always appear as standard mouse events. Mouser uses a layered detector:
+
+1. **HID++ 2.0** (primary) — Opens the Logitech HID collection, discovers `REPROG_CONTROLS_V4` (feature `0x1B04`), ranks gesture CID candidates from the device registry plus control-capability heuristics, and diverts the best candidate. When supported, Mouser also enables RawXY movement data.
+2. **Raw Input** (Windows fallback) — Registers for raw mouse input and detects extra button bits beyond the standard 5.
+3. **Gesture tap/swipe dispatch** — A clean press/release emits `gesture_click`; once movement crosses the configured threshold, Mouser emits directional swipe actions instead.
 
 ### App Detector (`app_detector.py`)
 
@@ -235,7 +261,7 @@ Polls the foreground window every 300ms using `GetForegroundWindow` → `GetWind
 
 ### Engine (`engine.py`)
 
-The central orchestrator. On app change, it performs a **lightweight profile switch** — clears and re-wires hook callbacks without tearing down the hook thread or HID++ connection. This avoids the latency and instability of a full hook restart.
+The central orchestrator. On app change, it performs a **lightweight profile switch** — clears and re-wires hook callbacks without tearing down the hook thread or HID++ connection. This avoids the latency and instability of a full hook restart. The engine also forwards connected-device identity to the backend so QML can render the right model name and layout state.
 
 ### Device Reconnection
 
@@ -243,14 +269,15 @@ Mouser handles mouse power-off/on cycles automatically:
 
 - **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device is back
 - **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` notifications and reinstalls the low-level mouse hook when devices are added or removed
-- **UI layer** — connection state flows from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge in real time
+- **UI layer** — connection state and device identity flow from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time
 
 ### Configuration
 
 All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Library/Application Support/Mouser/config.json` (macOS). The config supports:
-- Multiple named profiles with per-profile button mappings
+- Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
 - Per-profile app associations (list of `.exe` names)
-- Global settings: DPI, scroll inversion, start options
+- Global settings: DPI, scroll inversion, gesture tuning, appearance, and debug flags
+- Per-device layout override selections for unsupported devices
 - Automatic migration from older config versions
 
 ---
@@ -269,6 +296,8 @@ mouser/
 │   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
 │   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
 │   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth)
+│   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
+│   ├── device_layouts.py    # Device-family layout registry for QML overlays
 │   ├── key_simulator.py     # SendInput-based action simulator (22 actions)
 │   ├── config.py            # Config manager (JSON load/save/migrate)
 │   └── app_detector.py      # Foreground app polling
@@ -285,6 +314,7 @@ mouser/
 │
 └── images/
     ├── mouse.png            # MX Master 3S top-down diagram
+    ├── icons/mouse-simple.svg # Generic fallback device card artwork
     ├── logo.png             # Mouser logo (source)
     ├── logo.ico             # Multi-size icon for shortcuts
     ├── logo_icon.png        # Square icon with background
@@ -301,7 +331,7 @@ The app has two pages accessible from a slim sidebar:
 ### Mouse & Profiles (Page 1)
 
 - **Left panel:** List of profiles. The "Default (All Apps)" profile is always present. Per-app profiles show the app icon and name. Select a profile to edit its mappings.
-- **Right panel:** Interactive mouse diagram with clickable hotspot dots on each button. Click a dot to expand an action picker with categorized chips. Changes save instantly to the selected profile.
+- **Right panel:** Device-aware mouse view. MX Master-family devices get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
 - **Add profile:** ComboBox at the bottom lists known apps (Chrome, Edge, VS Code, VLC, etc.). Click "+" to create a per-app profile.
 
 ### Point & Scroll (Page 2)
@@ -314,7 +344,8 @@ The app has two pages accessible from a slim sidebar:
 ## Known Limitations
 
 - **Windows & macOS only** — Linux is not yet supported
-- **MX Master 3S only** — HID++ feature indices and CIDs are hardcoded for this device (PID `0xB034`)
+- **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
+- **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
 - **Bluetooth recommended** — HID++ gesture button divert works best over Bluetooth; USB receiver has partial support
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
@@ -322,7 +353,9 @@ The app has two pages accessible from a slim sidebar:
 
 ## Future Work
 
-- [ ] **More devices** — support other Logitech HID++ mice (MX Master 3, MX Anywhere 3, etc.)
+- [ ] **Dedicated overlays for more devices** — add real hotspot maps and artwork for MX Anywhere, MX Vertical, and other Logitech families
+- [ ] **True per-device config** — separate mappings and layout state cleanly when multiple Logitech mice are used on the same machine
+- [ ] **Dynamic button inventory** — build button lists from discovered `REPROG_CONTROLS_V4` controls instead of relying on the current fixed mapping set
 - [ ] **Custom key combos** — let users define arbitrary key sequences (e.g., Ctrl+Shift+P)
 - [ ] **Start with Windows** — autostart via registry or Task Scheduler
 - [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches
@@ -330,7 +363,7 @@ The app has two pages accessible from a slim sidebar:
 - [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
 - [ ] **Export/import config** — share configurations between machines
 - [ ] **Tray icon badge** — show active profile name in tray tooltip
-- [x] **macOS support** — added via CGEventTap, Quartz CGEvent, and NSWorkspace (thanks [@andrew-sz](https://github.com/andrew-sz))
+- [x] **macOS support** — added via CGEventTap, Quartz CGEvent, and NSWorkspace
 - [ ] **Linux support** — investigate `libevdev` / `evdev` hooks
 - [ ] **Plugin system** — allow third-party action providers
 
@@ -340,7 +373,7 @@ Contributions are welcome! To get started:
 
 1. Fork the repo and create a feature branch
 2. Set up the dev environment (see [Installation](#installation))
-3. Make your changes and test with an MX Master 3S
+3. Make your changes and test with a supported Logitech HID++ mouse (MX Master family preferred for now)
 4. Submit a pull request with a clear description
 
 ### Areas where help is needed
@@ -371,6 +404,7 @@ This project is licensed under the [MIT License](LICENSE).
 ## Acknowledgments
 
 - **[@andrew-sz](https://github.com/andrew-sz)** — macOS port: CGEventTap mouse hooking, Quartz key simulation, NSWorkspace app detection, and NSEvent media key support
+- **[@thisislvca](https://github.com/thisislvca)** — significant expansion of the project including macOS compatibility improvements, multi-device support, new UI features, and active involvement in triaging and resolving open issues
 
 ---
 

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: python -m py_compile main_qml.py core/*.py ui/*.py
+
+      - name: Run config tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Lint QML
+        run: |
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          import PySide6
+
+          qml_files = sorted(str(path) for path in Path("ui/qml").glob("*.qml"))
+          qmllint = Path(PySide6.__file__).resolve().parent / "qmllint"
+          subprocess.run([str(qmllint), *qml_files], check=True)
+          PY
