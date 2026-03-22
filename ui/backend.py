@@ -10,6 +10,8 @@ import time
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, Qt
 
+from core.accessibility import is_process_trusted
+from core import autostart
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
@@ -57,6 +59,7 @@ class Backend(QObject):
         super().__init__(parent)
         self._engine = engine
         self._cfg = load_config()
+        self._autostart_supported = autostart.is_supported()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
         self._connected_device_key = ""
@@ -106,9 +109,37 @@ class Backend(QObject):
                 engine.set_gesture_event_callback(self._onEngineGestureEvent)
             if hasattr(engine, "set_debug_enabled"):
                 engine.set_debug_enabled(self.debugMode)
+            self._mouse_connected = bool(getattr(engine, "device_connected", False))
+        self._sync_autostart_state()
         self._apply_device_layout(
-            getattr(engine, "connected_device", None) if engine else None
+            getattr(engine, "connected_device", None)
+            if engine and self._mouse_connected else None
         )
+
+    def _sync_autostart_state(self):
+        settings = self._settings()
+        if not self._autostart_supported:
+            settings["start_at_login"] = False
+            return
+
+        enabled = autostart.is_launch_at_login_enabled()
+        if settings.get("start_at_login") != enabled:
+            settings["start_at_login"] = enabled
+            save_config(self._cfg)
+
+    def _settings(self):
+        return self._cfg.setdefault("settings", {})
+
+    def _write_launch_at_login(self, enabled, *, start_hidden=None):
+        if enabled:
+            launch_hidden = (
+                self.startMinimized if start_hidden is None else bool(start_hidden)
+            )
+            autostart.enable_launch_at_login(
+                start_hidden=launch_hidden
+            )
+            return
+        autostart.disable_launch_at_login()
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -169,6 +200,18 @@ class Backend(QObject):
         return self._cfg.get("settings", {}).get("dpi", 1000)
 
     @Property(bool, notify=settingsChanged)
+    def startMinimized(self):
+        return bool(self._cfg.get("settings", {}).get("start_minimized", True))
+
+    @Property(bool, notify=settingsChanged)
+    def startAtLogin(self):
+        return bool(self._cfg.get("settings", {}).get("start_at_login", False))
+
+    @Property(bool, constant=True)
+    def supportsStartAtLogin(self):
+        return self._autostart_supported
+
+    @Property(bool, notify=settingsChanged)
     def invertVScroll(self):
         return self._cfg.get("settings", {}).get("invert_vscroll", False)
 
@@ -196,6 +239,16 @@ class Backend(QObject):
     @Property(bool, constant=True)
     def supportsGestureDirections(self):
         return sys.platform in ("darwin", "win32", "linux")
+
+    @Property(bool, constant=True)
+    def accessibilityGranted(self):
+        """Whether macOS Accessibility permission is granted (always True on other platforms)."""
+        if sys.platform != "darwin":
+            return True
+        try:
+            return bool(is_process_trusted())
+        except Exception:
+            return True
 
     @Property(str, notify=activeProfileChanged)
     def activeProfile(self):
@@ -393,6 +446,51 @@ class Backend(QObject):
         self.profilesChanged.emit()
         self.mappingsChanged.emit()
         self.statusMessage.emit("Saved")
+
+    @Slot(bool)
+    def setStartMinimized(self, value):
+        enabled = bool(value)
+        settings = self._settings()
+        if settings.get("start_minimized", True) == enabled:
+            return
+
+        settings["start_minimized"] = enabled
+        status_message = (
+            "Launch hidden after login enabled" if enabled
+            else "Launch hidden after login disabled"
+        )
+
+        if self._autostart_supported and self.startAtLogin:
+            try:
+                self._write_launch_at_login(True, start_hidden=enabled)
+            except Exception as exc:
+                status_message = f"Updated setting, but login item refresh failed: {exc}"
+
+        save_config(self._cfg)
+        self.settingsChanged.emit()
+        self.statusMessage.emit(status_message)
+
+    @Slot(bool)
+    def setStartAtLogin(self, value):
+        enabled = bool(value)
+        if not self._autostart_supported:
+            self.statusMessage.emit("Start at login is only available on macOS")
+            return
+
+        try:
+            self._write_launch_at_login(enabled)
+        except Exception as exc:
+            self._sync_autostart_state()
+            self.settingsChanged.emit()
+            self.statusMessage.emit(f"Failed to update login item: {exc}")
+            return
+
+        self._settings()["start_at_login"] = enabled
+        save_config(self._cfg)
+        self.settingsChanged.emit()
+        self.statusMessage.emit(
+            "Start at login enabled" if enabled else "Start at login disabled"
+        )
 
     @Slot(int)
     def setDpi(self, value):

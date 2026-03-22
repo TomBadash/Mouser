@@ -5,6 +5,7 @@ Supports per-application auto-switching of profiles.
 """
 
 import threading
+import time
 from core.mouse_hook import MouseHook, MouseEvent
 from core.key_simulator import ACTIONS, execute_action
 from core.config import (
@@ -13,6 +14,8 @@ from core.config import (
 )
 from core.app_detector import AppDetector
 from core.logi_devices import clamp_dpi
+
+HSCROLL_ACTION_COOLDOWN_S = 0.35
 
 
 class Engine:
@@ -26,7 +29,10 @@ class Engine:
         self.hook = MouseHook()
         self.cfg = load_config()
         self._enabled = True
-        self._hscroll_accum = 0
+        self._hscroll_state = {
+            MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
+            MouseEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
+        }
         self._current_profile: str = self.cfg.get("active_profile", "default")
         self._app_detector = AppDetector(self._on_app_change)
         self._profile_change_cb = None       # UI callback
@@ -112,12 +118,44 @@ class Engine:
         def handler(event):
             if not self._enabled:
                 return
+            state = self._hscroll_state.setdefault(
+                event.event_type,
+                {"accum": 0.0, "last_fire_at": 0.0},
+            )
+            step = self._hscroll_step(event.raw_data)
+            threshold = self._hscroll_threshold()
+            now = getattr(event, "timestamp", None) or time.time()
+
+            if now - state["last_fire_at"] < HSCROLL_ACTION_COOLDOWN_S:
+                state["accum"] = 0.0
+                return
+
+            state["accum"] += step
+            if state["accum"] < threshold:
+                return
+
+            state["accum"] = 0.0
+            state["last_fire_at"] = now
             self._emit_debug(
                 f"Mapped {event.event_type} -> {action_id} "
                 f"({self._action_label(action_id)})"
             )
             execute_action(action_id)
         return handler
+
+    def _hscroll_step(self, raw_value):
+        if not isinstance(raw_value, (int, float)):
+            return 1.0
+
+        # Treat large wheel deltas as a single logical step while preserving
+        # sub-step deltas from macOS event tap scrolling.
+        return min(abs(float(raw_value)), 1.0)
+
+    def _hscroll_threshold(self):
+        return max(
+            0.1,
+            float(self.cfg.get("settings", {}).get("hscroll_threshold", 1)),
+        )
 
     # ------------------------------------------------------------------
     # Per-app auto-switching
@@ -249,6 +287,11 @@ class Engine:
     def set_connection_change_callback(self, cb):
         """Register ``cb(connected: bool)`` invoked on device connect/disconnect."""
         self._connection_change_cb = cb
+        if cb:
+            try:
+                cb(bool(self.hook.device_connected))
+            except Exception:
+                pass
 
     @property
     def device_connected(self):

@@ -246,3 +246,17 @@ def _cleanup():
 print("[Mouser] Post-build cleanup...")
 _cleanup()
 print("[Mouser] Cleanup done.")
+
+# ── macOS App Bundle ───────────────────────────────────────────────────
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='Mouser.app',
+        icon='images/AppIcon.icns',
+        bundle_identifier='com.mouser.app',
+        info_plist={
+            'CFBundleShortVersionString': '1.0.0',
+            'LSUIElement': True, # Runs in background (menu bar app)
+            'NSHighResolutionCapable': True,
+        },
+    )

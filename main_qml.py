@@ -16,8 +16,7 @@ from urllib.parse import parse_qs, unquote
 
 # Ensure project root on path — works for both normal Python and PyInstaller
 if getattr(sys, "frozen", False):
-    # PyInstaller 6.x: data files are in _internal/ next to the exe
-    ROOT = os.path.join(os.path.dirname(sys.executable), "_internal")
+    ROOT = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
 else:
     ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -27,7 +26,7 @@ os.environ["QT_QUICK_CONTROLS_STYLE"] = "Material"
 os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 
 _t1 = _time.perf_counter()
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo
 from PySide6.QtQml import QQmlApplicationEngine
@@ -44,6 +43,7 @@ os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 _t3 = _time.perf_counter()
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
+from core.accessibility import is_process_trusted
 from ui.backend import Backend
 _t4 = _time.perf_counter()
 
@@ -57,6 +57,7 @@ def _print_startup_times():
 def _parse_cli_args(argv):
     qt_argv = [argv[0]]
     hid_backend = None
+    start_hidden = False
     i = 1
     while i < len(argv):
         arg = argv[i]
@@ -70,15 +71,31 @@ def _parse_cli_args(argv):
             hid_backend = arg.split("=", 1)[1].strip().lower()
             i += 1
             continue
+        if arg == "--start-hidden":
+            start_hidden = True
+            i += 1
+            continue
         qt_argv.append(arg)
         i += 1
-    return qt_argv, hid_backend
+    return qt_argv, hid_backend, start_hidden
 
 
 def _app_icon() -> QIcon:
-    """Load the app icon from the pre-cropped .ico file."""
-    ico = os.path.join(ROOT, "images", "logo.ico")
-    return QIcon(ico)
+    if sys.platform == "darwin":
+        icon = QIcon()
+        source = QPixmap(os.path.join(ROOT, "images", "logo_icon.png"))
+        if not source.isNull():
+            for size in (16, 32, 64, 128, 256):
+                icon.addPixmap(
+                    source.scaled(
+                        size,
+                        size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+        return icon
+    return QIcon(os.path.join(ROOT, "images", "logo.ico"))
 
 
 def _render_svg_pixmap(path: str, color: QColor, size: int) -> QPixmap:
@@ -109,9 +126,40 @@ def _tray_icon() -> QIcon:
         return _app_icon()
 
     tray_svg = os.path.join(ROOT, "images", "icons", "mouse-simple.svg")
-    icon = QIcon(_render_svg_pixmap(tray_svg, QColor("#000000"), 18))
+    icon = QIcon()
+    # Provide both Normal (black, for light menu bar) and Selected (white,
+    # for dark menu bar) modes so macOS always picks the correct contrast.
+    for size in (18, 36):
+        icon.addPixmap(
+            _render_svg_pixmap(tray_svg, QColor("#000000"), size),
+            QIcon.Mode.Normal)
+        icon.addPixmap(
+            _render_svg_pixmap(tray_svg, QColor("#FFFFFF"), size),
+            QIcon.Mode.Selected)
     icon.setIsMask(True)
     return icon
+
+
+def _configure_macos_app_mode():
+    if sys.platform != "darwin":
+        return
+    try:
+        import AppKit
+        AppKit.NSApp.setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyAccessory
+        )
+    except Exception as exc:
+        print(f"[Mouser] Failed to configure macOS app mode: {exc}")
+
+
+def _activate_macos_window():
+    if sys.platform != "darwin":
+        return
+    try:
+        import AppKit
+        AppKit.NSApp.activateIgnoringOtherApps_(True)
+    except Exception as exc:
+        print(f"[Mouser] Failed to activate macOS window: {exc}")
 
 
 class UiState(QObject):
@@ -231,10 +279,41 @@ class SystemIconProvider(QQuickImageProvider):
         return pixmap
 
 
+def _check_accessibility() -> bool:
+    """On macOS, check if Accessibility permission is granted.
+
+    Returns True if already trusted, False otherwise.
+    """
+    if sys.platform != "darwin":
+        return True
+    try:
+        trusted = is_process_trusted(prompt=True)
+        if not trusted:
+            print("[Mouser] Accessibility permission not granted")
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Accessibility Permission Required")
+            msg.setText(
+                "Mouser needs Accessibility permission to intercept "
+                "mouse button events.\n\n"
+                "macOS should have opened the System Settings prompt.\n"
+                "Please grant permission, then restart Mouser."
+            )
+            msg.setInformativeText(
+                "System Settings -> Privacy & Security -> Accessibility"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+        return bool(trusted)
+    except Exception as exc:
+        print(f"[Mouser] Accessibility check failed: {exc}")
+        return True
+
+
 def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
-    argv, hid_backend = _parse_cli_args(sys.argv)
+    argv, hid_backend, start_hidden = _parse_cli_args(sys.argv)
     if hid_backend:
         try:
             set_hid_backend_preference(hid_backend)
@@ -246,6 +325,8 @@ def main():
     app.setApplicationName("Mouser")
     app.setOrganizationName("Mouser")
     app.setWindowIcon(_app_icon())
+    app.setQuitOnLastWindowClosed(False)
+    _configure_macos_app_mode()
     ui_state = UiState(app)
 
     # macOS: allow Ctrl+C in terminal to quit the app
@@ -280,6 +361,7 @@ def main():
     qml_engine.addImageProvider("systemicons", SystemIconProvider())
     qml_engine.rootContext().setContextProperty("backend", backend)
     qml_engine.rootContext().setContextProperty("uiState", ui_state)
+    qml_engine.rootContext().setContextProperty("launchHidden", start_hidden)
     qml_engine.rootContext().setContextProperty(
         "applicationDirPath", ROOT.replace("\\", "/"))
 
@@ -293,10 +375,19 @@ def main():
 
     root_window = qml_engine.rootObjects()[0]
 
+    def show_main_window():
+        root_window.show()
+        root_window.raise_()
+        root_window.requestActivate()
+        _activate_macos_window()
+
     print(f"[Startup] QApp create:      {(_t6-_t5)*1000:7.1f} ms")
     print(f"[Startup] Engine create:    {(_t7-_t6)*1000:7.1f} ms")
     print(f"[Startup] QML load:         {(_t8-_t7)*1000:7.1f} ms")
     print(f"[Startup] TOTAL to window:  {(_t8-_t0)*1000:7.1f} ms")
+
+    # ── Accessibility check (macOS) ──────────────────────────────
+    _check_accessibility()
 
     # ── Start engine AFTER window is ready (deferred) ──────────
     from PySide6.QtCore import QTimer
@@ -312,11 +403,7 @@ def main():
     tray_menu = QMenu()
 
     open_action = QAction("Open Settings", tray_menu)
-    open_action.triggered.connect(lambda: (
-        root_window.show(),
-        root_window.raise_(),
-        root_window.requestActivate(),
-    ))
+    open_action.triggered.connect(show_main_window)
     tray_menu.addAction(open_action)
 
     toggle_action = QAction("Disable Remapping", tray_menu)
@@ -342,9 +429,7 @@ def main():
         backend.setDebugMode(not backend.debugMode)
         sync_debug_action()
         if backend.debugMode:
-            root_window.show()
-            root_window.raise_()
-            root_window.requestActivate()
+            show_main_window()
 
     debug_action.triggered.connect(toggle_debug_mode)
     tray_menu.addAction(debug_action)
@@ -365,9 +450,7 @@ def main():
 
     tray.setContextMenu(tray_menu)
     tray.activated.connect(lambda reason: (
-        root_window.show(),
-        root_window.raise_(),
-        root_window.requestActivate(),
+        show_main_window()
     ) if reason in (
         QSystemTrayIcon.ActivationReason.Trigger,
         QSystemTrayIcon.ActivationReason.DoubleClick,

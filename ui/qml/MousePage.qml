@@ -275,13 +275,6 @@ Item {
             // Auto-select when engine switches profile
             selectProfile(backend.activeProfile)
         }
-        function onKnownAppsChanged() {
-            syncSelectedKnownApp()
-            refreshSuggestedApps()
-            refreshAppSearch()
-            if (addAppDialog.visible)
-                addAppDialog.ensureSelection()
-        }
     }
 
     // ── Button / hotspot state ────────────────────────────────

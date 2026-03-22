@@ -16,16 +16,18 @@ No telemetry. No cloud. No Logitech account required.
 
 - **macOS support** — full macOS compatibility using CGEventTap for mouse hooking, Quartz CGEvent for key simulation, and NSWorkspace for app detection. See [macOS Setup Guide](readme_mac_osx.md) for details.
 - **Experimental Linux support** — evdev/uinput button remapping, HID++ gesture support, and X11 foreground-app detection
+- **macOS start at login** — manages a per-user LaunchAgent from the UI, with an optional "Launch hidden after login" mode for menu-bar startup
 - **Remap supported programmable controls** — MX Master-family layouts expose middle click, gesture button, back, forward, and horizontal scroll actions
 - **Per-application profiles** — automatically switch button mappings when you switch apps (e.g., different bindings for Chrome vs. VS Code)
-- **22 built-in actions** across navigation, browser, editing, and media categories
+- **Desktop navigation actions** — includes previous/next desktop switching on both platforms, plus Mission Control, App Expose, Launchpad, and Show Desktop on macOS
+- **Platform-aware built-in actions** across navigation, browser, editing, and media categories
 - **DPI / pointer speed control** — slider from 200–8000 DPI with quick presets, synced to the device via HID++
 - **Scroll direction inversion** — independent toggles for vertical and horizontal scroll
 - **Device-aware HID++ gesture support** — discovers `REPROG_CONTROLS_V4`, ranks gesture candidates per device, and diverts the best control it can find
 - **Auto-reconnection** — automatically detects when the mouse is turned off/on or disconnected/reconnected and restores full functionality without restarting the app
 - **Live connection status** — the UI shows a real-time "Connected" / "Not Connected" badge that updates as the mouse connects or disconnects
 - **Device-aware Qt Quick UI** — interactive MX Master layout today, plus a generic fallback card and experimental manual map picker for other detected devices
-- **System tray** — runs in background, hides to tray on close, toggle remapping on/off from tray menu
+- **System tray / menu bar** — runs in background, hides on close, and exposes quick open / toggle / quit actions
 - **Auto-detect foreground app** — polls the active window and switches profiles instantly
 - **Zero external services** — config is a local JSON file, all processing happens on your machine
 
@@ -61,9 +63,11 @@ _The UI is now device-aware. MX Master-family mice get the interactive diagram; 
 
 ## Available Actions
 
+Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task View`, while macOS exposes `Mission Control`, `Show Desktop`, `App Expose`, and `Launchpad`.
+
 | Category | Actions |
 |---|---|
-| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop (Win+D), Task View (Win+Tab) |
+| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS) |
 | **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T) |
 | **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
 | **Media** | Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track |
@@ -90,6 +94,8 @@ _The UI is now device-aware. MX Master-family mice get the interactive diagram; 
 4. **Run** `Mouser.exe`
 
 That's it. The app will open and start remapping your mouse buttons immediately.
+
+For macOS setup, native bundle packaging, and Accessibility / login-item notes, see the [macOS Setup Guide](readme_mac_osx.md).
 
 ### What to expect
 
@@ -143,8 +149,9 @@ pip install -r requirements.txt
 |---|---|
 | `PySide6` | Qt Quick / QML UI framework |
 | `hidapi` | HID++ communication with the mouse (gesture button, DPI) |
-| `pystray` | System tray icon (legacy, may be removed) |
 | `Pillow` | Image processing for icon generation |
+| `pyobjc-framework-Quartz` | macOS CGEventTap / Quartz event support |
+| `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
 
 ### Running
 
@@ -152,14 +159,18 @@ pip install -r requirements.txt
 # Option A: Run directly
 python main_qml.py
 
-# Option B: Use the batch file (shows a console window)
+# Option B: Start directly in the tray / menu bar
+python main_qml.py --start-hidden
+
+# Option C: Use the batch file (shows a console window)
 Mouser.bat
 
-# Option C: Use the desktop shortcut (no console window)
+# Option D: Use the desktop shortcut (no console window)
 # Double-click Mouser.lnk
 ```
 
 > **Tip:** To run without a console window, use `pythonw.exe main_qml.py` or the `.lnk` shortcut.
+> On macOS, `--start-hidden` is the same switch used by the Start at login LaunchAgent.
 
 Temporary macOS transport override for debugging:
 
@@ -186,9 +197,9 @@ $s.IconLocation = "C:\path\to\mouser\images\logo.ico, 0"
 $s.Save()
 ```
 
-### Building the Portable App
+### Building Distribution Artifacts
 
-To produce a standalone `Mouser.exe` that anyone can download and run without Python:
+Windows portable build:
 
 ```bash
 # 1. Install PyInstaller (inside your venv)
@@ -202,6 +213,18 @@ build.bat
 ```
 
 The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
+
+macOS native bundle:
+
+```bash
+# 1. Install PyInstaller (inside your venv)
+pip install pyinstaller
+
+# 2. Build the native menu-bar app bundle
+./build_macos_app.sh
+```
+
+The output is `dist/Mouser.app`. The script prefers `images/AppIcon.icns` when present, otherwise it generates an `.icns` icon from `images/logo_icon.png`, then ad-hoc signs the bundle with `codesign --sign -`.
 
 ---
 
@@ -280,7 +303,7 @@ Mouser handles mouse power-off/on cycles automatically:
 All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Library/Application Support/Mouser/config.json` (macOS). The config supports:
 - Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
 - Per-profile app associations (list of `.exe` names)
-- Global settings: DPI, scroll inversion, gesture tuning, appearance, and debug flags
+- Global settings: DPI, scroll inversion, gesture tuning, appearance, debug flags, and macOS startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
 - Automatic migration from older config versions
 
@@ -292,17 +315,22 @@ All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Librar
 mouser/
 ├── main_qml.py              # Application entry point (PySide6 + QML)
 ├── Mouser.bat               # Quick-launch batch file
+├── Mouser-mac.spec          # Native macOS app-bundle spec
+├── build_macos_app.sh       # macOS bundle build + icon/signing flow
 ├── README.md
+├── readme_mac_osx.md
 ├── requirements.txt
 ├── .gitignore
 │
 ├── core/                    # Backend logic
+│   ├── accessibility.py     # macOS Accessibility trust checks
 │   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
 │   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
 │   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth)
 │   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
 │   ├── device_layouts.py    # Device-family layout registry for QML overlays
-│   ├── key_simulator.py     # SendInput-based action simulator (22 actions)
+│   ├── key_simulator.py     # Platform-specific action simulator
+│   ├── autostart.py         # macOS LaunchAgent helpers
 │   ├── config.py            # Config manager (JSON load/save/migrate)
 │   └── app_detector.py      # Foreground app polling
 │
@@ -317,6 +345,7 @@ mouser/
 │       └── Theme.js         # Shared colors and constants
 │
 └── images/
+    ├── AppIcon.icns        # Committed macOS app-bundle icon
     ├── mouse.png            # MX Master 3S top-down diagram
     ├── icons/mouse-simple.svg # Generic fallback device card artwork
     ├── logo.png             # Mouser logo (source)
@@ -342,6 +371,7 @@ The app has two pages accessible from a slim sidebar:
 
 - **DPI slider:** 200–8000 with quick presets (400, 800, 1000, 1600, 2400, 4000, 6000, 8000). Reads the current DPI from the device on startup.
 - **Scroll inversion:** Independent toggles for vertical and horizontal scroll direction.
+- **Startup controls:** On macOS, this page also exposes **Start at login** and **Launch hidden after login**.
 
 ---
 
@@ -362,9 +392,9 @@ The app has two pages accessible from a slim sidebar:
 - [ ] **True per-device config** — separate mappings and layout state cleanly when multiple Logitech mice are used on the same machine
 - [ ] **Dynamic button inventory** — build button lists from discovered `REPROG_CONTROLS_V4` controls instead of relying on the current fixed mapping set
 - [ ] **Custom key combos** — let users define arbitrary key sequences (e.g., Ctrl+Shift+P)
-- [ ] **Start with Windows** — autostart via registry or Task Scheduler
+- [ ] **Windows login item support** — add a native Windows equivalent to the macOS LaunchAgent flow
 - [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches
-- [ ] **Gesture button actions** — swipe gestures (up/down/left/right) for multi-action gesture button
+- [ ] **Gesture swipe tuning** — improve swipe reliability and defaults across more Logitech devices
 - [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
 - [ ] **Export/import config** — share configurations between machines
 - [ ] **Tray icon badge** — show active profile name in tray tooltip

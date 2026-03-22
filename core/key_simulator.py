@@ -242,6 +242,16 @@ if sys.platform == "win32":
             "keys": [VK_LWIN, VK_TAB],
             "category": "Navigation",
         },
+        "space_left": {
+            "label": "Previous Desktop",
+            "keys": [VK_CONTROL, VK_LWIN, VK_LEFT],
+            "category": "Navigation",
+        },
+        "space_right": {
+            "label": "Next Desktop",
+            "keys": [VK_CONTROL, VK_LWIN, VK_RIGHT],
+            "category": "Navigation",
+        },
         "volume_up": {
             "label": "Volume Up",
             "keys": [VK_VOLUME_UP],
@@ -608,12 +618,12 @@ elif sys.platform == "darwin":
             "category": "Navigation",
         },
         "space_left": {
-            "label": "Previous Space",
+            "label": "Previous Desktop",
             "keys": _MAC_ACTION_FALLBACKS["space_left"],
             "category": "Navigation",
         },
         "space_right": {
-            "label": "Next Space",
+            "label": "Next Desktop",
             "keys": _MAC_ACTION_FALLBACKS["space_right"],
             "category": "Navigation",
         },
