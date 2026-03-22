@@ -1248,20 +1248,40 @@ Item {
                                     }
 
                                     Text {
-                                        text: backend.gestureThreshold + " px"
+                                        text: (
+                                            gestureThresholdSlider.pressed
+                                            ? Math.round(gestureThresholdSlider.value / 5.0) * 5
+                                            : backend.gestureThreshold
+                                        ) + " px"
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textSecondary
                                     }
                                 }
 
                                 Slider {
+                                    id: gestureThresholdSlider
                                     width: parent.width
                                     from: 20
                                     to: 400
                                     stepSize: 5
                                     value: backend.gestureThreshold
                                     Material.accent: theme.accent
-                                    onMoved: backend.setGestureThreshold(value)
+                                    onMoved: gestureThresholdSave.restart()
+                                    onPressedChanged: {
+                                        if (!pressed) {
+                                            gestureThresholdSave.stop()
+                                            backend.setGestureThreshold(
+                                                Math.round(value / 5.0) * 5)
+                                        }
+                                    }
+                                }
+
+                                Timer {
+                                    id: gestureThresholdSave
+                                    interval: 250
+                                    repeat: false
+                                    onTriggered: backend.setGestureThreshold(
+                                        Math.round(gestureThresholdSlider.value / 5.0) * 5)
                                 }
 
                                 Text {
