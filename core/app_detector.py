@@ -184,19 +184,49 @@ elif sys.platform == "darwin":
 elif sys.platform == "linux":
     import subprocess as _subprocess
 
-    def get_foreground_exe() -> str | None:
-        """Return the foreground app executable path on Linux (X11)."""
+    _WAYLAND = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    _KDE = "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+
+    def _pid_to_exe(pid: int) -> str | None:
+        try:
+            return os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            return None
+
+    def _get_foreground_xdotool() -> str | None:
+        """X11: use xdotool."""
         try:
             result = _subprocess.run(
                 ["xdotool", "getactivewindow", "getwindowpid"],
                 capture_output=True, text=True, timeout=1,
             )
             if result.returncode == 0 and result.stdout.strip():
-                pid = int(result.stdout.strip())
-                return os.readlink(f"/proc/{pid}/exe")
+                return _pid_to_exe(int(result.stdout.strip()))
         except (FileNotFoundError, ValueError, OSError, _subprocess.TimeoutExpired):
             pass
         return None
+
+    def _get_foreground_kdotool() -> str | None:
+        """KDE Wayland: use kdotool."""
+        try:
+            result = _subprocess.run(
+                ["kdotool", "getactivewindow", "getwindowpid"],
+                capture_output=True, text=True, timeout=1,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return _pid_to_exe(int(result.stdout.strip()))
+        except (FileNotFoundError, ValueError, OSError, _subprocess.TimeoutExpired):
+            pass
+        return None
+
+    def get_foreground_exe() -> str | None:
+        """Return the foreground app executable path on Linux."""
+        if _WAYLAND:
+            if _KDE:
+                return _get_foreground_kdotool()
+            # GNOME / other Wayland compositors: not yet supported
+            return None
+        return _get_foreground_xdotool()
 
 else:
     def get_foreground_exe() -> str | None:
