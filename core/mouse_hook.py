@@ -1531,6 +1531,652 @@ elif sys.platform == "darwin":
 
 
 # ==================================================================
+# Linux implementation
+# ==================================================================
+
+elif sys.platform == "linux":
+    try:
+        import select as _select_mod
+        import evdev as _evdev_mod
+        from evdev import ecodes as _ecodes, UInput as _UInput, InputDevice as _InputDevice
+        _EVDEV_OK = True
+    except ImportError:
+        _EVDEV_OK = False
+        print("[MouseHook] python-evdev not installed — pip install evdev")
+
+    _LOGI_VENDOR = 0x046D
+
+    class MouseHook:
+        """
+        Uses evdev on Linux to intercept mouse button presses and scroll
+        events.  Grabs the mouse device for exclusive access and forwards
+        non-blocked events via a uinput virtual mouse.
+        Requires read access to /dev/input/event* and write access to
+        /dev/uinput (add user to 'input' group).
+        """
+
+        def __init__(self):
+            self._running = False
+            self._callbacks = {}
+            self._blocked_events = set()
+            self._debug_callback = None
+            self._gesture_callback = None
+            self.debug_mode = False
+            self.invert_vscroll = False
+            self.invert_hscroll = False
+            self._gesture_active = False
+            self._hid_gesture = None
+            self._device_connected = False
+            self._connection_change_cb = None
+            self._connected_device = None
+            self._gesture_direction_enabled = False
+            self._gesture_threshold = 50.0
+            self._gesture_deadzone = 40.0
+            self._gesture_timeout_ms = 3000
+            self._gesture_cooldown_ms = 500
+            self._gesture_tracking = False
+            self._gesture_triggered = False
+            self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
+            self._gesture_delta_x = 0.0
+            self._gesture_delta_y = 0.0
+            self._gesture_cooldown_until = 0.0
+            self._gesture_input_source = None
+            self._gesture_lock = threading.Lock()
+            # Linux-specific
+            self._evdev_device = None
+            self._uinput = None
+            self._evdev_thread = None
+
+        # -- standard interface methods ---------------------------------
+
+        def register(self, event_type, callback):
+            self._callbacks.setdefault(event_type, []).append(callback)
+
+        def block(self, event_type):
+            self._blocked_events.add(event_type)
+
+        def unblock(self, event_type):
+            self._blocked_events.discard(event_type)
+
+        def reset_bindings(self):
+            self._callbacks.clear()
+            self._blocked_events.clear()
+
+        def configure_gestures(self, enabled=False, threshold=50,
+                               deadzone=40, timeout_ms=3000, cooldown_ms=500):
+            self._gesture_direction_enabled = bool(enabled)
+            self._gesture_threshold = float(max(5, threshold))
+            self._gesture_deadzone = float(max(0, deadzone))
+            self._gesture_timeout_ms = max(250, int(timeout_ms))
+            self._gesture_cooldown_ms = max(0, int(cooldown_ms))
+            if not self._gesture_direction_enabled:
+                self._gesture_tracking = False
+                self._gesture_triggered = False
+                self._gesture_input_source = None
+
+        def set_connection_change_callback(self, cb):
+            self._connection_change_cb = cb
+
+        @property
+        def device_connected(self):
+            return self._device_connected
+
+        @property
+        def connected_device(self):
+            return self._connected_device
+
+        def _set_device_connected(self, connected):
+            if connected == self._device_connected:
+                return
+            self._device_connected = connected
+            state = "Connected" if connected else "Disconnected"
+            print(f"[MouseHook] Device {state}")
+            if self._connection_change_cb:
+                try:
+                    self._connection_change_cb(connected)
+                except Exception:
+                    pass
+
+        def set_debug_callback(self, callback):
+            self._debug_callback = callback
+
+        def set_gesture_callback(self, callback):
+            self._gesture_callback = callback
+
+        def _emit_debug(self, message):
+            if self.debug_mode and self._debug_callback:
+                try:
+                    self._debug_callback(message)
+                except Exception:
+                    pass
+
+        def _emit_gesture_event(self, event):
+            if self.debug_mode and self._gesture_callback:
+                try:
+                    self._gesture_callback(event)
+                except Exception:
+                    pass
+
+        def _dispatch(self, event):
+            callbacks = self._callbacks.get(event.event_type, [])
+            self._emit_debug(
+                f"Dispatch {event.event_type}"
+                f"{_format_debug_details(event.raw_data)} callbacks={len(callbacks)}"
+            )
+            if event.event_type.startswith("gesture_"):
+                self._emit_gesture_event({
+                    "type": "dispatch",
+                    "event_name": event.event_type,
+                    "callbacks": len(callbacks),
+                })
+            if not callbacks:
+                self._emit_debug(f"No mapped action for {event.event_type}")
+                if event.event_type.startswith("gesture_"):
+                    self._emit_gesture_event({
+                        "type": "unmapped",
+                        "event_name": event.event_type,
+                    })
+            for cb in callbacks:
+                try:
+                    cb(event)
+                except Exception as e:
+                    print(f"[MouseHook] callback error: {e}")
+
+        def _hid_gesture_available(self):
+            return self._hid_gesture is not None and self._device_connected
+
+        # -- gesture detection (shared logic) ---------------------------
+
+        def _gesture_cooldown_active(self):
+            return time.monotonic() < self._gesture_cooldown_until
+
+        def _start_gesture_tracking(self):
+            self._gesture_tracking = self._gesture_direction_enabled
+            self._gesture_started_at = time.monotonic()
+            self._gesture_last_move_at = self._gesture_started_at
+            self._gesture_delta_x = 0.0
+            self._gesture_delta_y = 0.0
+            self._gesture_input_source = None
+
+        def _finish_gesture_tracking(self):
+            self._gesture_tracking = False
+            self._gesture_started_at = 0.0
+            self._gesture_last_move_at = 0.0
+            self._gesture_delta_x = 0.0
+            self._gesture_delta_y = 0.0
+            self._gesture_input_source = None
+
+        def _detect_gesture_event(self):
+            delta_x = self._gesture_delta_x
+            delta_y = self._gesture_delta_y
+
+            abs_x = abs(delta_x)
+            abs_y = abs(delta_y)
+            dominant = max(abs_x, abs_y)
+            if dominant < self._gesture_threshold:
+                return None
+
+            cross_limit = max(self._gesture_deadzone, dominant * 0.35)
+
+            if abs_x > abs_y:
+                if abs_y > cross_limit:
+                    return None
+                if delta_x > 0:
+                    return MouseEvent.GESTURE_SWIPE_RIGHT
+                return MouseEvent.GESTURE_SWIPE_LEFT
+
+            if abs_x > cross_limit:
+                return None
+            if delta_y > 0:
+                return MouseEvent.GESTURE_SWIPE_DOWN
+            return MouseEvent.GESTURE_SWIPE_UP
+
+        def _accumulate_gesture_delta(self, delta_x, delta_y, source):
+            dispatch_event = None
+            with self._gesture_lock:
+                if not (self._gesture_direction_enabled and self._gesture_active):
+                    return
+                if self._gesture_cooldown_active():
+                    self._emit_debug(
+                        f"Gesture cooldown active source={source} "
+                        f"dx={delta_x} dy={delta_y}"
+                    )
+                    self._emit_gesture_event({
+                        "type": "cooldown_active",
+                        "source": source,
+                        "dx": delta_x,
+                        "dy": delta_y,
+                    })
+                    return
+                if not self._gesture_tracking:
+                    self._emit_debug(f"Gesture tracking started source={source}")
+                    self._emit_gesture_event({
+                        "type": "tracking_started",
+                        "source": source,
+                    })
+                    self._start_gesture_tracking()
+
+                now = time.monotonic()
+                idle_ms = (now - self._gesture_last_move_at) * 1000.0
+                if idle_ms > self._gesture_timeout_ms:
+                    self._emit_debug(
+                        f"Gesture segment reset timeout source={source} "
+                        f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
+                    )
+                    self._start_gesture_tracking()
+
+                # Prefer device-provided RawXY over evdev deltas.
+                if source == "hid_rawxy" and self._gesture_input_source == "evdev":
+                    self._emit_debug(
+                        "Gesture source promoted from evdev to hid_rawxy "
+                        f"prev_accum_x={self._gesture_delta_x} "
+                        f"prev_accum_y={self._gesture_delta_y}"
+                    )
+                    self._start_gesture_tracking()
+
+                if self._gesture_input_source not in (None, source):
+                    self._emit_debug(
+                        f"Gesture source locked to {self._gesture_input_source}; "
+                        f"ignoring {source} dx={delta_x} dy={delta_y}"
+                    )
+                    return
+                self._gesture_input_source = source
+
+                self._gesture_delta_x += delta_x
+                self._gesture_delta_y += delta_y
+                self._gesture_last_move_at = now
+                self._emit_debug(
+                    f"Gesture segment source={source} "
+                    f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
+                )
+                self._emit_gesture_event({
+                    "type": "segment",
+                    "source": source,
+                    "dx": self._gesture_delta_x,
+                    "dy": self._gesture_delta_y,
+                })
+
+                gesture_event = self._detect_gesture_event()
+                if not gesture_event:
+                    return
+
+                self._gesture_triggered = True
+                self._emit_debug(
+                    "Gesture detected "
+                    f"{gesture_event} source={source} "
+                    f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
+                )
+                self._emit_gesture_event({
+                    "type": "detected",
+                    "event_name": gesture_event,
+                    "source": source,
+                    "dx": self._gesture_delta_x,
+                    "dy": self._gesture_delta_y,
+                })
+                dispatch_event = MouseEvent(
+                    gesture_event,
+                    {
+                        "delta_x": self._gesture_delta_x,
+                        "delta_y": self._gesture_delta_y,
+                        "source": source,
+                    },
+                )
+                self._gesture_cooldown_until = (
+                    time.monotonic() + self._gesture_cooldown_ms / 1000.0
+                )
+                self._emit_debug(
+                    f"Gesture cooldown started source={source} "
+                    f"for_ms={self._gesture_cooldown_ms}"
+                )
+                self._emit_gesture_event({
+                    "type": "cooldown_started",
+                    "source": source,
+                    "for_ms": self._gesture_cooldown_ms,
+                })
+                self._finish_gesture_tracking()
+
+            # Dispatch outside lock to avoid deadlock with callbacks
+            if dispatch_event:
+                self._dispatch(dispatch_event)
+
+        # -- HID gesture callbacks --------------------------------------
+
+        def _on_hid_gesture_down(self):
+            with self._gesture_lock:
+                if not self._gesture_active:
+                    self._gesture_active = True
+                    self._gesture_triggered = False
+                    self._emit_debug("HID gesture button down")
+                    self._emit_gesture_event({"type": "button_down"})
+                    if self._gesture_direction_enabled and not self._gesture_cooldown_active():
+                        self._start_gesture_tracking()
+                    else:
+                        self._gesture_tracking = False
+                        self._gesture_triggered = False
+
+        def _on_hid_gesture_up(self):
+            dispatch_click = False
+            with self._gesture_lock:
+                if self._gesture_active:
+                    should_click = not self._gesture_triggered
+                    self._gesture_active = False
+                    self._finish_gesture_tracking()
+                    self._gesture_triggered = False
+                    self._emit_debug(
+                        f"HID gesture button up click_candidate={str(should_click).lower()}"
+                    )
+                    self._emit_gesture_event({
+                        "type": "button_up",
+                        "click_candidate": should_click,
+                    })
+                    dispatch_click = should_click
+            if dispatch_click:
+                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
+        def _on_hid_gesture_move(self, delta_x, delta_y):
+            self._emit_debug(
+                f"HID rawxy move dx={delta_x} dy={delta_y}"
+            )
+            self._emit_gesture_event({
+                "type": "move",
+                "source": "hid_rawxy",
+                "dx": delta_x,
+                "dy": delta_y,
+            })
+            self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
+
+        def _on_hid_connect(self):
+            self._connected_device = (
+                self._hid_gesture.connected_device if self._hid_gesture else None
+            )
+            self._set_device_connected(True)
+
+        def _on_hid_disconnect(self):
+            self._connected_device = None
+            self._set_device_connected(False)
+
+        # -- Linux evdev specifics --------------------------------------
+
+        def _find_mouse_device(self):
+            """Find the best mouse evdev device (prefer Logitech)."""
+            logi_mice = []
+            other_mice = []
+            for path in _evdev_mod.list_devices():
+                try:
+                    dev = _InputDevice(path)
+                except Exception:
+                    continue
+                try:
+                    caps = dev.capabilities(absinfo=False)
+                    if _ecodes.EV_REL not in caps or _ecodes.EV_KEY not in caps:
+                        dev.close()
+                        continue
+                    rel_caps = set(caps.get(_ecodes.EV_REL, []))
+                    key_caps = set(caps.get(_ecodes.EV_KEY, []))
+                    if _ecodes.REL_X not in rel_caps or _ecodes.REL_Y not in rel_caps:
+                        dev.close()
+                        continue
+                    if not key_caps.intersection({
+                        _ecodes.BTN_LEFT, _ecodes.BTN_RIGHT, _ecodes.BTN_MIDDLE,
+                    }):
+                        dev.close()
+                        continue
+                    has_side = bool(key_caps.intersection({
+                        _ecodes.BTN_SIDE, _ecodes.BTN_EXTRA,
+                    }))
+                except Exception:
+                    dev.close()
+                    continue
+                if dev.info.vendor == _LOGI_VENDOR:
+                    logi_mice.append((dev, has_side))
+                else:
+                    other_mice.append((dev, has_side))
+
+            ordered = sorted(
+                logi_mice, key=lambda x: -x[1]
+            ) + sorted(
+                other_mice, key=lambda x: -x[1]
+            )
+            if ordered:
+                chosen = ordered[0][0]
+                for dev, _ in ordered[1:]:
+                    dev.close()
+                print(f"[MouseHook] Found mouse: {chosen.name} ({chosen.path}) "
+                      f"vendor=0x{chosen.info.vendor:04X}")
+                return chosen
+            return None
+
+        def _setup_evdev(self):
+            """Find mouse, create uinput mirror, grab device."""
+            dev = self._find_mouse_device()
+            if not dev:
+                return False
+            try:
+                self._uinput = _UInput.from_device(
+                    dev, name="Mouser Virtual Mouse",
+                )
+                dev.grab()
+                self._evdev_device = dev
+                print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
+                return True
+            except PermissionError:
+                print("[MouseHook] Permission denied — add user to 'input' group "
+                      "and ensure /dev/uinput is writable")
+                dev.close()
+            except Exception as e:
+                print(f"[MouseHook] Failed to setup evdev: {e}")
+                dev.close()
+            return False
+
+        def _cleanup_evdev(self):
+            """Release grab and close devices."""
+            if self._evdev_device:
+                try:
+                    self._evdev_device.ungrab()
+                except Exception:
+                    pass
+                try:
+                    self._evdev_device.close()
+                except Exception:
+                    pass
+                self._evdev_device = None
+                print("[MouseHook] evdev device released")
+            if self._uinput:
+                try:
+                    self._uinput.close()
+                except Exception:
+                    pass
+                self._uinput = None
+
+        def _evdev_loop(self):
+            """Outer loop: find device -> listen -> reconnect on error."""
+            while self._running:
+                if not self._setup_evdev():
+                    if self._running:
+                        time.sleep(2)
+                    continue
+                try:
+                    self._listen_loop()
+                except OSError as e:
+                    if self._running:
+                        print(f"[MouseHook] Device disconnected: {e}")
+                except Exception as e:
+                    if self._running:
+                        print(f"[MouseHook] evdev error: {e}")
+                finally:
+                    self._cleanup_evdev()
+                if self._running:
+                    time.sleep(1)
+
+        def _listen_loop(self):
+            """Read events from the grabbed device, forward or block."""
+            fd = self._evdev_device.fd
+            while self._running:
+                readable, _, _ = _select_mod.select([fd], [], [], 0.5)
+                if not readable:
+                    continue
+                for event in self._evdev_device.read():
+                    if not self._running:
+                        return
+                    if event.type == _ecodes.EV_SYN:
+                        self._uinput.write_event(event)
+                    elif event.type == _ecodes.EV_KEY:
+                        self._handle_button(event)
+                    elif event.type == _ecodes.EV_REL:
+                        self._handle_rel(event)
+                    else:
+                        self._uinput.write_event(event)
+
+        def _handle_button(self, event):
+            """Process a key/button event, dispatch and optionally block."""
+            mouse_event = None
+            should_block = False
+
+            if event.code == _ecodes.BTN_SIDE:
+                if event.value == 1:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON1_DOWN)
+                    should_block = MouseEvent.XBUTTON1_DOWN in self._blocked_events
+                elif event.value == 0:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON1_UP)
+                    should_block = MouseEvent.XBUTTON1_UP in self._blocked_events
+
+            elif event.code == _ecodes.BTN_EXTRA:
+                if event.value == 1:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
+                    should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                elif event.value == 0:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
+                    should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+
+            elif event.code == _ecodes.BTN_MIDDLE:
+                if event.value == 1:
+                    mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
+                    should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
+                elif event.value == 0:
+                    mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
+                    should_block = MouseEvent.MIDDLE_UP in self._blocked_events
+
+            if mouse_event:
+                self._dispatch(mouse_event)
+
+            if not should_block:
+                self._uinput.write_event(event)
+
+        def _handle_rel(self, event):
+            """Process a relative axis event (movement, scroll)."""
+            code = event.code
+            value = event.value
+
+            # Mouse movement
+            if code == _ecodes.REL_X or code == _ecodes.REL_Y:
+                if self._gesture_direction_enabled and self._gesture_active:
+                    if self._gesture_input_source != "hid_rawxy":
+                        if code == _ecodes.REL_X:
+                            self._accumulate_gesture_delta(value, 0, "evdev")
+                        else:
+                            self._accumulate_gesture_delta(0, value, "evdev")
+                    return  # suppress cursor during gesture
+                self._uinput.write_event(event)
+                return
+
+            # Vertical scroll (low-res and hi-res)
+            _REL_WHEEL_HI_RES = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
+            if code == _ecodes.REL_WHEEL or code == _REL_WHEEL_HI_RES:
+                if self.invert_vscroll:
+                    self._uinput.write(_ecodes.EV_REL, code, -value)
+                else:
+                    self._uinput.write_event(event)
+                return
+
+            # Horizontal scroll (low-res and hi-res)
+            _REL_HWHEEL_HI_RES = getattr(_ecodes, "REL_HWHEEL_HI_RES", 0x0C)
+            if code == _ecodes.REL_HWHEEL or code == _REL_HWHEEL_HI_RES:
+                should_block = False
+                if value > 0:
+                    should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+                elif value < 0:
+                    should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+
+                # Dispatch action only from low-res to avoid double-trigger
+                if code == _ecodes.REL_HWHEEL:
+                    if value > 0:
+                        self._dispatch(
+                            MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(value)))
+                    elif value < 0:
+                        self._dispatch(
+                            MouseEvent(MouseEvent.HSCROLL_LEFT, abs(value)))
+
+                if should_block:
+                    return
+                if self.invert_hscroll:
+                    self._uinput.write(_ecodes.EV_REL, code, -value)
+                else:
+                    self._uinput.write_event(event)
+                return
+
+            # Other relative events: forward as-is
+            self._uinput.write_event(event)
+
+        # -- lifecycle --------------------------------------------------
+
+        def _install_crash_guard(self):
+            """Register signal handlers to release the evdev grab on abnormal exit."""
+            import signal
+            import atexit
+            atexit.register(self._cleanup_evdev)
+            for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+                prev = signal.getsignal(sig)
+                def _handler(signum, frame, _prev=prev):
+                    self._cleanup_evdev()
+                    if callable(_prev) and _prev not in (signal.SIG_DFL, signal.SIG_IGN):
+                        _prev(signum, frame)
+                    else:
+                        raise SystemExit(128 + signum)
+                signal.signal(sig, _handler)
+
+        def start(self):
+            self._running = True
+
+            # Start HID gesture listener (works even without evdev)
+            if HidGestureListener is not None:
+                listener = HidGestureListener(
+                    on_down=self._on_hid_gesture_down,
+                    on_up=self._on_hid_gesture_up,
+                    on_move=self._on_hid_gesture_move,
+                    on_connect=self._on_hid_connect,
+                    on_disconnect=self._on_hid_disconnect,
+                )
+                self._hid_gesture = listener
+                if not listener.start():
+                    self._hid_gesture = None
+
+            # Start evdev hook if available
+            if _EVDEV_OK:
+                self._install_crash_guard()
+                self._evdev_thread = threading.Thread(
+                    target=self._evdev_loop, daemon=True,
+                    name="MouseHook-evdev")
+                self._evdev_thread.start()
+            else:
+                print("[MouseHook] evdev not available — "
+                      "button remapping disabled")
+
+            return True
+
+        def stop(self):
+            self._running = False
+            if self._hid_gesture:
+                self._hid_gesture.stop()
+                self._hid_gesture = None
+            self._connected_device = None
+            if self._evdev_thread:
+                self._evdev_thread.join(timeout=2)
+                self._evdev_thread = None
+            self._cleanup_evdev()
+
+
+# ==================================================================
 # Unsupported platform stub
 # ==================================================================
 

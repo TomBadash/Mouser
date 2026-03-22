@@ -15,6 +15,7 @@ No telemetry. No cloud. No Logitech account required.
 ## Features
 
 - **macOS support** — full macOS compatibility using CGEventTap for mouse hooking, Quartz CGEvent for key simulation, and NSWorkspace for app detection. See [macOS Setup Guide](readme_mac_osx.md) for details.
+- **Experimental Linux support** — evdev/uinput button remapping, HID++ gesture support, and X11 foreground-app detection
 - **macOS start at login** — manages a per-user LaunchAgent from the UI, with an optional "Launch hidden after login" mode for menu-bar startup
 - **Remap supported programmable controls** — MX Master-family layouts expose middle click, gesture button, back, forward, and horizontal scroll actions
 - **Per-application profiles** — automatically switch button mappings when you switch apps (e.g., different bindings for Chrome vs. VS Code)
@@ -116,11 +117,13 @@ For macOS setup, native bundle packaging, and Accessibility / login-item notes, 
 
 ### Prerequisites
 
-- **Windows 10/11** or **macOS 12+ (Monterey)**
+- **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux (X11, experimental)**
 - **Python 3.10+** (tested with 3.14)
 - **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. MX Master-family devices currently have the most complete UI support.
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
+- **Linux only:** `xdotool` must be installed for per-app profile switching on X11
+- **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
 
 ### Steps
 
@@ -254,6 +257,7 @@ Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstracti
 
 - **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
 - **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
+- **Linux** — `evdev` to grab the physical mouse and `uinput` to forward pass-through events via a virtual device
 
 Both paths feed the same internal event model and intercept:
 
@@ -373,13 +377,14 @@ The app has two pages accessible from a slim sidebar:
 
 ## Known Limitations
 
-- **Windows & macOS only** — Linux is not yet supported
 - **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
 - **Bluetooth recommended** — HID++ gesture button divert works best over Bluetooth; USB receiver has partial support
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
 - **Admin not required** — but some games or elevated windows may not receive injected keystrokes
+- **Linux app detection is X11-only today** — per-app profile switching relies on `xdotool`, so Wayland sessions currently fall back to the default profile
+- **Linux remapping needs device permissions** — Mouser must be able to read `/dev/input/event*` and write `/dev/uinput`
 
 ## Future Work
 
@@ -394,7 +399,7 @@ The app has two pages accessible from a slim sidebar:
 - [ ] **Export/import config** — share configurations between machines
 - [ ] **Tray icon badge** — show active profile name in tray tooltip
 - [x] **macOS support** — added via CGEventTap, Quartz CGEvent, and NSWorkspace
-- [ ] **Linux support** — investigate `libevdev` / `evdev` hooks
+- [ ] **Wayland support and broader Linux validation** — replace the current `xdotool` dependency and validate across more distros/desktops
 - [ ] **Plugin system** — allow third-party action providers
 
 ## Contributing

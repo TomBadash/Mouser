@@ -4,6 +4,7 @@ Supports Windows (SendInput API) and macOS (Quartz CGEvent / NSEvent).
 """
 
 import sys
+import threading
 import time
 
 # ==================================================================
@@ -689,6 +690,252 @@ elif sys.platform == "darwin":
             _send_media_key(action["mac_fn"])
         elif action["keys"]:
             send_key_combo(action["keys"])
+
+
+# ==================================================================
+# Unsupported platform stub
+# ==================================================================
+
+elif sys.platform == "linux":
+    # Linux input key codes (stable, from linux/input-event-codes.h)
+    KEY_LEFTALT = 56
+    KEY_LEFTSHIFT = 42
+    KEY_LEFTCTRL = 29
+    KEY_LEFTMETA = 125
+    KEY_TAB = 15
+    KEY_SPACE = 57
+    KEY_ENTER = 28
+    KEY_BACKSPACE = 14
+    KEY_DELETE = 111
+    KEY_ESC = 1
+    KEY_LEFT = 105
+    KEY_UP = 103
+    KEY_RIGHT = 106
+    KEY_DOWN = 108
+    KEY_A = 30
+    KEY_C = 46
+    KEY_D = 32
+    KEY_F = 33
+    KEY_N = 49
+    KEY_S = 31
+    KEY_T = 20
+    KEY_V = 47
+    KEY_W = 17
+    KEY_X = 45
+    KEY_Z = 44
+    KEY_BACK = 158
+    KEY_FORWARD = 159
+    KEY_VOLUMEUP = 115
+    KEY_VOLUMEDOWN = 114
+    KEY_MUTE = 113
+    KEY_PLAYPAUSE = 164
+    KEY_NEXTSONG = 163
+    KEY_PREVIOUSSONG = 165
+    KEY_F1 = 59
+    KEY_F2 = 60
+    KEY_F3 = 61
+    KEY_F4 = 62
+    KEY_F5 = 63
+    KEY_F6 = 64
+    KEY_F7 = 65
+    KEY_F8 = 66
+    KEY_F9 = 67
+    KEY_F10 = 68
+    KEY_F11 = 87
+    KEY_F12 = 88
+
+    _ALL_KEY_CODES = [
+        KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_LEFTMETA,
+        KEY_TAB, KEY_SPACE, KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_ESC,
+        KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN,
+        KEY_A, KEY_C, KEY_D, KEY_F, KEY_N, KEY_S, KEY_T, KEY_V, KEY_W, KEY_X, KEY_Z,
+        KEY_BACK, KEY_FORWARD,
+        KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_MUTE,
+        KEY_PLAYPAUSE, KEY_NEXTSONG, KEY_PREVIOUSSONG,
+        KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
+        KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
+    ]
+
+    EV_KEY = 1
+    EV_REL = 2
+    REL_WHEEL = 8
+    REL_HWHEEL = 6
+
+    MOUSEEVENTF_WHEEL  = 0x0800
+    MOUSEEVENTF_HWHEEL = 0x01000
+
+    _virtual_kbd = None
+    _virtual_kbd_lock = threading.Lock()
+
+    def _get_virtual_kbd():
+        global _virtual_kbd
+        if _virtual_kbd is not None:
+            return _virtual_kbd
+        with _virtual_kbd_lock:
+            if _virtual_kbd is not None:
+                return _virtual_kbd
+            try:
+                from evdev import ecodes, UInput
+                _virtual_kbd = UInput(
+                    {ecodes.EV_KEY: _ALL_KEY_CODES},
+                    name="Mouser Virtual Keyboard",
+                )
+                return _virtual_kbd
+            except ImportError:
+                print("[KeySimulator] python-evdev not installed — pip install evdev")
+            except PermissionError:
+                print("[KeySimulator] Permission denied for /dev/uinput — "
+                      "add user to 'input' group")
+            except Exception as e:
+                print(f"[KeySimulator] Failed to create virtual keyboard: {e}")
+            return None
+
+    def send_key_combo(keys, hold_ms=50):
+        kbd = _get_virtual_kbd()
+        if not kbd:
+            return
+        for key in keys:
+            kbd.write(EV_KEY, key, 1)
+            kbd.syn()
+        if hold_ms:
+            time.sleep(hold_ms / 1000.0)
+        for key in reversed(keys):
+            kbd.write(EV_KEY, key, 0)
+            kbd.syn()
+
+    def send_key_press(vk):
+        send_key_combo([vk])
+
+    def inject_scroll(flags, delta):
+        kbd = _get_virtual_kbd()
+        if not kbd:
+            return
+        if flags == MOUSEEVENTF_WHEEL:
+            detents = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
+            kbd.write(EV_REL, REL_WHEEL, detents)
+        else:
+            detents = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
+            kbd.write(EV_REL, REL_HWHEEL, detents)
+        kbd.syn()
+
+    ACTIONS = {
+        "alt_tab": {
+            "label": "Alt + Tab (Switch Windows)",
+            "keys": [KEY_LEFTALT, KEY_TAB],
+            "category": "Navigation",
+        },
+        "alt_shift_tab": {
+            "label": "Alt + Shift + Tab (Switch Windows Reverse)",
+            "keys": [KEY_LEFTALT, KEY_LEFTSHIFT, KEY_TAB],
+            "category": "Navigation",
+        },
+        "browser_back": {
+            "label": "Browser Back",
+            "keys": [KEY_BACK],
+            "category": "Browser",
+        },
+        "browser_forward": {
+            "label": "Browser Forward",
+            "keys": [KEY_FORWARD],
+            "category": "Browser",
+        },
+        "copy": {
+            "label": "Copy (Ctrl+C)",
+            "keys": [KEY_LEFTCTRL, KEY_C],
+            "category": "Editing",
+        },
+        "paste": {
+            "label": "Paste (Ctrl+V)",
+            "keys": [KEY_LEFTCTRL, KEY_V],
+            "category": "Editing",
+        },
+        "cut": {
+            "label": "Cut (Ctrl+X)",
+            "keys": [KEY_LEFTCTRL, KEY_X],
+            "category": "Editing",
+        },
+        "undo": {
+            "label": "Undo (Ctrl+Z)",
+            "keys": [KEY_LEFTCTRL, KEY_Z],
+            "category": "Editing",
+        },
+        "select_all": {
+            "label": "Select All (Ctrl+A)",
+            "keys": [KEY_LEFTCTRL, KEY_A],
+            "category": "Editing",
+        },
+        "save": {
+            "label": "Save (Ctrl+S)",
+            "keys": [KEY_LEFTCTRL, KEY_S],
+            "category": "Editing",
+        },
+        "close_tab": {
+            "label": "Close Tab (Ctrl+W)",
+            "keys": [KEY_LEFTCTRL, KEY_W],
+            "category": "Browser",
+        },
+        "new_tab": {
+            "label": "New Tab (Ctrl+T)",
+            "keys": [KEY_LEFTCTRL, KEY_T],
+            "category": "Browser",
+        },
+        "find": {
+            "label": "Find (Ctrl+F)",
+            "keys": [KEY_LEFTCTRL, KEY_F],
+            "category": "Editing",
+        },
+        "win_d": {
+            "label": "Show Desktop (Super+D)",
+            "keys": [KEY_LEFTMETA, KEY_D],
+            "category": "Navigation",
+        },
+        "task_view": {
+            "label": "Activities (Super)",
+            "keys": [KEY_LEFTMETA],
+            "category": "Navigation",
+        },
+        "volume_up": {
+            "label": "Volume Up",
+            "keys": [KEY_VOLUMEUP],
+            "category": "Media",
+        },
+        "volume_down": {
+            "label": "Volume Down",
+            "keys": [KEY_VOLUMEDOWN],
+            "category": "Media",
+        },
+        "volume_mute": {
+            "label": "Volume Mute",
+            "keys": [KEY_MUTE],
+            "category": "Media",
+        },
+        "play_pause": {
+            "label": "Play / Pause",
+            "keys": [KEY_PLAYPAUSE],
+            "category": "Media",
+        },
+        "next_track": {
+            "label": "Next Track",
+            "keys": [KEY_NEXTSONG],
+            "category": "Media",
+        },
+        "prev_track": {
+            "label": "Previous Track",
+            "keys": [KEY_PREVIOUSSONG],
+            "category": "Media",
+        },
+        "none": {
+            "label": "Do Nothing (Pass-through)",
+            "keys": [],
+            "category": "Other",
+        },
+    }
+
+    def execute_action(action_id):
+        action = ACTIONS.get(action_id)
+        if not action or not action["keys"]:
+            return
+        send_key_combo(action["keys"])
 
 
 # ==================================================================

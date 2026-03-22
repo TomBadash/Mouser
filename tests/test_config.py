@@ -150,6 +150,58 @@ class ConfigMigrationTests(unittest.TestCase):
                 "chrome",
             )
 
+    def test_get_profile_for_app_matches_linux_desktop_id_from_runtime_path(self):
+        cfg = {
+            "profiles": {
+                "default": {"apps": []},
+                "firefox": {"apps": ["firefox.desktop"]},
+            }
+        }
+
+        with patch.object(
+            config,
+            "resolve_app_for_config",
+            return_value={
+                "id": "firefox.desktop",
+                "aliases": [
+                    "firefox.desktop",
+                    "/usr/bin/firefox",
+                    "/usr/lib64/firefox/firefox",
+                    "firefox",
+                ],
+            },
+        ):
+            self.assertEqual(
+                config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
+                "firefox",
+            )
+
+    def test_get_profile_for_app_matches_linux_legacy_launcher_path(self):
+        cfg = {
+            "profiles": {
+                "default": {"apps": []},
+                "firefox": {"apps": ["/usr/bin/firefox"]},
+            }
+        }
+
+        with patch.object(
+            config,
+            "resolve_app_for_config",
+            return_value={
+                "id": "firefox.desktop",
+                "aliases": [
+                    "firefox.desktop",
+                    "/usr/bin/firefox",
+                    "/usr/lib64/firefox/firefox",
+                    "firefox",
+                ],
+            },
+        ):
+            self.assertEqual(
+                config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
+                "firefox",
+            )
+
 
 class AppCatalogTests(unittest.TestCase):
     def test_resolve_app_spec_uses_catalog_alias(self):
@@ -272,6 +324,85 @@ class AppCatalogTests(unittest.TestCase):
                 app_catalog._windows_registry_path(spec, entries),
                 r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
             )
+
+    def test_linux_desktop_discovery_resolves_exec_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            apps_dir = Path(temp_dir) / "applications"
+            bin_dir = Path(temp_dir) / "bin"
+            apps_dir.mkdir()
+            bin_dir.mkdir()
+
+            exec_path = bin_dir / "code"
+            exec_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            exec_path.chmod(0o755)
+
+            desktop_path = apps_dir / "code.desktop"
+            desktop_path.write_text(
+                "\n".join(
+                    [
+                        "[Desktop Entry]",
+                        "Type=Application",
+                        "Name=Visual Studio Code",
+                        "StartupWMClass=code-oss",
+                        f"Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/code.desktop {exec_path} --new-window %F",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(app_catalog.sys, "platform", "linux"),
+                patch.object(app_catalog, "_linux_app_dirs", return_value=[str(apps_dir)]),
+            ):
+                entries = app_catalog._discover_linux_apps()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["label"], "Visual Studio Code")
+        self.assertEqual(entries[0]["path"], str(exec_path.resolve()))
+        self.assertIn("code.desktop", entries[0]["aliases"])
+        self.assertIn("code-oss", entries[0]["aliases"])
+
+    def test_resolve_app_spec_realpaths_linux_binary_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            real_exec = Path(temp_dir) / "real-code"
+            linked_exec = Path(temp_dir) / "code"
+            real_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+            real_exec.chmod(0o755)
+            linked_exec.symlink_to(real_exec)
+
+            with patch.object(app_catalog.sys, "platform", "linux"):
+                resolved = app_catalog.resolve_app_spec(str(linked_exec))
+
+        self.assertEqual(resolved["path"], str(real_exec.resolve()))
+        self.assertIn("real-code", resolved["aliases"])
+
+    def test_resolve_app_spec_for_linux_runtime_path_prefers_catalog_entry(self):
+        fake_catalog = [
+            {
+                "id": "firefox.desktop",
+                "label": "Firefox",
+                "path": "/usr/bin/firefox",
+                "aliases": [
+                    "firefox.desktop",
+                    "/usr/bin/firefox",
+                    "firefox",
+                    "Navigator",
+                ],
+                "legacy_icon": "",
+            }
+        ]
+
+        with (
+            patch.object(app_catalog.sys, "platform", "linux"),
+            patch.object(app_catalog, "get_app_catalog", return_value=fake_catalog),
+            patch.object(app_catalog.os.path, "exists", return_value=True),
+        ):
+            resolved = app_catalog.resolve_app_spec("/usr/lib64/firefox/firefox")
+
+        self.assertEqual(resolved["id"], "firefox.desktop")
+        self.assertEqual(resolved["label"], "Firefox")
+        self.assertEqual(resolved["path"], "/usr/bin/firefox")
+        self.assertIn("/usr/lib64/firefox/firefox", resolved["aliases"])
 
 
 if __name__ == "__main__":
