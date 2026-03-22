@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shlex
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -374,7 +376,10 @@ def _hint_for(spec: str):
 
 
 def _make_entry(app_id: str, label: str, *, path: str = "", aliases=None, legacy_icon: str = ""):
-    normalized_path = os.path.abspath(path) if path else ""
+    if path:
+        normalized_path = os.path.realpath(path) if sys.platform == "linux" else os.path.abspath(path)
+    else:
+        normalized_path = ""
     alias_values = list(aliases or [])
     alias_values.extend([app_id, label])
     if normalized_path:
@@ -516,7 +521,7 @@ def _expand_windows_path_hint(path_hint: str):
 def _path_if_usable(path: str):
     if not path:
         return ""
-    normalized = os.path.abspath(path)
+    normalized = os.path.realpath(path) if sys.platform == "linux" else os.path.abspath(path)
     return normalized if os.path.exists(normalized) else ""
 
 
@@ -679,11 +684,155 @@ def _discover_windows_apps():
     return sorted(entries, key=_entry_sort_key)
 
 
+def _linux_app_dirs():
+    data_home = os.environ.get(
+        "XDG_DATA_HOME",
+        os.path.join(os.path.expanduser("~"), ".local", "share"),
+    )
+    return [
+        os.path.join(data_home, "applications"),
+        os.path.join(os.path.expanduser("~"), ".local", "share", "flatpak", "exports", "share", "applications"),
+        "/var/lib/flatpak/exports/share/applications",
+        "/usr/local/share/applications",
+        "/usr/share/applications",
+    ]
+
+
+def _iter_linux_desktop_files():
+    seen = set()
+    for root in _linux_app_dirs():
+        if not os.path.isdir(root):
+            continue
+        for current_root, dirnames, filenames in os.walk(root):
+            dirnames.sort(key=str.casefold)
+            for filename in sorted(filenames, key=str.casefold):
+                if not filename.endswith(".desktop"):
+                    continue
+                desktop_path = os.path.realpath(os.path.join(current_root, filename))
+                if desktop_path in seen:
+                    continue
+                seen.add(desktop_path)
+                yield desktop_path
+
+
+def _extract_linux_exec_command(exec_value: str):
+    if not exec_value:
+        return ""
+    try:
+        tokens = shlex.split(exec_value, posix=True)
+    except ValueError:
+        tokens = exec_value.split()
+    if not tokens:
+        return ""
+
+    index = 0
+    if os.path.basename(tokens[0]) == "env":
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token.startswith("%") or "=" not in token:
+                break
+            index += 1
+
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith("%"):
+            index += 1
+            continue
+        return token
+    return ""
+
+
+def _resolve_linux_exec_path(exec_value: str, try_exec: str = ""):
+    command = (try_exec or "").strip() or _extract_linux_exec_command(exec_value)
+    if not command:
+        return ""
+
+    expanded = os.path.expanduser(os.path.expandvars(command))
+    if os.path.isabs(expanded):
+        return _path_if_usable(expanded)
+
+    resolved = shutil.which(expanded)
+    return _path_if_usable(resolved)
+
+
+def _read_linux_desktop_entry(desktop_path: str):
+    try:
+        lines = Path(desktop_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+    in_desktop_entry = False
+    fields = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_desktop_entry = (line == "[Desktop Entry]")
+            continue
+        if not in_desktop_entry or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        fields.setdefault(key, value.strip())
+
+    if fields.get("Type", "Application") != "Application":
+        return None
+    if fields.get("Hidden", "").lower() == "true":
+        return None
+    if fields.get("NoDisplay", "").lower() == "true":
+        return None
+
+    exec_path = _resolve_linux_exec_path(fields.get("Exec", ""), fields.get("TryExec", ""))
+    if not exec_path:
+        return None
+
+    label = fields.get("Name") or Path(desktop_path).stem
+    desktop_id = Path(desktop_path).name
+    hint = (
+        _hint_for(fields.get("StartupWMClass", ""))
+        or _hint_for(os.path.basename(exec_path))
+        or _hint_for(label)
+    )
+    aliases = [
+        desktop_id,
+        Path(desktop_path).stem,
+        label,
+        os.path.basename(exec_path),
+        Path(exec_path).stem,
+    ]
+    if hint:
+        aliases.extend(hint.get("aliases", []))
+
+    return _make_entry(
+        (hint or {}).get("id") or desktop_id,
+        (hint or {}).get("label") or label,
+        path=exec_path,
+        aliases=aliases,
+        legacy_icon=(hint or {}).get("legacy_icon", ""),
+    )
+
+
+def _discover_linux_apps():
+    entries = {}
+    for desktop_path in _iter_linux_desktop_files():
+        entry = _read_linux_desktop_entry(desktop_path)
+        if not entry:
+            continue
+        entries[entry["id"].casefold()] = _merge_entry(
+            entry,
+            entries.get(entry["id"].casefold()),
+        )
+    return sorted(entries.values(), key=_entry_sort_key)
+
+
 def _build_catalog():
     if sys.platform == "darwin":
         return _discover_macos_apps()
     if sys.platform == "win32":
         return _discover_windows_apps()
+    if sys.platform == "linux":
+        return _discover_linux_apps()
     return []
 
 

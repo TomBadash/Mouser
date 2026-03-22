@@ -43,6 +43,7 @@ class Backend(QObject):
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
+    knownAppsChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
@@ -312,7 +313,7 @@ class Backend(QObject):
             })
         return result
 
-    @Property(list, constant=True)
+    @Property(list, notify=knownAppsChanged)
     def knownApps(self):
         result = []
         for entry in app_catalog.get_app_catalog():
@@ -321,6 +322,7 @@ class Backend(QObject):
                 "id": entry["id"],
                 "label": entry.get("label", entry["id"]),
                 "aliases": entry.get("aliases", []),
+                "path": entry.get("path", ""),
                 "iconSource": icon,
             })
         return result
@@ -466,6 +468,11 @@ class Backend(QObject):
         if sys.platform == "darwin":
             path, _ = QFileDialog.getOpenFileName(
                 None, "Select Application", "/Applications", "Apps (*.app)")
+        elif sys.platform == "linux":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application",
+                os.path.expanduser("~"),
+                "Applications (*)")
         else:
             path, _ = QFileDialog.getOpenFileName(
                 None, "Select Application",
@@ -473,7 +480,10 @@ class Backend(QObject):
                 "Executables (*.exe)")
         if not path:
             return
-        path = os.path.normpath(path)
+        if sys.platform == "linux":
+            path = os.path.realpath(path)
+        else:
+            path = os.path.normpath(path)
         entry = app_catalog.resolve_app_spec(path)
         label = entry.get("label") if entry else os.path.splitext(os.path.basename(path))[0]
         for pdata in self._cfg.get("profiles", {}).values():
@@ -486,6 +496,11 @@ class Backend(QObject):
             self._engine.cfg = self._cfg
         self.profilesChanged.emit()
         self.statusMessage.emit("Profile created")
+
+    @Slot()
+    def refreshKnownAppsSilently(self):
+        app_catalog.get_app_catalog(refresh=True)
+        self.knownAppsChanged.emit()
 
     @Slot(str)
     def deleteProfile(self, name):
