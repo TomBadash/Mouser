@@ -33,6 +33,36 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         overrides = backend._cfg.get("settings", {}).get("device_layout_overrides", {})
         self.assertEqual(overrides, {})
 
+    def test_linux_reports_gesture_direction_support(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "linux"):
+            self.assertTrue(backend.supportsGestureDirections)
+
+    def test_known_apps_include_paths_and_refresh_signal(self):
+        backend = self._make_backend()
+        fake_catalog = [
+            {
+                "id": "code.desktop",
+                "label": "Visual Studio Code",
+                "path": "/usr/bin/code",
+                "aliases": ["code.desktop", "Visual Studio Code"],
+                "legacy_icon": "",
+            }
+        ]
+        notifications = []
+        backend.knownAppsChanged.connect(lambda: notifications.append(True))
+
+        with (
+            patch("ui.backend.app_catalog.get_app_catalog", return_value=fake_catalog),
+            patch("ui.backend.get_icon_for_exe", return_value=""),
+        ):
+            apps = backend.knownApps
+            backend.refreshKnownAppsSilently()
+
+        self.assertEqual(apps[0]["path"], "/usr/bin/code")
+        self.assertEqual(len(notifications), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

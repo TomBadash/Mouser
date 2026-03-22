@@ -258,6 +258,55 @@ class AppCatalogTests(unittest.TestCase):
                 r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
             )
 
+    def test_linux_desktop_discovery_resolves_exec_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            apps_dir = Path(temp_dir) / "applications"
+            bin_dir = Path(temp_dir) / "bin"
+            apps_dir.mkdir()
+            bin_dir.mkdir()
+
+            exec_path = bin_dir / "code"
+            exec_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            exec_path.chmod(0o755)
+
+            desktop_path = apps_dir / "code.desktop"
+            desktop_path.write_text(
+                "\n".join(
+                    [
+                        "[Desktop Entry]",
+                        "Type=Application",
+                        "Name=Visual Studio Code",
+                        f"Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/code.desktop {exec_path} --new-window %F",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(app_catalog.sys, "platform", "linux"),
+                patch.object(app_catalog, "_linux_app_dirs", return_value=[str(apps_dir)]),
+            ):
+                entries = app_catalog._discover_linux_apps()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["label"], "Visual Studio Code")
+        self.assertEqual(entries[0]["path"], str(exec_path.resolve()))
+        self.assertIn("code.desktop", entries[0]["aliases"])
+
+    def test_resolve_app_spec_realpaths_linux_binary_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            real_exec = Path(temp_dir) / "real-code"
+            linked_exec = Path(temp_dir) / "code"
+            real_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+            real_exec.chmod(0o755)
+            linked_exec.symlink_to(real_exec)
+
+            with patch.object(app_catalog.sys, "platform", "linux"):
+                resolved = app_catalog.resolve_app_spec(str(linked_exec))
+
+        self.assertEqual(resolved["path"], str(real_exec.resolve()))
+        self.assertIn("real-code", resolved["aliases"])
+
 
 if __name__ == "__main__":
     unittest.main()
