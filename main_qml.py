@@ -12,6 +12,9 @@ _t0 = _time.perf_counter()          # ◄ startup clock
 import sys
 import os
 import signal
+import hashlib
+import getpass
+import time
 from urllib.parse import parse_qs, unquote
 
 # Ensure project root on path — works for both normal Python and PyInstaller
@@ -32,6 +35,7 @@ from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtNetwork import QLocalServer, QLocalSocket, QAbstractSocket
 _t2 = _time.perf_counter()
 
 # Ensure PySide6 QML plugins are found
@@ -41,6 +45,7 @@ os.environ.setdefault("QML2_IMPORT_PATH", os.path.join(_pyside_dir, "qml"))
 os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 
 _t3 = _time.perf_counter()
+from core.config import load_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
@@ -78,6 +83,57 @@ def _parse_cli_args(argv):
         qt_argv.append(arg)
         i += 1
     return qt_argv, hid_backend, start_hidden
+
+
+_SINGLE_INSTANCE_ACTIVATE_MSG = b"show"
+
+
+def _single_instance_server_name() -> str:
+    raw = f"{getpass.getuser()}\0{sys.platform}"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"mouser_instance_{digest}"
+
+
+def _try_activate_existing_instance(server_name: str, timeout_ms: int = 500) -> bool:
+    sock = QLocalSocket()
+    sock.connectToServer(server_name)
+    if not sock.waitForConnected(timeout_ms):
+        return False
+    sock.write(_SINGLE_INSTANCE_ACTIVATE_MSG)
+    sock.waitForBytesWritten(timeout_ms)
+    sock.disconnectFromServer()
+    return True
+
+
+def _drain_local_activate_socket(sock: QLocalSocket | None) -> None:
+    if not sock:
+        return
+    sock.waitForReadyRead(300)
+    sock.readAll()
+    sock.deleteLater()
+
+
+def _single_instance_acquire(app: QApplication, server_name: str):
+    """Return (QLocalServer, None) if this process owns the instance, or (None, exit_code)."""
+    if _try_activate_existing_instance(server_name):
+        return None, 0
+    server = QLocalServer(app)
+    QLocalServer.removeServer(server_name)
+    if server.listen(server_name):
+        return server, None
+    if server.serverError() != QAbstractSocket.SocketError.AddressInUseError:
+        print(f"[Mouser] single-instance server: {server.errorString()}")
+        return None, 1
+    for _ in range(3):
+        time.sleep(0.05)
+        if _try_activate_existing_instance(server_name):
+            return None, 0
+        QLocalServer.removeServer(server_name)
+        server.close()
+        if server.listen(server_name):
+            return server, None
+    print("[Mouser] Could not claim single-instance lock or reach running instance.")
+    return None, 1
 
 
 def _app_icon() -> QIcon:
@@ -314,6 +370,8 @@ def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
     argv, hid_backend, start_hidden = _parse_cli_args(sys.argv)
+    cfg_settings = load_config().get("settings", {})
+    launch_hidden = start_hidden or bool(cfg_settings.get("start_minimized", True))
     if hid_backend:
         try:
             set_hid_backend_preference(hid_backend)
@@ -343,6 +401,11 @@ def main():
                     traceback.print_stack(sys._current_frames().get(t.ident))
         signal.signal(signal.SIGUSR1, _dump_threads)
 
+    server_name = _single_instance_server_name()
+    single_server, single_exit = _single_instance_acquire(app, server_name)
+    if single_exit is not None:
+        sys.exit(single_exit)
+
     _t6 = _time.perf_counter()
     # ── Engine (created but started AFTER UI is visible) ───────
     engine = Engine()
@@ -361,7 +424,7 @@ def main():
     qml_engine.addImageProvider("systemicons", SystemIconProvider())
     qml_engine.rootContext().setContextProperty("backend", backend)
     qml_engine.rootContext().setContextProperty("uiState", ui_state)
-    qml_engine.rootContext().setContextProperty("launchHidden", start_hidden)
+    qml_engine.rootContext().setContextProperty("launchHidden", launch_hidden)
     qml_engine.rootContext().setContextProperty(
         "applicationDirPath", ROOT.replace("\\", "/"))
 
@@ -380,6 +443,12 @@ def main():
         root_window.raise_()
         root_window.requestActivate()
         _activate_macos_window()
+
+    def _on_second_instance_activate():
+        _drain_local_activate_socket(single_server.nextPendingConnection())
+        show_main_window()
+
+    single_server.newConnection.connect(_on_second_instance_activate)
 
     print(f"[Startup] QApp create:      {(_t6-_t5)*1000:7.1f} ms")
     print(f"[Startup] Engine create:    {(_t7-_t6)*1000:7.1f} ms")
@@ -456,6 +525,18 @@ def main():
         QSystemTrayIcon.ActivationReason.DoubleClick,
     ) else None)
     tray.show()
+
+    if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
+
+        def _tray_minimized_notice():
+            tray.showMessage(
+                "Mouser",
+                "Mouser is running in the system tray. Click the icon to open settings.",
+                QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
+
+        QTimer.singleShot(400, _tray_minimized_notice)
 
     # ── Run ────────────────────────────────────────────────────
     try:

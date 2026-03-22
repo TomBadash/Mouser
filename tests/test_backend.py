@@ -35,69 +35,61 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
-class BackendAutostartTests(unittest.TestCase):
-    def _make_backend(
-        self,
-        *,
-        config=None,
-        autostart_supported=True,
-        launch_enabled=False,
-    ):
-        effective_config = copy.deepcopy(config or DEFAULT_CONFIG)
+class BackendLoginStartupTests(unittest.TestCase):
+    def test_init_calls_sync_from_config_when_supported(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["start_at_login"] = True
         with (
-            patch("ui.backend.load_config", return_value=effective_config),
-            patch("ui.backend.save_config") as save_config_mock,
-            patch("ui.backend.autostart.is_supported", return_value=autostart_supported),
-            patch(
-                "ui.backend.autostart.is_launch_at_login_enabled",
-                return_value=launch_enabled,
-            ),
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config") as sync_mock,
+        ):
+            Backend(engine=None)
+        sync_mock.assert_called_once_with(True)
+
+    def test_init_clears_start_at_login_when_unsupported(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["start_at_login"] = True
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+            patch("ui.backend.sync_login_startup_from_config") as sync_mock,
         ):
             backend = Backend(engine=None)
-        return backend, save_config_mock
+        sync_mock.assert_not_called()
+        self.assertFalse(backend.startAtLogin)
 
-    def test_syncs_start_at_login_from_existing_launch_agent(self):
-        backend, save_config_mock = self._make_backend(
-            autostart_supported=True,
-            launch_enabled=True,
-        )
-
-        self.assertTrue(backend.startAtLogin)
-        save_config_mock.assert_called_once()
-
-    def test_set_start_at_login_uses_current_hidden_start_preference(self):
-        config = copy.deepcopy(DEFAULT_CONFIG)
-        config["settings"]["start_minimized"] = False
-
+    def test_set_start_at_login_calls_apply(self):
         with (
-            patch("ui.backend.load_config", return_value=config),
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
             patch("ui.backend.save_config"),
-            patch("ui.backend.autostart.is_supported", return_value=True),
-            patch("ui.backend.autostart.is_launch_at_login_enabled", return_value=False),
-            patch("ui.backend.autostart.enable_launch_at_login") as enable_mock,
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config"),
+            patch("ui.backend.apply_login_startup") as apply_mock,
         ):
             backend = Backend(engine=None)
             backend.setStartAtLogin(True)
 
-        enable_mock.assert_called_once_with(start_hidden=False)
+        apply_mock.assert_called_once_with(True)
         self.assertTrue(backend.startAtLogin)
 
-    def test_set_start_minimized_refreshes_existing_login_item(self):
-        config = copy.deepcopy(DEFAULT_CONFIG)
-        config["settings"]["start_at_login"] = True
-        config["settings"]["start_minimized"] = True
-
+    def test_set_start_minimized_does_not_call_apply_login_startup(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["start_at_login"] = True
         with (
-            patch("ui.backend.load_config", return_value=config),
+            patch("ui.backend.load_config", return_value=cfg),
             patch("ui.backend.save_config"),
-            patch("ui.backend.autostart.is_supported", return_value=True),
-            patch("ui.backend.autostart.is_launch_at_login_enabled", return_value=True),
-            patch("ui.backend.autostart.enable_launch_at_login") as enable_mock,
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config"),
+            patch("ui.backend.apply_login_startup") as apply_mock,
         ):
             backend = Backend(engine=None)
+            apply_mock.reset_mock()
             backend.setStartMinimized(False)
 
-        enable_mock.assert_called_once_with(start_hidden=False)
+        apply_mock.assert_not_called()
         self.assertFalse(backend.startMinimized)
 
 
