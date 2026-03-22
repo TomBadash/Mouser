@@ -342,6 +342,121 @@ Item {
             Item { width: 1; height: 16 }
 
             Rectangle {
+                visible: backend.supportsStartAtLogin
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: startupContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: startupContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: "Startup"
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: "Start Mouser automatically after login, and optionally keep the settings window hidden."
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: "Start at login"
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: scrollPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: startAtLoginSwitch
+                                checked: backend.startAtLogin
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: "Start Mouser at login"
+                                onToggled: backend.setStartAtLogin(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        opacity: startAtLoginSwitch.checked ? 1 : 0.55
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: "Launch hidden after login"
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: scrollPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: startMinimizedSwitch
+                                checked: backend.startMinimized
+                                enabled: startAtLoginSwitch.checked
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: "Launch hidden after login"
+                                onToggled: backend.setStartMinimized(checked)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item {
+                width: 1
+                height: backend.supportsStartAtLogin ? 16 : 0
+            }
+
+            Rectangle {
                 width: parent.width - 72
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: scrollContent.implicitHeight + 40
@@ -503,6 +618,10 @@ Item {
             if (!dpiSlider.pressed) {
                 dpiSlider.value = backend.dpi
                 dpiLabel.text = backend.dpi + " DPI"
+            }
+            if (backend.supportsStartAtLogin) {
+                startAtLoginSwitch.checked = backend.startAtLogin
+                startMinimizedSwitch.checked = backend.startMinimized
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll

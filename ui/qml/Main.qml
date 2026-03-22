@@ -6,7 +6,7 @@ import "Theme.js" as Theme
 
 ApplicationWindow {
     id: root
-    visible: true
+    visible: !launchHidden
     width: 1060
     height: 700
     minimumWidth: 920

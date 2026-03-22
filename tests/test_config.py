@@ -30,8 +30,9 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 4)
+        self.assertEqual(migrated["version"], 5)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
+        self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
         self.assertEqual(migrated["settings"]["dpi"], 1000)
@@ -68,6 +69,7 @@ class ConfigMigrationTests(unittest.TestCase):
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
         )
+        self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
@@ -101,6 +103,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 loaded = config.load_config()
 
         self.assertEqual(loaded["settings"]["dpi"], 800)
+        self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
         self.assertEqual(loaded["settings"]["appearance_mode"], "system")
         self.assertFalse(loaded["settings"]["debug_mode"])
@@ -112,6 +115,18 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
         )
+
+    def test_migrate_renames_start_with_windows_to_start_at_login(self):
+        legacy = {
+            "version": 4,
+            "profiles": {"default": {"apps": [], "mappings": {}}},
+            "settings": {"start_with_windows": True},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertEqual(migrated["version"], 5)
+        self.assertTrue(migrated["settings"]["start_at_login"])
 
     def test_get_profile_for_app_matches_aliases(self):
         cfg = {

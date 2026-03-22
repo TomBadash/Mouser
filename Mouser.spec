@@ -157,8 +157,8 @@ def _should_keep(name):
     # Drop everything else (WebEngine, 3D, Charts, Multimedia, etc.)
     return False
 
-# a.binaries = [b for b in a.binaries if _should_keep(b[0])]
-# a.datas    = [d for d in a.datas    if _should_keep(d[0])]
+a.binaries = [b for b in a.binaries if _should_keep(b[0])]
+a.datas    = [d for d in a.datas    if _should_keep(d[0])]
 
 exe = EXE(
     pyz,

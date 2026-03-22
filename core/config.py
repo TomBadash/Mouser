@@ -55,7 +55,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 4,
+    "version": 5,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -77,7 +77,7 @@ DEFAULT_CONFIG = {
     },
     "settings": {
         "start_minimized": True,
-        "start_with_windows": False,
+        "start_at_login": False,
         "hscroll_threshold": 1,
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
@@ -254,7 +254,19 @@ def _migrate(cfg):
         settings.setdefault("device_layout_overrides", {})
         cfg["version"] = 4
 
+    if version < 5:
+        settings = cfg.setdefault("settings", {})
+        if "start_at_login" not in settings:
+            settings["start_at_login"] = bool(
+                settings.get("start_with_windows", False)
+            )
+        cfg["version"] = 5
+
     cfg.setdefault("settings", {})
+    if "start_at_login" not in cfg["settings"]:
+        cfg["settings"]["start_at_login"] = bool(
+            cfg["settings"].get("start_with_windows", False)
+        )
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
