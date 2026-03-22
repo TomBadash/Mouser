@@ -10,6 +10,7 @@ import time
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, Qt
 
+from core.accessibility import is_process_trusted
 from core import autostart
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
@@ -244,8 +245,7 @@ class Backend(QObject):
         if sys.platform != "darwin":
             return True
         try:
-            import ApplicationServices
-            return bool(ApplicationServices.AXIsProcessTrusted())
+            return bool(is_process_trusted())
         except Exception:
             return True
 

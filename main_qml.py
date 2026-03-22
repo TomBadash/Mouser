@@ -43,6 +43,7 @@ os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 _t3 = _time.perf_counter()
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
+from core.accessibility import is_process_trusted
 from ui.backend import Backend
 _t4 = _time.perf_counter()
 
@@ -281,17 +282,12 @@ class SystemIconProvider(QQuickImageProvider):
 def _check_accessibility() -> bool:
     """On macOS, check if Accessibility permission is granted.
 
-    Uses AXIsProcessTrustedWithOptions to trigger the native macOS prompt
-    that asks the user to grant Accessibility access.  Returns True if
-    already trusted, False otherwise.
+    Returns True if already trusted, False otherwise.
     """
     if sys.platform != "darwin":
         return True
     try:
-        import ApplicationServices
-        import CoreFoundation
-        options = {CoreFoundation.kAXTrustedCheckOptionPrompt: True}
-        trusted = ApplicationServices.AXIsProcessTrustedWithOptions(options)
+        trusted = is_process_trusted(prompt=True)
         if not trusted:
             print("[Mouser] Accessibility permission not granted")
             msg = QMessageBox()
@@ -309,12 +305,6 @@ def _check_accessibility() -> bool:
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
         return bool(trusted)
-    except ImportError:
-        print(
-            "[Mouser] pyobjc-framework-ApplicationServices not available - "
-            "skipping accessibility check"
-        )
-        return True
     except Exception as exc:
         print(f"[Mouser] Accessibility check failed: {exc}")
         return True
