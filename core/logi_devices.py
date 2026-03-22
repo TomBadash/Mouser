@@ -72,6 +72,18 @@ class ConnectedDeviceInfo:
 # Solaar/logiops for the major MX-family mice we want to grow into first.
 KNOWN_LOGI_DEVICES = (
     LogiDeviceSpec(
+        key="mx_master_4",
+        display_name="MX Master 4",
+        product_ids=(0xB042,),
+        aliases=(
+            "Logitech MX Master 4",
+            "MX Master 4 for Mac",
+            "MX_Master_4",
+            "MX Master 4 for Business",
+        ),
+        ui_layout="mx_master",
+    ),
+    LogiDeviceSpec(
         key="mx_master_3s",
         display_name="MX Master 3S",
         product_ids=(0xB034,),

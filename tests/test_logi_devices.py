@@ -9,6 +9,19 @@ from core.logi_devices import (
 
 
 class LogiDeviceRegistryTests(unittest.TestCase):
+    def test_resolve_mx_master_4_by_product_id(self):
+        device = resolve_device(product_id=0xB042)
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "mx_master_4")
+        self.assertEqual(device.ui_layout, "mx_master")
+
+    def test_resolve_mx_master_4_by_hid_product_string(self):
+        device = resolve_device(product_name="MX_Master_4")
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "mx_master_4")
+
     def test_resolve_device_by_product_id(self):
         device = resolve_device(product_id=0xB034)
 
