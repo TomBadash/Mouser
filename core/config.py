@@ -256,17 +256,14 @@ def _migrate(cfg):
 
     if version < 5:
         settings = cfg.setdefault("settings", {})
-        if "start_at_login" not in settings:
-            settings["start_at_login"] = bool(
-                settings.get("start_with_windows", False)
-            )
+        if "start_at_login" not in settings and "start_with_windows" in settings:
+            settings["start_at_login"] = bool(settings["start_with_windows"])
+        else:
+            settings.setdefault("start_at_login", False)
+        settings.pop("start_with_windows", None)
         cfg["version"] = 5
 
     cfg.setdefault("settings", {})
-    if "start_at_login" not in cfg["settings"]:
-        cfg["settings"]["start_at_login"] = bool(
-            cfg["settings"].get("start_with_windows", False)
-        )
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})

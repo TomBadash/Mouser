@@ -51,7 +51,9 @@ class AutostartTests(unittest.TestCase):
             with plist_path.open("rb") as handle:
                 payload = plistlib.load(handle)
 
-        self.assertEqual(payload["ProgramArguments"][0], fake_executable)
+        self.assertEqual(
+            payload["ProgramArguments"][0], str(Path(fake_executable))
+        )
         self.assertEqual(payload["ProgramArguments"][-1], "--start-hidden")
         self.assertTrue(payload["RunAtLoad"])
 
