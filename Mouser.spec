@@ -252,7 +252,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='Mouser.app',
-        icon='images/logo.icns',
+        icon='images/AppIcon.icns',
         bundle_identifier='com.mouser.app',
         info_plist={
             'CFBundleShortVersionString': '1.0.0',

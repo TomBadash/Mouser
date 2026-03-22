@@ -9,8 +9,14 @@ Run from Apple Silicon Python on macOS:
 import os
 
 ROOT = os.path.abspath(".")
-MAC_ICON = os.path.join(ROOT, "build", "macos", "Mouser.icns")
-ICON_PATH = MAC_ICON if os.path.exists(MAC_ICON) else None
+COMMITTED_ICON = os.path.join(ROOT, "images", "AppIcon.icns")
+GENERATED_ICON = os.path.join(ROOT, "build", "macos", "Mouser.icns")
+if os.path.exists(COMMITTED_ICON):
+    ICON_PATH = COMMITTED_ICON
+elif os.path.exists(GENERATED_ICON):
+    ICON_PATH = GENERATED_ICON
+else:
+    ICON_PATH = None
 BUNDLE_ID = "io.github.tombadash.mouser"
 
 a = Analysis(

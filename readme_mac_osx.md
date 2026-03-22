@@ -85,7 +85,7 @@ dist/Mouser.app
 Notes:
 
 - Build on the target architecture. On an M1/M2/M3 Mac, use an `arm64` Python to produce an Apple Silicon app.
-- The build script generates an `.icns` icon, runs PyInstaller with `Mouser-mac.spec`, and applies ad-hoc signing via `codesign --sign -`.
+- The build flow uses the committed `images/AppIcon.icns` when present; otherwise the script generates an `.icns` icon from `images/logo_icon.png`, runs PyInstaller with `Mouser-mac.spec`, and applies ad-hoc signing via `codesign --sign -`.
 - The app can then be moved to `/Applications/Mouser.app` and launched directly from Finder, Spotlight, or Dock.
 - `pyinstaller Mouser.spec` remains available as a simpler cross-platform build path, but the dedicated macOS script is the preferred bundle flow.
 
