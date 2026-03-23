@@ -1,5 +1,6 @@
 import json
 import ntpath
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -252,7 +253,7 @@ class AppCatalogTests(unittest.TestCase):
 
         self.assertEqual(resolved["id"], "chrome.exe")
         self.assertEqual(resolved["label"], "Google Chrome")
-        self.assertEqual(resolved["path"], app_path)
+        self.assertEqual(resolved["path"], os.path.abspath(app_path))
         self.assertIn("chrome.exe", resolved["aliases"])
 
     def test_resolve_app_spec_for_windows_terminal_alias(self):

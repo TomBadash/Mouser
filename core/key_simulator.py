@@ -22,6 +22,7 @@ if sys.platform == "win32":
 
     KEYEVENTF_EXTENDEDKEY = 0x0001
     KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_SCANCODE = 0x0008
 
     # Virtual key codes
     VK_MENU = 0x12
@@ -133,6 +134,20 @@ if sys.platform == "win32":
         arr = (INPUT * 1)(inp)
         SendInput(1, arr, sizeof(INPUT))
 
+    # VKs that require the KEYEVENTF_EXTENDEDKEY flag in SendInput
+    _EXTENDED_VKS = frozenset({
+        VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_BROWSER_REFRESH,
+        VK_BROWSER_STOP, VK_BROWSER_HOME,
+        VK_VOLUME_MUTE, VK_VOLUME_DOWN, VK_VOLUME_UP,
+        VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK,
+        VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
+        VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
+        VK_DELETE, VK_RETURN, VK_TAB,
+    })
+
+    def _is_extended(vk):
+        return vk in _EXTENDED_VKS
+
     def _make_key_input(vk, flags=0):
         inp = INPUT()
         inp.type = INPUT_KEYBOARD
@@ -155,17 +170,30 @@ if sys.platform == "win32":
     def send_key_press(vk):
         send_key_combo([vk])
 
-    def _is_extended(vk):
-        extended = {
-            VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_BROWSER_REFRESH,
-            VK_BROWSER_STOP, VK_BROWSER_HOME,
-            VK_VOLUME_MUTE, VK_VOLUME_DOWN, VK_VOLUME_UP,
-            VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK,
-            VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
-            VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
-            VK_DELETE, VK_RETURN, VK_TAB,
-        }
-        return vk in extended
+    def _send_phased_alt_arrow(arrow_vk, hold_ms=50):
+        # Some Chromium-based browsers silently drop batched VK-only SendInput chords;
+        # phased modifier-down → key-tap → modifier-up with pauses is accepted reliably.
+        pause = max(hold_ms, 1) / 1000.0
+        ext = KEYEVENTF_EXTENDEDKEY
+        alt_down = _make_key_input(VK_LMENU, 0)
+        alt_up   = _make_key_input(VK_LMENU, KEYEVENTF_KEYUP)
+        arr_down = _make_key_input(arrow_vk, ext)
+        arr_up   = _make_key_input(arrow_vk, ext | KEYEVENTF_KEYUP)
+
+        def _send(*events):
+            arr = (INPUT * len(events))(*events)
+            SendInput(len(events), arr, sizeof(INPUT))
+
+        _send(alt_down)
+        time.sleep(pause)
+        _send(arr_down, arr_up)
+        time.sleep(pause)
+        _send(alt_up)
+
+    _BROWSER_NAV_ARROW = {
+        "browser_back":    VK_LEFT,
+        "browser_forward": VK_RIGHT,
+    }
 
     ACTIONS = {
         "alt_tab": {
@@ -180,12 +208,12 @@ if sys.platform == "win32":
         },
         "browser_back": {
             "label": "Browser Back",
-            "keys": [VK_BROWSER_BACK],
+            "keys": [VK_MENU, VK_LEFT],
             "category": "Browser",
         },
         "browser_forward": {
             "label": "Browser Forward",
-            "keys": [VK_BROWSER_FORWARD],
+            "keys": [VK_MENU, VK_RIGHT],
             "category": "Browser",
         },
         "copy": {
@@ -294,7 +322,11 @@ if sys.platform == "win32":
         action = ACTIONS.get(action_id)
         if not action or not action["keys"]:
             return
-        send_key_combo(action["keys"])
+        arrow_vk = _BROWSER_NAV_ARROW.get(action_id)
+        if arrow_vk is not None:
+            _send_phased_alt_arrow(arrow_vk)
+        else:
+            send_key_combo(action["keys"])
 
 
 # ==================================================================

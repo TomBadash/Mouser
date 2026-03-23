@@ -14,6 +14,7 @@ import os
 import plistlib
 import shlex
 import shutil
+import posixpath
 import sys
 import threading
 from pathlib import Path
@@ -376,10 +377,16 @@ def _hint_for(spec: str):
 
 
 def _make_entry(app_id: str, label: str, *, path: str = "", aliases=None, legacy_icon: str = ""):
-    if path:
-        normalized_path = os.path.realpath(path) if sys.platform == "linux" else os.path.abspath(path)
-    else:
+    if not path:
         normalized_path = ""
+    elif sys.platform == "darwin":
+        normalized_path = (
+            posixpath.normpath(path) if os.path.isabs(path) else os.path.abspath(path)
+        )
+    elif sys.platform == "linux":
+        normalized_path = os.path.realpath(path)
+    else:
+        normalized_path = os.path.abspath(path)
     alias_values = list(aliases or [])
     alias_values.extend([app_id, label])
     if normalized_path:
@@ -912,7 +919,12 @@ def _resolve_path_entry(path: str):
     if not path:
         return None
 
-    normalized = os.path.realpath(path) if sys.platform == "linux" else os.path.abspath(path)
+    if sys.platform == "darwin":
+        normalized = posixpath.normpath(path) if os.path.isabs(path) else os.path.abspath(path)
+    elif sys.platform == "linux":
+        normalized = os.path.realpath(path)
+    else:
+        normalized = os.path.abspath(path)
     path_exists = os.path.exists(normalized)
 
     if sys.platform == "linux" and path_exists:

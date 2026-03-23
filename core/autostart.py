@@ -7,6 +7,7 @@ without requiring the user to launch Python from Terminal.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import sys
 from pathlib import Path
@@ -37,10 +38,10 @@ def _current_program_arguments(start_hidden: bool = False) -> list[str]:
     args: list[str]
 
     if getattr(sys, "frozen", False):
-        args = [str(Path(sys.executable))]
+        args = [sys.executable]
     else:
         args = [
-            str(Path(sys.executable)),
+            sys.executable,
             str((_project_root() / "main_qml.py").resolve()),
         ]
 
@@ -52,7 +53,7 @@ def _current_program_arguments(start_hidden: bool = False) -> list[str]:
 def build_launch_agent_payload(start_hidden: bool = False) -> dict:
     program_arguments = _current_program_arguments(start_hidden=start_hidden)
     if getattr(sys, "frozen", False):
-        working_dir = str(Path(program_arguments[0]).parent)
+        working_dir = os.path.dirname(sys.executable)
     else:
         working_dir = str(_project_root())
 
