@@ -10,6 +10,7 @@ class BuildRunCommandTests(unittest.TestCase):
         with (
             patch.object(sys, "executable", r"C:\Apps\Mouser App\Mouser.exe"),
             patch.object(sys, "frozen", True, create=True),
+            patch("os.path.abspath", side_effect=lambda p: p),
         ):
             cmd = st.build_run_command()
         self.assertEqual(cmd, r'"C:\Apps\Mouser App\Mouser.exe"')
@@ -47,6 +48,7 @@ class BuildRunCommandTests(unittest.TestCase):
         with (
             patch.object(sys, "executable", r"C:\Python\python.exe"),
             patch.object(sys, "frozen", True, create=True),
+            patch("os.path.abspath", side_effect=lambda p: p),
         ):
             cmd = st.build_run_command()
         self.assertEqual(cmd, r"C:\Python\python.exe")

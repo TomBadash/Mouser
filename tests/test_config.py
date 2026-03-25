@@ -262,22 +262,14 @@ class AppCatalogTests(unittest.TestCase):
         with (
             patch.object(app_catalog.sys, "platform", "win32"),
             patch.object(app_catalog.os.path, "exists", return_value=False),
+            patch("core.app_catalog.os.path.basename", ntpath.basename),
+            patch("core.app_catalog.os.path.abspath", lambda p: p),
         ):
             resolved = app_catalog.resolve_app_spec(app_path)
 
         self.assertEqual(resolved["id"], "chrome.exe")
         self.assertEqual(resolved["label"], "Google Chrome")
-        self.assertTrue(
-            resolved["path"].replace("/", os.sep).endswith(
-                os.path.join(
-                    "Program Files",
-                    "Google",
-                    "Chrome",
-                    "Application",
-                    "chrome.exe",
-                )
-            )
-        )
+        self.assertEqual(resolved["path"], app_path)
         self.assertIn("chrome.exe", resolved["aliases"])
 
     def test_resolve_app_spec_for_windows_terminal_alias(self):

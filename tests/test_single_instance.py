@@ -63,7 +63,7 @@ class SingleInstanceAcquireTests(unittest.TestCase):
         self.assertEqual(code, 0)
 
     @patch("main_qml._try_activate_existing_instance", return_value=False)
-    @patch.object(main_qml.QLocalServer, "removeServer")
+    @patch("main_qml.QLocalServer.removeServer")
     def test_primary_gets_server_when_listen_succeeds(self, _remove, _try_act):
         mock_server = MagicMock()
         mock_server.listen.return_value = True
