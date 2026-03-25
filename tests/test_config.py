@@ -262,6 +262,7 @@ class AppCatalogTests(unittest.TestCase):
         with (
             patch.object(app_catalog.sys, "platform", "win32"),
             patch.object(app_catalog.os.path, "exists", return_value=False),
+            patch("core.app_catalog.os.path.isabs", ntpath.isabs),
             patch("core.app_catalog.os.path.basename", ntpath.basename),
             patch("core.app_catalog.os.path.abspath", lambda p: p),
         ):
