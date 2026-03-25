@@ -246,6 +246,16 @@ if sys.platform == "win32":
             "keys": [VK_CONTROL, VK_S],
             "category": "Editing",
         },
+        "next_tab": {
+            "label": "Next Tab (Ctrl+Tab)",
+            "keys": [VK_CONTROL, VK_TAB],
+            "category": "Browser",
+        },
+        "prev_tab": {
+            "label": "Previous Tab (Ctrl+Shift+Tab)",
+            "keys": [VK_CONTROL, VK_SHIFT, VK_TAB],
+            "category": "Browser",
+        },
         "close_tab": {
             "label": "Close Tab (Ctrl+W)",
             "keys": [VK_CONTROL, VK_W],
@@ -614,6 +624,16 @@ elif sys.platform == "darwin":
             "label": "Save (Cmd+S)",
             "keys": [kVK_Command, kVK_ANSI_S],
             "category": "Editing",
+        },
+        "next_tab": {
+            "label": "Next Tab (Cmd+Shift+])",
+            "keys": [kVK_Command, kVK_Shift, 0x1E],  # kVK_ANSI_RightBracket
+            "category": "Browser",
+        },
+        "prev_tab": {
+            "label": "Previous Tab (Cmd+Shift+[)",
+            "keys": [kVK_Command, kVK_Shift, 0x21],  # kVK_ANSI_LeftBracket
+            "category": "Browser",
         },
         "close_tab": {
             "label": "Close Tab (Cmd+W)",
