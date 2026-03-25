@@ -975,6 +975,7 @@ elif sys.platform == "darwin":
             self._gesture_cooldown_until = 0.0
             self._gesture_input_source = None
             self._connected_device = None
+            self._wake_observer = None
 
         def register(self, event_type, callback):
             self._callbacks.setdefault(event_type, []).append(callback)
@@ -1298,6 +1299,19 @@ elif sys.platform == "darwin":
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:
+                # Re-enable tap if macOS disabled it (e.g. after sleep)
+                if event_type in (
+                    Quartz.kCGEventTapDisabledByTimeout,
+                    Quartz.kCGEventTapDisabledByUserInput,
+                ):
+                    print(
+                        f"[MouseHook] CGEventTap was disabled "
+                        f"(type={event_type:#x}), re-enabling",
+                        flush=True,
+                    )
+                    Quartz.CGEventTapEnable(self._tap, True)
+                    return cg_event
+
                 if not self._first_event_logged:
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
@@ -1474,6 +1488,43 @@ elif sys.platform == "darwin":
             self._connected_device = None
             self._set_device_connected(False)
 
+        def _register_wake_observer(self):
+            """Register for system wake notifications to re-enable the event tap."""
+            try:
+                from AppKit import NSWorkspace
+
+                ws = NSWorkspace.sharedWorkspace()
+                nc = ws.notificationCenter()
+
+                def _on_wake(notification):
+                    print("[MouseHook] System wake detected, checking event tap", flush=True)
+                    if self._tap and self._running:
+                        Quartz.CGEventTapEnable(self._tap, True)
+                        print("[MouseHook] Event tap re-enabled after wake", flush=True)
+
+                self._wake_observer = nc.addObserverForName_object_queue_usingBlock_(
+                    "NSWorkspaceDidWakeNotification",
+                    None,
+                    None,
+                    _on_wake,
+                )
+            except Exception as e:
+                print(f"[MouseHook] Failed to register wake observer: {e}", flush=True)
+                self._wake_observer = None
+
+        def _unregister_wake_observer(self):
+            """Remove the wake notification observer."""
+            if self._wake_observer is not None:
+                try:
+                    from AppKit import NSWorkspace
+
+                    ws = NSWorkspace.sharedWorkspace()
+                    nc = ws.notificationCenter()
+                    nc.removeObserver_(self._wake_observer)
+                except Exception as e:
+                    print(f"[MouseHook] Failed to remove wake observer: {e}", flush=True)
+                self._wake_observer = None
+
         def start(self):
             if not _QUARTZ_OK:
                 print("[MouseHook] Quartz not available — hook not installed")
@@ -1538,10 +1589,13 @@ elif sys.platform == "darwin":
                 self._hid_gesture = listener
                 if not listener.start():
                     self._hid_gesture = None
+
+            self._register_wake_observer()
             return True
 
         def stop(self):
             self._running = False
+            self._unregister_wake_observer()
             if self._hid_gesture:
                 self._hid_gesture.stop()
                 self._hid_gesture = None
