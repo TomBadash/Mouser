@@ -1578,6 +1578,8 @@ elif sys.platform == "linux":
         _EVDEV_OK = False
         print("[MouseHook] python-evdev not installed — pip install evdev")
 
+    from core.logi_devices import build_evdev_connected_device_info
+
     _LOGI_VENDOR = 0x046D
 
     class MouseHook:
@@ -1601,8 +1603,11 @@ elif sys.platform == "linux":
             self._gesture_active = False
             self._hid_gesture = None
             self._device_connected = False
+            self._evdev_ready = False
+            self._hid_ready = False
             self._connection_change_cb = None
             self._connected_device = None
+            self._evdev_connected_device = None
             self.divert_mode_shift = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
@@ -1623,6 +1628,8 @@ elif sys.platform == "linux":
             self._uinput = None
             self._evdev_thread = None
             self._rescan_requested = threading.Event()
+            self._evdev_wakeup = threading.Event()
+            self._ignored_non_logitech = set()
 
         # -- standard interface methods ---------------------------------
 
@@ -1659,20 +1666,64 @@ elif sys.platform == "linux":
             return self._device_connected
 
         @property
+        def evdev_ready(self):
+            return self._evdev_ready
+
+        @property
+        def hid_ready(self):
+            return self._hid_ready
+
+        @property
         def connected_device(self):
             return self._connected_device
 
-        def _set_device_connected(self, connected):
-            if connected == self._device_connected:
+        def _set_evdev_ready(self, ready):
+            if ready == self._evdev_ready:
+                return
+            self._evdev_ready = ready
+            self._refresh_device_state(force=True)
+
+        def _set_device_connected(self, connected, force=False):
+            changed = connected != self._device_connected
+            if not changed and not force:
                 return
             self._device_connected = connected
-            state = "Connected" if connected else "Disconnected"
-            print(f"[MouseHook] Device {state}")
+            if changed:
+                state = "Connected" if connected else "Disconnected"
+                print(f"[MouseHook] Device {state}")
             if self._connection_change_cb:
                 try:
                     self._connection_change_cb(connected)
                 except Exception:
                     pass
+
+        def _build_evdev_connected_device(self, dev):
+            info = getattr(dev, "info", None)
+            return build_evdev_connected_device_info(
+                product_id=getattr(info, "product", None) if info else None,
+                product_name=getattr(dev, "name", None),
+                transport="evdev",
+                source="evdev",
+            )
+
+        def _refresh_device_state(self, force=False):
+            previous = self._connected_device
+            next_device = None
+            if self._hid_ready and self._hid_gesture:
+                next_device = self._hid_gesture.connected_device
+            if next_device is None:
+                next_device = self._evdev_connected_device
+            self._connected_device = next_device
+
+            prev_source = getattr(previous, "source", None) if previous is not None else None
+            next_source = getattr(next_device, "source", None) if next_device is not None else None
+            if prev_source != next_source:
+                if next_source == "evdev":
+                    print("[MouseHook] Using evdev fallback device info")
+                elif prev_source == "evdev" and next_device is not None:
+                    print("[MouseHook] Device info upgraded from evdev fallback to HID++")
+
+            self._set_device_connected(self._evdev_ready, force=force)
 
         def set_debug_callback(self, callback):
             self._debug_callback = callback
@@ -1720,7 +1771,7 @@ elif sys.platform == "linux":
                     print(f"[MouseHook] callback error: {e}")
 
         def _hid_gesture_available(self):
-            return self._hid_gesture is not None and self._device_connected
+            return self._hid_gesture is not None and self._evdev_ready
 
         # -- gesture detection (shared logic) ---------------------------
 
@@ -1931,27 +1982,36 @@ elif sys.platform == "linux":
             self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
         def _on_hid_connect(self):
-            self._connected_device = (
-                self._hid_gesture.connected_device if self._hid_gesture else None
-            )
-            self._set_device_connected(True)
-            # If evdev is currently grabbing a non-Logitech device,
-            # request a rescan so we switch to the reconnected Logitech.
+            self._hid_ready = True
+            self._refresh_device_state(force=True)
             dev = self._evdev_device
-            if dev is not None and dev.info.vendor != _LOGI_VENDOR:
-                print("[MouseHook] Logitech HID reconnected; requesting evdev rescan")
+            should_wake_evdev = (
+                self._running
+                and _EVDEV_OK
+                and (
+                    dev is None
+                    or not self._evdev_ready
+                    or dev.info.vendor != _LOGI_VENDOR
+                )
+            )
+            if should_wake_evdev:
+                print("[MouseHook] Logitech HID connected; waking evdev scan")
                 self._rescan_requested.set()
+                self._evdev_wakeup.set()
 
         def _on_hid_disconnect(self):
-            self._connected_device = None
-            self._set_device_connected(False)
+            self._hid_ready = False
+            if self._gesture_active:
+                self._gesture_active = False
+                self._finish_gesture_tracking()
+                self._gesture_triggered = False
+            self._refresh_device_state(force=True)
 
         # -- Linux evdev specifics --------------------------------------
 
         def _find_mouse_device(self):
-            """Find the best mouse evdev device (prefer Logitech)."""
+            """Find the best Logitech mouse evdev device."""
             logi_mice = []
-            other_mice = []
             for path in _evdev_mod.list_devices():
                 try:
                     dev = _InputDevice(path)
@@ -1981,13 +2041,24 @@ elif sys.platform == "linux":
                 if dev.info.vendor == _LOGI_VENDOR:
                     logi_mice.append((dev, has_side))
                 else:
-                    other_mice.append((dev, has_side))
+                    info = getattr(dev, "info", None)
+                    dedupe_key = (
+                        dev.path,
+                        getattr(info, "vendor", 0),
+                        getattr(info, "product", 0),
+                        dev.name or "",
+                    )
+                    if dedupe_key not in self._ignored_non_logitech:
+                        self._ignored_non_logitech.add(dedupe_key)
+                        print(
+                            "[MouseHook] Ignoring non-Logitech evdev candidate: "
+                            f"{dev.name} ({dev.path}) "
+                            f"vendor=0x{getattr(info, 'vendor', 0):04X} "
+                            f"product=0x{getattr(info, 'product', 0):04X}"
+                        )
+                    dev.close()
 
-            ordered = sorted(
-                logi_mice, key=lambda x: -x[1]
-            ) + sorted(
-                other_mice, key=lambda x: -x[1]
-            )
+            ordered = sorted(logi_mice, key=lambda x: -x[1])
             if ordered:
                 chosen = ordered[0][0]
                 for dev, _ in ordered[1:]:
@@ -2008,6 +2079,8 @@ elif sys.platform == "linux":
                 )
                 dev.grab()
                 self._evdev_device = dev
+                self._evdev_connected_device = self._build_evdev_connected_device(dev)
+                self._set_evdev_ready(True)
                 print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
                 return True
             except PermissionError:
@@ -2038,6 +2111,8 @@ elif sys.platform == "linux":
                 except Exception:
                     pass
                 self._uinput = None
+            self._evdev_connected_device = None
+            self._set_evdev_ready(False)
 
         def _evdev_loop(self):
             """Outer loop: find device -> listen -> reconnect on error."""
@@ -2045,7 +2120,7 @@ elif sys.platform == "linux":
                 self._rescan_requested.clear()
                 if not self._setup_evdev():
                     if self._running:
-                        time.sleep(2)
+                        self._wait_for_evdev_wakeup(2)
                     continue
                 try:
                     self._listen_loop()
@@ -2058,7 +2133,13 @@ elif sys.platform == "linux":
                 finally:
                     self._cleanup_evdev()
                 if self._running:
-                    time.sleep(1)
+                    if self._rescan_requested.is_set():
+                        continue
+                    self._wait_for_evdev_wakeup(1)
+
+        def _wait_for_evdev_wakeup(self, timeout):
+            self._evdev_wakeup.wait(timeout)
+            self._evdev_wakeup.clear()
 
         def _listen_loop(self):
             """Read events from the grabbed device, forward or block."""
@@ -2230,7 +2311,11 @@ elif sys.platform == "linux":
             if self._hid_gesture:
                 self._hid_gesture.stop()
                 self._hid_gesture = None
+            self._hid_ready = False
             self._connected_device = None
+            self._evdev_connected_device = None
+            self._rescan_requested.set()
+            self._evdev_wakeup.set()
             if self._evdev_thread:
                 self._evdev_thread.join(timeout=2)
                 self._evdev_thread = None

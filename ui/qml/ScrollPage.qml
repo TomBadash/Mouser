@@ -78,6 +78,7 @@ Item {
 
             Rectangle {
                 id: dpiCard
+                visible: backend.hidFeaturesReady
                 width: parent.width - 72
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: dpiContent.implicitHeight + 40

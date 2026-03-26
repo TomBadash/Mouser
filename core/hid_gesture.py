@@ -1248,6 +1248,9 @@ class HidGestureListener:
                 getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
             )
             self._rawxy_enabled = False
+            opened_transport = None
+            opened_up = int(up or 0)
+            opened_usage = int(usage or 0)
             open_attempts = []
             if _BACKEND_PREFERENCE in ("auto", "hidapi") and info.get("path"):
                 open_attempts.append(("hidapi", info))
@@ -1286,6 +1289,9 @@ class HidGestureListener:
                             d = _HidDeviceCompat(open_info["path"])
                         d.set_nonblocking(False)
                     self._dev = d
+                    opened_transport = open_info.get("transport") or transport
+                    opened_up = int(open_info.get("usage_page", up) or 0)
+                    opened_usage = int(open_info.get("usage", usage) or 0)
                     print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport}")
                     break
                 except Exception as exc:
@@ -1298,10 +1304,12 @@ class HidGestureListener:
                 continue
 
             # Try Bluetooth direct (0xFF) first, then Bolt receiver slots
+            reprog_found = False
             for idx in (0xFF, 1, 2, 3, 4, 5, 6):
                 self._dev_idx = idx
                 fi = self._find_feature(FEAT_REPROG_V4)
                 if fi is not None:
+                    reprog_found = True
                     self._feat_idx = fi
                     print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
                           f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
@@ -1343,6 +1351,13 @@ class HidGestureListener:
                         )
                         return True
                     break        # right device but divert failed
+            if not reprog_found:
+                print(
+                    "[HidGesture] Opened candidate but REPROG_V4 was not found "
+                    f"on tested devIdx values PID=0x{int(pid or 0):04X} "
+                    f"UP=0x{opened_up:04X} usage=0x{opened_usage:04X} "
+                    f"transport={opened_transport or '-'} source={source}"
+                )
 
             # Couldn't use this interface — close and try next
             try:

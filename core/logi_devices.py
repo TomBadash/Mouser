@@ -214,3 +214,20 @@ def build_connected_device_info(
         image_asset="icons/mouse-simple.svg",
         gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
     )
+
+
+def build_evdev_connected_device_info(
+    *,
+    product_id=None,
+    product_name=None,
+    transport="evdev",
+    source="evdev",
+    gesture_cids=None,
+) -> ConnectedDeviceInfo:
+    return build_connected_device_info(
+        product_id=product_id,
+        product_name=product_name,
+        transport=transport,
+        source=source,
+        gesture_cids=gesture_cids,
+    )

@@ -709,7 +709,7 @@ Item {
 
                                 Text {
                                     text: !backend.mouseConnected
-                                          ? "Turn on your Logitech mouse to start customizing buttons"
+                                          ? "Connect your Logitech mouse to start customizing buttons"
                                           : backend.hasInteractiveDeviceLayout
                                             ? "Click a dot to configure its action"
                                             : "Choose a layout mode below while we build a dedicated overlay"

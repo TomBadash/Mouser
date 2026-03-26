@@ -39,6 +39,7 @@ class Engine:
         self._app_detector = AppDetector(self._on_app_change)
         self._profile_change_cb = None       # UI callback
         self._connection_change_cb = None   # UI callback for device status
+        self._status_cb = None             # UI callback for status messages
         self._battery_read_cb = None        # UI callback for battery level
         self._dpi_read_cb = None            # UI callback for current DPI
         self._smart_shift_read_cb = None   # UI callback for Smart Shift mode
@@ -48,6 +49,13 @@ class Engine:
             self.cfg.get("settings", {}).get("debug_mode", False)
         )
         self._battery_poll_stop = threading.Event()
+        self._battery_poll_thread = None          # track the poller thread
+        self._last_connection_state = bool(self.hook.device_connected)
+        self._last_hid_features_ready = bool(self.hid_features_ready)
+        self._hid_replay_requested_this_launch = False
+        self._replay_inflight = False
+        self._replay_pending_rerun = False
+        self._replay_lock = threading.Lock()
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -201,6 +209,10 @@ class Engine:
         """Register ``cb(message: str)`` invoked for debug events."""
         self._debug_cb = cb
 
+    def set_status_callback(self, cb):
+        """Register ``cb(message: str)`` invoked for status messages."""
+        self._status_cb = cb
+
     def set_gesture_event_callback(self, cb):
         """Register ``cb(event: dict)`` invoked for structured gesture debug events."""
         self._gesture_event_cb = cb
@@ -232,6 +244,13 @@ class Engine:
             except Exception:
                 pass
 
+    def _emit_status(self, message):
+        if self._status_cb:
+            try:
+                self._status_cb(message)
+            except Exception:
+                pass
+
     def _emit_gesture_event(self, event):
         if not self._debug_events_enabled:
             return
@@ -256,29 +275,106 @@ class Engine:
         summary = ", ".join(f"{key}={mappings.get(key, 'none')}" for key in interesting)
         self._emit_debug(f"{prefix}: {summary}")
 
+    def _replay_saved_settings_once(self):
+        hg = self.hook._hid_gesture
+        if hg is None:
+            return False
+        if hasattr(hg, "connected_device") and hg.connected_device is None:
+            return False
+
+        replay_ok = True
+        saved_dpi = self.cfg.get("settings", {}).get("dpi")
+        if saved_dpi is not None:
+            if not hasattr(hg, "set_dpi"):
+                replay_ok = False
+            elif hg.set_dpi(saved_dpi):
+                if self._dpi_read_cb:
+                    try:
+                        self._dpi_read_cb(saved_dpi)
+                    except Exception:
+                        pass
+            else:
+                replay_ok = False
+
+        saved_ss = self.cfg.get("settings", {}).get("smart_shift_mode")
+        if saved_ss and getattr(hg, "smart_shift_supported", False):
+            if not hasattr(hg, "set_smart_shift"):
+                replay_ok = False
+            elif hg.set_smart_shift(saved_ss):
+                if self._smart_shift_read_cb:
+                    try:
+                        self._smart_shift_read_cb(saved_ss)
+                    except Exception:
+                        pass
+            else:
+                replay_ok = False
+        return replay_ok
+
+    def _replay_saved_settings_worker(self):
+        while True:
+            with self._replay_lock:
+                self._replay_pending_rerun = False
+            replay_ok = self._replay_saved_settings_once()
+            with self._replay_lock:
+                if self._replay_pending_rerun:
+                    continue
+                self._replay_inflight = False
+                if not replay_ok:
+                    self._emit_status(
+                        "Mouse reconnected, but saved device settings could not be restored yet."
+                    )
+                return
+
+    def _request_saved_settings_replay(self, *, startup_fallback=False):
+        with self._replay_lock:
+            if startup_fallback and self._hid_replay_requested_this_launch:
+                return
+            if self._replay_inflight:
+                self._replay_pending_rerun = True
+                return
+            self._hid_replay_requested_this_launch = True
+            self._replay_inflight = True
+        if startup_fallback:
+            self._emit_status("Using startup fallback to replay saved device settings")
+        threading.Thread(
+            target=self._replay_saved_settings_worker,
+            daemon=True,
+            name="SavedSettingsReplay",
+        ).start()
+
     def _on_connection_change(self, connected):
-        self._battery_poll_stop.set()
+        connection_changed = connected != self._last_connection_state
+        hid_features_ready = self.hid_features_ready
+        hid_features_changed = hid_features_ready != self._last_hid_features_ready
+        if connection_changed:
+            self._last_connection_state = connected
+            self._battery_poll_stop.set()
+            if self._battery_poll_thread is not None:
+                self._battery_poll_thread.join(timeout=5)
+                self._battery_poll_thread = None
+        self._last_hid_features_ready = hid_features_ready
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
             except Exception:
                 pass
-        if connected:
+        if connected and connection_changed:
             self._battery_poll_stop = threading.Event()
-            threading.Thread(
+            self._battery_poll_thread = threading.Thread(
                 target=self._battery_poll_loop,
                 args=(self._battery_poll_stop,),
                 daemon=True,
                 name="BatteryPoll",
-            ).start()
+            )
+            self._battery_poll_thread.start()
+        if hid_features_ready and hid_features_changed:
+            self._request_saved_settings_replay()
 
     def _battery_poll_loop(self, stop_event):
         """Read battery on connect and refresh it periodically until disconnected."""
-        if stop_event.wait(1):
-            return
         while not stop_event.is_set():
             hg = self.hook._hid_gesture
-            if hg:
+            if hg and hg.connected_device is not None:
                 level = hg.read_battery()
                 if stop_event.is_set():
                     return
@@ -287,7 +383,10 @@ class Engine:
                         self._battery_read_cb(level)
                     except Exception:
                         pass
-            if stop_event.wait(300):
+                if stop_event.wait(300):
+                    return
+                continue
+            if stop_event.wait(1):
                 return
 
     def set_battery_callback(self, cb):
@@ -310,6 +409,11 @@ class Engine:
     @property
     def connected_device(self):
         return getattr(self.hook, "connected_device", None)
+
+    @property
+    def hid_features_ready(self):
+        hg = self.hook._hid_gesture
+        return hg is not None and getattr(hg, "connected_device", None) is not None
 
     @property
     def enabled(self):
@@ -363,29 +467,14 @@ class Engine:
     def start(self):
         self.hook.start()
         self._app_detector.start()
-        # Apply persisted DPI and Smart Shift to the device once HID++ is ready
-        def _apply_saved_settings():
-            import time
-            time.sleep(3)  # give HID++ time to connect
-            hg = self.hook._hid_gesture
-            if hg:
-                saved_dpi = self.cfg.get("settings", {}).get("dpi")
-                if saved_dpi:
-                    hg.set_dpi(saved_dpi)
-                    if self._dpi_read_cb:
-                        try:
-                            self._dpi_read_cb(saved_dpi)
-                        except Exception:
-                            pass
-                saved_ss = self.cfg.get("settings", {}).get("smart_shift_mode")
-                if saved_ss and hg.smart_shift_supported:
-                    hg.set_smart_shift(saved_ss)
-                    if self._smart_shift_read_cb:
-                        try:
-                            self._smart_shift_read_cb(saved_ss)
-                        except Exception:
-                            pass
-        threading.Thread(target=_apply_saved_settings, daemon=True).start()
+        # Temporary safety-net: keep the old delayed replay path until the
+        # hid-ready transition path has proven out in the field.
+        def _startup_replay_fallback():
+            time.sleep(3)
+            if not self.hid_features_ready:
+                return
+            self._request_saved_settings_replay(startup_fallback=True)
+        threading.Thread(target=_startup_replay_fallback, daemon=True).start()
 
     def set_dpi_read_callback(self, cb):
         """Register a callback ``cb(dpi_value)`` invoked when DPI is read from device."""
@@ -397,5 +486,8 @@ class Engine:
 
     def stop(self):
         self._battery_poll_stop.set()
+        if self._battery_poll_thread is not None:
+            self._battery_poll_thread.join(timeout=5)
+            self._battery_poll_thread = None
         self._app_detector.stop()
         self.hook.stop()
