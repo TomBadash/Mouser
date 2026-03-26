@@ -94,6 +94,11 @@ if sys.platform == "win32":
     VK_MEDIA_STOP = 0xB2
     VK_MEDIA_PLAY_PAUSE = 0xB3
 
+    VK_PRIOR = 0x21   # Page Up
+    VK_NEXT  = 0x22   # Page Down
+    VK_END   = 0x23   # End
+    VK_HOME  = 0x24   # Home
+
     VK_F1 = 0x70
     VK_F2 = 0x71
     VK_F3 = 0x72
@@ -182,6 +187,7 @@ if sys.platform == "win32":
         VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
         VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
         VK_DELETE, VK_RETURN, VK_TAB,
+        VK_PRIOR, VK_NEXT, VK_HOME, VK_END,   # navigation cluster (extended)
     })
 
     def _is_extended(vk):
@@ -360,6 +366,26 @@ if sys.platform == "win32":
             "keys": [VK_MEDIA_PREV_TRACK],
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [VK_PRIOR],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [VK_NEXT],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [VK_HOME],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [VK_END],
+            "category": "Navigation",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -373,6 +399,7 @@ if sys.platform == "win32":
         "enter": VK_RETURN, "esc": VK_ESCAPE, "backspace": VK_BACK,
         "delete": VK_DELETE, "left": VK_LEFT, "right": VK_RIGHT,
         "up": VK_UP, "down": VK_DOWN,
+        "pageup": VK_PRIOR, "pagedown": VK_NEXT, "home": VK_HOME, "end": VK_END,
         "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45,
         "f": 0x46, "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A,
         "k": 0x4B, "l": 0x4C, "m": 0x4D, "n": 0x4E, "o": 0x4F,
@@ -416,6 +443,13 @@ elif sys.platform == "darwin":
     except ImportError:
         _QUARTZ_OK = False
 
+    try:
+        import AppKit as _AppKit
+        _APPKIT_OK = True
+    except ImportError:
+        _AppKit = None
+        _APPKIT_OK = False
+
     # CGKeyCode values used on macOS
     kVK_Command = 0x37
     kVK_Shift = 0x38
@@ -431,6 +465,10 @@ elif sys.platform == "darwin":
     kVK_RightArrow = 0x7C
     kVK_DownArrow = 0x7D
     kVK_UpArrow = 0x7E
+    kVK_Home = 0x73
+    kVK_End = 0x77
+    kVK_PageUp = 0x74
+    kVK_PageDown = 0x79
 
     kVK_ANSI_A = 0x00
     kVK_ANSI_S = 0x01
@@ -510,11 +548,10 @@ elif sys.platform == "darwin":
     def _send_media_key(key_id):
         """Send a media key event via NSEvent (Fn-key based)."""
         try:
-            import AppKit
-            ev_down = AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            ev_down = _AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
                 14, (0, 0), 0xa00, 0, 0, None, 8, (key_id << 16) | (0xa << 8), -1
             )
-            ev_up = AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            ev_up = _AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
                 14, (0, 0), 0xb00, 0, 0, None, 8, (key_id << 16) | (0xb << 8), -1
             )
             cg_down = ev_down.CGEvent()
@@ -790,6 +827,26 @@ elif sys.platform == "darwin":
             "mac_fn": _NX_PREV,
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [kVK_PageUp],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [kVK_PageDown],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [kVK_Home],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [kVK_End],
+            "category": "Navigation",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -803,6 +860,8 @@ elif sys.platform == "darwin":
         "enter": kVK_Return, "esc": kVK_Escape, "backspace": kVK_Delete,
         "delete": kVK_ForwardDelete, "left": kVK_LeftArrow,
         "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
+        "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
+        "home": kVK_Home, "end": kVK_End,
         "a": 0x00, "b": 0x0B, "c": 0x08, "d": 0x02, "e": 0x0E,
         "f": 0x03, "g": 0x05, "h": 0x04, "i": 0x22, "j": 0x26,
         "k": 0x28, "l": 0x25, "m": 0x2E, "n": 0x2D, "o": 0x1F,
@@ -853,6 +912,8 @@ elif sys.platform == "linux":
     KEY_DOWN = 108
     KEY_PAGEUP = 104
     KEY_PAGEDOWN = 109
+    KEY_HOME = 102
+    KEY_END = 107
     KEY_A = 30; KEY_B = 48; KEY_C = 46; KEY_D = 32; KEY_E = 18
     KEY_F = 33; KEY_G = 34; KEY_H = 35; KEY_I = 23; KEY_J = 36
     KEY_K = 37; KEY_L = 38; KEY_M = 50; KEY_N = 49; KEY_O = 24
@@ -883,7 +944,8 @@ elif sys.platform == "linux":
     _ALL_KEY_CODES = [
         KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_LEFTMETA,
         KEY_TAB, KEY_SPACE, KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_ESC,
-        KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN, KEY_PAGEUP, KEY_PAGEDOWN,
+        KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN,
+        KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END,
         KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
         KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
         KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
@@ -1088,6 +1150,26 @@ elif sys.platform == "linux":
             "keys": [KEY_PREVIOUSSONG],
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [KEY_PAGEUP],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [KEY_PAGEDOWN],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [KEY_HOME],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [KEY_END],
+            "category": "Navigation",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1101,6 +1183,8 @@ elif sys.platform == "linux":
         "enter": KEY_ENTER, "esc": KEY_ESC, "backspace": KEY_BACKSPACE,
         "delete": KEY_DELETE, "left": KEY_LEFT, "right": KEY_RIGHT,
         "up": KEY_UP, "down": KEY_DOWN,
+        "pageup": KEY_PAGEUP, "pagedown": KEY_PAGEDOWN,
+        "home": KEY_HOME, "end": KEY_END,
         "a": KEY_A, "b": KEY_B, "c": KEY_C, "d": KEY_D, "e": KEY_E,
         "f": KEY_F, "g": KEY_G, "h": KEY_H, "i": KEY_I, "j": KEY_J,
         "k": KEY_K, "l": KEY_L, "m": KEY_M, "n": KEY_N, "o": KEY_O,

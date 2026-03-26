@@ -222,6 +222,15 @@ class Backend(QObject):
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
+    @Property(float, notify=settingsChanged)
+    def scrollSpeed(self):
+        v = self._cfg.get("settings", {}).get("scroll_speed", 1.0)
+        return float(max(0.5, min(3.0, v)))
+
+    @Property(bool, notify=settingsChanged)
+    def smoothScroll(self):
+        return bool(self._cfg.get("settings", {}).get("smooth_scroll", False))
+
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
@@ -512,6 +521,23 @@ class Backend(QObject):
     @Slot(bool)
     def setInvertHScroll(self, value):
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(float)
+    def setScrollSpeed(self, value):
+        clamped = round(max(0.5, min(3.0, float(value))), 2)
+        self._cfg.setdefault("settings", {})["scroll_speed"] = clamped
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(bool)
+    def setSmoothScroll(self, enabled):
+        self._cfg.setdefault("settings", {})["smooth_scroll"] = bool(enabled)
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

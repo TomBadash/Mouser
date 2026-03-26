@@ -239,6 +239,7 @@ if sys.platform == "win32":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.scroll_speed = 1.0
             self._pending_vscroll = 0
             self._pending_hscroll = 0
             self._vscroll_posted = False
@@ -641,6 +642,8 @@ if sys.platform == "win32":
                 self._pending_vscroll = 0
                 self._vscroll_posted = False
                 if delta != 0:
+                    if self.scroll_speed != 1.0:
+                        delta = int(round(delta * self.scroll_speed)) or (1 if delta > 0 else -1)
                     _inject_scroll_impl(MOUSEEVENTF_WHEEL, delta)
                 return 0
 
@@ -933,7 +936,136 @@ elif sys.platform == "darwin":
     _BTN_MIDDLE = 2
     _BTN_BACK = 3
     _BTN_FORWARD = 4
-    _SCROLL_INVERT_MARKER = 0x4D4F5553
+    _SCROLL_INVERT_MARKER  = 0x4D4F5553
+    _SMOOTH_SCROLL_MARKER  = 0x536D6F6F   # "Smoo"
+
+    # ── Smooth-scroll parameters ───────────────────────────────────────────
+    # Each discrete wheel tick injects SMOOTH_BASE_PIXELS * scroll_speed of
+    # initial velocity.  The velocity decays by SMOOTH_FRICTION each frame
+    # (at ~60 fps) until it falls below SMOOTH_MIN_VELOCITY.
+    # Total distance per single tick (speed=1):
+    #   base / (1 - friction) = 55 / 0.15 ≈ 367 px  (~0.55 s to coast)
+    _SMOOTH_BASE_PIXELS   = 55.0
+    _SMOOTH_FRICTION      = 0.85
+    _SMOOTH_MAX_VELOCITY  = 900.0   # cap to prevent runaway accumulation
+    _SMOOTH_MIN_VELOCITY  = 0.8
+    _SMOOTH_FRAME_S       = 1.0 / 60
+
+    class _SmoothScroller:
+        """
+        Velocity-based smooth-scroll engine.
+
+        Runs a single background thread that emits decelerating
+        CGEventScrollWheel events, giving the page a 'coast to stop' feel
+        similar to Logi Options.
+
+        Memory notes
+        ────────────
+        • Exactly one background thread is alive at any time.
+        • stop() joins the thread (max 0.1 s) and nulls the reference.
+        • restart() is called by MouseHook.start() so a re-used hook instance
+          always has a live thread.
+        • push() is a no-op when the scroller is stopped, so no velocity
+          accumulates in a dead object.
+        • _emit() explicitly deletes the CGEvent reference after posting,
+          allowing the CF retain-count to drop to zero immediately.
+        """
+
+        def __init__(self, base_px, friction, max_vel, min_vel, frame_s):
+            self._base_px  = base_px
+            self._friction = friction
+            self._max_vel  = max_vel
+            self._min_vel  = min_vel
+            self._frame_s  = frame_s
+            self._velocity = 0.0
+            self._lock     = threading.Lock()
+            self._wakeup   = threading.Event()
+            self._alive    = False
+            self._thread   = None
+            self._start_thread()
+
+        # ── public API ────────────────────────────────────────────────────
+
+        def push(self, direction: int, speed_factor: float):
+            """
+            Add an impulse from a single wheel tick.
+            direction: +1 (down) or -1 (up) after accounting for invert_vscroll.
+            speed_factor: backend scroll_speed multiplier.
+            No-op when the scroller has been stopped.
+            """
+            if not self._alive:
+                return
+            delta = direction * self._base_px * speed_factor
+            with self._lock:
+                new_vel = self._velocity + delta
+                if new_vel > 0:
+                    new_vel = min(new_vel,  self._max_vel)
+                else:
+                    new_vel = max(new_vel, -self._max_vel)
+                self._velocity = new_vel
+            self._wakeup.set()
+
+        def stop(self):
+            """Signal the thread to exit and wait for it (≤0.1 s)."""
+            self._alive = False
+            with self._lock:
+                self._velocity = 0.0   # discard pending motion
+            self._wakeup.set()         # unblock thread
+            t, self._thread = self._thread, None
+            if t and t.is_alive():
+                t.join(timeout=0.1)
+
+        def restart(self):
+            """Re-arm the scroller after stop() — called by MouseHook.start()."""
+            if self._thread and self._thread.is_alive():
+                return   # already running, nothing to do
+            with self._lock:
+                self._velocity = 0.0
+            self._start_thread()
+
+        # ── private ───────────────────────────────────────────────────────
+
+        def _start_thread(self):
+            self._alive = True
+            self._wakeup.clear()
+            self._thread = threading.Thread(
+                target=self._run, daemon=True, name="SmoothScroll")
+            self._thread.start()
+
+        def _run(self):
+            while self._alive:
+                self._wakeup.wait()
+                self._wakeup.clear()
+                # Drain velocity until it falls below the stop threshold
+                while self._alive:
+                    with self._lock:
+                        vel = self._velocity
+                        if abs(vel) < self._min_vel:
+                            self._velocity = 0.0
+                            break
+                        pixels = int(round(vel))
+                        self._velocity *= self._friction
+                    if pixels:
+                        self._emit(pixels)
+                    time.sleep(self._frame_s)
+            # Zero velocity on exit so a later restart starts clean
+            with self._lock:
+                self._velocity = 0.0
+
+        @staticmethod
+        def _emit(pixels: int):
+            """Create, post and immediately release a pixel-unit scroll event."""
+            try:
+                event = Quartz.CGEventCreateScrollWheelEvent(
+                    None, Quartz.kCGScrollEventUnitPixel, 1, pixels)
+                if event:
+                    Quartz.CGEventSetIntegerValueField(
+                        event, Quartz.kCGEventSourceUserData,
+                        _SMOOTH_SCROLL_MARKER)
+                    Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+                    del event   # drop CF retain-count immediately
+            except Exception as e:
+                print(f"[SmoothScroll] emit error: {e}")
 
     class MouseHook:
         """
@@ -953,6 +1085,11 @@ elif sys.platform == "darwin":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.scroll_speed = 1.0
+            self.smooth_scroll_enabled = False
+            self._smooth_scroller = _SmoothScroller(
+                _SMOOTH_BASE_PIXELS, _SMOOTH_FRICTION,
+                _SMOOTH_MAX_VELOCITY, _SMOOTH_MIN_VELOCITY, _SMOOTH_FRAME_S)
             self._gesture_active = False
             self._hid_gesture = None
             self._dispatch_queue = queue.Queue()
@@ -1080,6 +1217,25 @@ elif sys.platform == "darwin":
                 value = Quartz.CGEventGetIntegerValueField(cg_event, field)
                 if value:
                     Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
+
+        def _scale_vscroll_event(self, cg_event, factor):
+            """Multiply vertical (axis-1) scroll delta fields by factor in-place."""
+            for field_name in (
+                "kCGScrollWheelEventDeltaAxis1",
+                "kCGScrollWheelEventFixedPtDeltaAxis1",
+                "kCGScrollWheelEventPointDeltaAxis1",
+            ):
+                field = getattr(Quartz, field_name, None)
+                if field is None:
+                    continue
+                value = Quartz.CGEventGetIntegerValueField(cg_event, field)
+                if value == 0:
+                    continue
+                new_value = int(round(value * factor))
+                # Preserve non-zero sign so a single click is never lost
+                if new_value == 0:
+                    new_value = 1 if value > 0 else -1
+                Quartz.CGEventSetIntegerValueField(cg_event, field, new_value)
 
         def _post_inverted_scroll_event(self, cg_event):
             v_point = Quartz.CGEventGetIntegerValueField(
@@ -1372,11 +1528,9 @@ elif sys.platform == "darwin":
                         should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
 
                 elif event_type == Quartz.kCGEventScrollWheel:
-                    if (
-                        Quartz.CGEventGetIntegerValueField(
-                            cg_event, Quartz.kCGEventSourceUserData
-                        ) == _SCROLL_INVERT_MARKER
-                    ):
+                    user_data = Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGEventSourceUserData)
+                    if user_data in (_SCROLL_INVERT_MARKER, _SMOOTH_SCROLL_MARKER):
                         return cg_event
                     h_delta = Quartz.CGEventGetIntegerValueField(
                         cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2)
@@ -1401,12 +1555,30 @@ elif sys.platform == "darwin":
                         mouse_event = None
                     if should_block:
                         return None
+                    # ── smooth scrolling: intercept vertical ticks ────────────────
+                    if self.smooth_scroll_enabled:
+                        int_delta = Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGScrollWheelEventDeltaAxis1)
+                        if int_delta != 0:
+                            direction = 1 if int_delta > 0 else -1
+                            if self.invert_vscroll:
+                                direction = -direction
+                            self._smooth_scroller.push(direction, self.scroll_speed)
+                            return None  # block original; scroller emits smooth events
+                    # ── normal path: speed scaling + optional invert ──────────────
+                    if self.scroll_speed != 1.0:
+                        self._scale_vscroll_event(cg_event, self.scroll_speed)
                     if self.invert_vscroll or self.invert_hscroll:
                         if self._post_inverted_scroll_event(cg_event):
                             return None
 
                 if mouse_event:
-                    self._dispatch_queue.put(mouse_event)
+                    # Dispatch button events inline (no queue hop) to minimise
+                    # latency.  _send_media_key / send_key_combo are fast (<1 ms)
+                    # so there is no risk of stalling the CGEventTap.
+                    # Scroll/gesture events are already handled above and have
+                    # mouse_event set to None, so they still go through the queue.
+                    self._dispatch(mouse_event)
 
                 if should_block:
                     return None
@@ -1515,6 +1687,7 @@ elif sys.platform == "darwin":
             Quartz.CGEventTapEnable(self._tap, True)
             print("[MouseHook] CGEventTap enabled and integrated with run loop", flush=True)
             self._running = True
+            self._smooth_scroller.restart()   # re-arm if hook was restarted
 
             self._dispatch_thread = threading.Thread(
                 target=self._dispatch_worker, daemon=True, name="MouseHook-dispatch")
@@ -1542,6 +1715,7 @@ elif sys.platform == "darwin":
 
         def stop(self):
             self._running = False
+            self._smooth_scroller.stop()
             if self._hid_gesture:
                 self._hid_gesture.stop()
                 self._hid_gesture = None
@@ -1598,6 +1772,7 @@ elif sys.platform == "linux":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.scroll_speed = 1.0
             self._gesture_active = False
             self._hid_gesture = None
             self._device_connected = False
@@ -2137,8 +2312,13 @@ elif sys.platform == "linux":
             # Vertical scroll (low-res and hi-res)
             _REL_WHEEL_HI_RES = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
             if code == _ecodes.REL_WHEEL or code == _REL_WHEEL_HI_RES:
+                out_value = value
+                if self.scroll_speed != 1.0:
+                    out_value = int(round(value * self.scroll_speed)) or (1 if value > 0 else -1)
                 if self.invert_vscroll:
-                    self._uinput.write(_ecodes.EV_REL, code, -value)
+                    self._uinput.write(_ecodes.EV_REL, code, -out_value)
+                elif out_value != value:
+                    self._uinput.write(_ecodes.EV_REL, code, out_value)
                 else:
                     self._uinput.write_event(event)
                 return

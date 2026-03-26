@@ -45,11 +45,12 @@ os.environ.setdefault("QML2_IMPORT_PATH", os.path.join(_pyside_dir, "qml"))
 os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 
 _t3 = _time.perf_counter()
-from core.config import load_config
+from core.config import load_config, save_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
 from ui.backend import Backend
+from ui.locale_manager import LocaleManager
 _t4 = _time.perf_counter()
 
 def _print_startup_times():
@@ -335,7 +336,7 @@ class SystemIconProvider(QQuickImageProvider):
         return pixmap
 
 
-def _check_accessibility() -> bool:
+def _check_accessibility(locale_mgr: "LocaleManager") -> bool:
     """On macOS, check if Accessibility permission is granted.
 
     Returns True if already trusted, False otherwise.
@@ -348,16 +349,9 @@ def _check_accessibility() -> bool:
             print("[Mouser] Accessibility permission not granted")
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Icon.Warning)
-            msg.setWindowTitle("Accessibility Permission Required")
-            msg.setText(
-                "Mouser needs Accessibility permission to intercept "
-                "mouse button events.\n\n"
-                "macOS should have opened the System Settings prompt.\n"
-                "Please grant permission, then restart Mouser."
-            )
-            msg.setInformativeText(
-                "System Settings -> Privacy & Security -> Accessibility"
-            )
+            msg.setWindowTitle(locale_mgr.tr("accessibility.title"))
+            msg.setText(locale_mgr.tr("accessibility.text"))
+            msg.setInformativeText(locale_mgr.tr("accessibility.info"))
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
         return bool(trusted)
@@ -370,7 +364,8 @@ def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
     argv, hid_backend, start_hidden = _parse_cli_args(sys.argv)
-    cfg_settings = load_config().get("settings", {})
+    cfg = load_config()
+    cfg_settings = cfg.get("settings", {})
     launch_hidden = start_hidden or bool(cfg_settings.get("start_minimized", False))
     if hid_backend:
         try:
@@ -386,6 +381,10 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     _configure_macos_app_mode()
     ui_state = UiState(app)
+
+    # ── Locale Manager ─────────────────────────────────────────
+    initial_lang = cfg_settings.get("language", "en")
+    locale_mgr = LocaleManager(language=initial_lang)
 
     # macOS: allow Ctrl+C in terminal to quit the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -424,6 +423,7 @@ def main():
     qml_engine.addImageProvider("systemicons", SystemIconProvider())
     qml_engine.rootContext().setContextProperty("backend", backend)
     qml_engine.rootContext().setContextProperty("uiState", ui_state)
+    qml_engine.rootContext().setContextProperty("lm", locale_mgr)
     qml_engine.rootContext().setContextProperty("launchHidden", launch_hidden)
     qml_engine.rootContext().setContextProperty(
         "applicationDirPath", ROOT.replace("\\", "/"))
@@ -456,7 +456,7 @@ def main():
     print(f"[Startup] TOTAL to window:  {(_t8-_t0)*1000:7.1f} ms")
 
     # ── Accessibility check (macOS) ──────────────────────────────
-    _check_accessibility()
+    _check_accessibility(locale_mgr)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
     from PySide6.QtCore import QTimer
@@ -471,27 +471,29 @@ def main():
 
     tray_menu = QMenu()
 
-    open_action = QAction("Open Settings", tray_menu)
+    open_action = QAction(locale_mgr.tr("tray.open_settings"), tray_menu)
     open_action.triggered.connect(show_main_window)
     tray_menu.addAction(open_action)
 
-    toggle_action = QAction("Disable Remapping", tray_menu)
+    toggle_action = QAction(locale_mgr.tr("tray.disable_remapping"), tray_menu)
 
     def toggle_remapping():
         enabled = not engine.enabled
         engine.set_enabled(enabled)
         toggle_action.setText(
-            "Disable Remapping" if enabled else "Enable Remapping")
+            locale_mgr.tr("tray.disable_remapping") if enabled
+            else locale_mgr.tr("tray.enable_remapping"))
 
     toggle_action.triggered.connect(toggle_remapping)
     tray_menu.addAction(toggle_action)
 
-    debug_action = QAction("Enable Debug Mode", tray_menu)
+    debug_action = QAction(locale_mgr.tr("tray.enable_debug"), tray_menu)
 
     def sync_debug_action():
         debug_enabled = bool(backend.debugMode)
         debug_action.setText(
-            "Disable Debug Mode" if debug_enabled else "Enable Debug Mode"
+            locale_mgr.tr("tray.disable_debug") if debug_enabled
+            else locale_mgr.tr("tray.enable_debug")
         )
 
     def toggle_debug_mode():
@@ -507,7 +509,7 @@ def main():
 
     tray_menu.addSeparator()
 
-    quit_action = QAction("Quit Mouser", tray_menu)
+    quit_action = QAction(locale_mgr.tr("tray.quit"), tray_menu)
 
     def quit_app():
         engine.stop()
@@ -516,6 +518,28 @@ def main():
 
     quit_action.triggered.connect(quit_app)
     tray_menu.addAction(quit_action)
+
+    def _update_tray_texts():
+        """Refresh tray menu labels after a language change."""
+        open_action.setText(locale_mgr.tr("tray.open_settings"))
+        quit_action.setText(locale_mgr.tr("tray.quit"))
+        sync_debug_action()
+        # Re-sync toggle text based on current engine state
+        toggle_action.setText(
+            locale_mgr.tr("tray.disable_remapping") if engine.enabled
+            else locale_mgr.tr("tray.enable_remapping"))
+
+    def _save_language():
+        """Persist the selected language to config.json."""
+        try:
+            saved_cfg = load_config()
+            saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
+            save_config(saved_cfg)
+        except Exception as exc:
+            print(f"[Mouser] Failed to save language preference: {exc}")
+
+    locale_mgr.languageChanged.connect(_update_tray_texts)
+    locale_mgr.languageChanged.connect(_save_language)
 
     tray.setContextMenu(tray_menu)
     tray.activated.connect(lambda reason: (
@@ -531,7 +555,7 @@ def main():
         def _tray_minimized_notice():
             tray.showMessage(
                 "Mouser",
-                "Mouser is running in the system tray. Click the icon to open settings.",
+                locale_mgr.tr("tray.tray_message"),
                 QSystemTrayIcon.MessageIcon.Information,
                 5000,
             )
