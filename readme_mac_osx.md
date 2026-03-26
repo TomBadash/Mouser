@@ -8,6 +8,7 @@ Mouser now supports macOS alongside Windows. This document covers macOS-specific
 - **Python 3.11+** (via Homebrew or python.org)
 - **Apple Silicon / M1**: use an `arm64` Python interpreter if you want a native `arm64` app bundle
 - **Accessibility permission** — required for CGEventTap to intercept mouse events
+- **Input Monitoring permission** — required for IOKit HID++ access (gesture button, DPI, Smart Shift)
 
 ### Python Dependencies
 
@@ -19,22 +20,45 @@ On macOS, this will also install:
 - `pyobjc-framework-Quartz` — for CGEventTap (mouse hooking) and CGEvent (key simulation)
 - `pyobjc-framework-Cocoa` — for NSWorkspace (app detection) and NSEvent (media keys)
 
-## Granting Accessibility Permission
+## Granting Permissions
 
-Mouser uses a **CGEventTap** to intercept and suppress mouse button events. macOS requires Accessibility permission for this:
+Mouser requires **two** macOS privacy permissions to fully function:
+
+### 1. Accessibility (required for button interception)
+
+Mouser uses a **CGEventTap** to intercept and suppress mouse button events:
 
 1. Open **System Settings → Privacy & Security → Accessibility**
-2. Click the **+** button
-3. Add either:
-  - **Terminal.app** / **iTerm2** (if running from terminal)
-  - The Python binary (e.g. `/usr/local/bin/python3`)
-  - The built `.app` bundle (if packaged)
-4. Ensure the checkbox is **enabled**
-5. Restart Mouser if it was already running
+2. Click the **+** button and add `Mouser.app` (or Terminal / Python if running from source)
+3. Ensure the checkbox is **enabled**
+4. Restart Mouser
 
 If Accessibility is not granted, Mouser will print:
 ```
 [MouseHook] ERROR: Failed to create CGEventTap!
+```
+
+### 2. Input Monitoring (required for HID++ device features)
+
+Mouser uses **IOKit IOHIDManager** to communicate with the Logitech HID++ channel — enabling the gesture button, DPI control, Smart Shift, and real device name detection. macOS protects vendor-specific HID interfaces under the Input Monitoring privacy control:
+
+1. Open **System Settings → Privacy & Security → Input Monitoring**
+2. Click the **+** button and add `Mouser.app`
+3. Ensure the checkbox is **enabled**
+4. Restart Mouser
+
+If Input Monitoring is not granted, the mouse will show as **"Not Connected"** (the device is visible to the OS but Mouser cannot open the HID++ channel), and you will see in logs:
+```
+[HidGesture] native enumerate error: IOHIDManagerOpen failed: ...
+```
+
+> **After a rebuild**, the new binary has a different signature. You must remove the old entry and re-add `Mouser.app` in both permission panes, then restart.
+
+### Troubleshooting
+
+Run the app from Terminal to see live diagnostic output:
+```bash
+/path/to/dist/Mouser.app/Contents/MacOS/Mouser
 ```
 
 ## Platform Differences

@@ -174,16 +174,17 @@ Item {
             spacing: 1
 
             Text {
-                text: hotspot.label
+                // lm.strings read creates a binding dependency → auto-updates on language change
+                text: { var _lang = lm.strings; return lm.trButton(hotspot.label) }
                 font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                 color: isSelected ? theme.accent : theme.textPrimary
             }
 
             Text {
-                text: hotspot.sublabel
+                text: { var _lang = lm.strings; return lm.trAction(hotspot.sublabel) }
                 font { family: uiState.fontFamily; pixelSize: 10 }
                 color: theme.textSecondary
-                visible: text !== ""
+                visible: hotspot.sublabel !== ""
                 width: Math.min(implicitWidth, 220)
                 elide: Text.ElideRight
             }

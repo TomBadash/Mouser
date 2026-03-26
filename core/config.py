@@ -92,6 +92,8 @@ DEFAULT_CONFIG = {
         "hscroll_threshold": 1,
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
+        "scroll_speed": 1.0,      # vertical scroll speed multiplier (0.5–3.0)
+        "smooth_scroll": False,   # inertia / coast-to-stop scroll (macOS)
         "dpi": 1000,              # pointer speed / DPI setting
         "smart_shift_mode": "ratchet",
         "gesture_threshold": 50,
@@ -99,6 +101,7 @@ DEFAULT_CONFIG = {
         "gesture_timeout_ms": 3000,
         "gesture_cooldown_ms": 500,
         "appearance_mode": "system",
+        "language": "en",
         "debug_mode": False,
         "device_layout_overrides": {},
     },
@@ -297,8 +300,11 @@ def _migrate(cfg):
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
+    cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
+    cfg["settings"].setdefault("scroll_speed", 1.0)
+    cfg["settings"].setdefault("smooth_scroll", False)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

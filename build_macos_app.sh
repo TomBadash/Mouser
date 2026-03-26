@@ -8,12 +8,29 @@ ICONSET_DIR="$BUILD_DIR/Mouser.iconset"
 COMMITTED_ICON="$ROOT_DIR/images/AppIcon.icns"
 GENERATED_ICON="$BUILD_DIR/Mouser.icns"
 SOURCE_ICON="$ROOT_DIR/images/logo_icon.png"
+VENV_DIR="$ROOT_DIR/.venv"
 export PYINSTALLER_CONFIG_DIR="$BUILD_DIR/pyinstaller"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This build script must be run on macOS."
   exit 1
 fi
+
+# ── Virtual environment setup ───────────────────────────────────
+if [[ ! -f "$VENV_DIR/bin/python3" ]]; then
+  echo "Creating virtual environment at $VENV_DIR ..."
+  python3 -m venv "$VENV_DIR"
+fi
+
+# Activate venv so all subsequent python3/pip commands use it
+source "$VENV_DIR/bin/activate"
+
+# Install / upgrade dependencies inside the venv
+echo "Installing dependencies into venv ..."
+pip install --quiet --upgrade pip
+pip install --quiet -r "$ROOT_DIR/requirements.txt"
+
+echo "Python: $(which python3)  PySide6: $(python3 -c 'import PySide6; print(PySide6.__version__)')"
 
 mkdir -p "$BUILD_DIR"
 if [[ -f "$COMMITTED_ICON" ]]; then
@@ -34,7 +51,7 @@ else
   fi
 fi
 
-python3 -m PyInstaller "$ROOT_DIR/Mouser-mac.spec" --noconfirm
+python3 -m PyInstaller "$ROOT_DIR/Mouser-mac.spec" --noconfirm --clean
 
 if command -v codesign >/dev/null 2>&1; then
   codesign --force --deep --sign - "$ROOT_DIR/dist/Mouser.app"

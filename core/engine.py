@@ -66,10 +66,12 @@ class Engine:
         """Register callbacks and block events for all mapped buttons."""
         mappings = get_active_mappings(self.cfg)
 
-        # Apply scroll inversion settings to the hook
+        # Apply scroll settings to the hook
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        self.hook.scroll_speed = float(settings.get("scroll_speed", 1.0))
+        self.hook.smooth_scroll_enabled = bool(settings.get("smooth_scroll", False))
         self.hook.debug_mode = self._debug_events_enabled
         self.hook.configure_gestures(
             enabled=any(mappings.get(key, "none") != "none"

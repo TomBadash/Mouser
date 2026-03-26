@@ -23,6 +23,7 @@ ApplicationWindow {
     property int currentPage: 0
     property Item hoveredNavItem: null
     property string hoveredNavText: ""
+    property string hoveredNavTipKey: ""
     property real hoveredNavCenterX: 0
     property real hoveredNavCenterY: 0
 
@@ -73,8 +74,8 @@ ApplicationWindow {
 
                 Repeater {
                     model: [
-                        { icon: "mouse-simple", tip: "Mouse & Profiles", page: 0 },
-                        { icon: "sliders-horizontal", tip: "Point & Scroll", page: 1 }
+                        { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+                        { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
                     ]
 
                     delegate: FocusScope {
@@ -84,8 +85,8 @@ ApplicationWindow {
                         activeFocusOnTab: true
 
                         Accessible.role: Accessible.Button
-                        Accessible.name: modelData.tip
-                        Accessible.description: "Open " + modelData.tip
+                        Accessible.name: lm.strings[modelData.tipKey] || modelData.tipKey
+                        Accessible.description: "Open " + (lm.strings[modelData.tipKey] || modelData.tipKey)
 
                         Keys.onReturnPressed: root.currentPage = modelData.page
                         Keys.onEnterPressed: root.currentPage = modelData.page
@@ -142,11 +143,13 @@ ApplicationWindow {
                                 if (containsMouse) {
                                     var p = navItem.mapToItem(overlayLayer, navItem.width, navItem.height / 2)
                                     root.hoveredNavItem = navItem
-                                    root.hoveredNavText = modelData.tip
+                                    root.hoveredNavTipKey = modelData.tipKey
+                                    root.hoveredNavText = lm.strings[modelData.tipKey] || modelData.tipKey
                                     root.hoveredNavCenterX = p.x
                                     root.hoveredNavCenterY = p.y
                                 } else if (root.hoveredNavItem === navItem) {
                                     root.hoveredNavItem = null
+                                    root.hoveredNavTipKey = ""
                                     root.hoveredNavText = ""
                                 }
                             }
@@ -193,7 +196,9 @@ ApplicationWindow {
             Text {
                 id: navTooltipText
                 anchors.centerIn: parent
-                text: root.hoveredNavText
+                text: root.hoveredNavTipKey
+                      ? (lm.strings[root.hoveredNavTipKey] || root.hoveredNavTipKey)
+                      : root.hoveredNavText
                 font {
                     family: uiState.fontFamily
                     pixelSize: 12
