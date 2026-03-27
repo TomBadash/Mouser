@@ -50,65 +50,63 @@ class SetupLoggingTests(unittest.TestCase):
         self._orig_handlers = logging.root.handlers[:]
         self._orig_level = logging.root.level
         logging.root.handlers.clear()
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp_dir.name
 
     def tearDown(self):
         # Restore stdout first so handler.close() can safely write errors to stderr
         sys.stdout = self._orig_stdout
+        # Close handlers BEFORE temp dir cleanup to release file locks (Windows)
         for h in logging.root.handlers[:]:
             h.close()
         logging.root.handlers.clear()
         logging.root.handlers.extend(self._orig_handlers)
         logging.root.setLevel(self._orig_level)
+        self._tmp_dir.cleanup()
 
     def test_creates_log_file_on_startup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                path = log_setup.setup_logging()
-            self.assertTrue(os.path.exists(path))
-            self.assertEqual(path, os.path.join(tmp, "mouser.log"))
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            path = log_setup.setup_logging()
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(path, os.path.join(self.tmp, "mouser.log"))
 
     def test_returns_empty_string_when_already_configured(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
-                result = log_setup.setup_logging()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
+            result = log_setup.setup_logging()
         self.assertEqual(result, "")
 
     def test_redirects_stdout_to_stream_to_logger(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
         self.assertIsInstance(sys.stdout, log_setup._StreamToLogger)
 
     def test_stderr_not_redirected(self):
         orig_stderr = sys.stderr
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
         self.assertIs(sys.stderr, orig_stderr)
 
     def test_print_output_written_to_log_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
-            print("[Test] hello from print")
-            for h in logging.root.handlers:
-                h.flush()
-            log_path = os.path.join(tmp, "mouser.log")
-            with open(log_path, encoding="utf-8") as f:
-                content = f.read()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
+        print("[Test] hello from print")
+        for h in logging.root.handlers:
+            h.flush()
+        log_path = os.path.join(self.tmp, "mouser.log")
+        with open(log_path, encoding="utf-8") as f:
+            content = f.read()
         self.assertIn("[Test] hello from print", content)
 
     def test_log_entries_include_timestamp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
-            print("[Test] timestamped line")
-            for h in logging.root.handlers:
-                h.flush()
-            log_path = os.path.join(tmp, "mouser.log")
-            with open(log_path, encoding="utf-8") as f:
-                content = f.read()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
+        print("[Test] timestamped line")
+        for h in logging.root.handlers:
+            h.flush()
+        log_path = os.path.join(self.tmp, "mouser.log")
+        with open(log_path, encoding="utf-8") as f:
+            content = f.read()
         # Timestamp format: "YYYY-MM-DD HH:MM:SS"
         import re
         self.assertRegex(content, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
@@ -120,20 +118,18 @@ class SetupLoggingTests(unittest.TestCase):
         self.assertEqual(path, "")
 
     def test_no_console_handler_when_frozen(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with (
-                patch.object(log_setup, "_get_log_dir", return_value=tmp),
-                patch.object(sys, "frozen", True, create=True),
-            ):
-                log_setup.setup_logging()
+        with (
+            patch.object(log_setup, "_get_log_dir", return_value=self.tmp),
+            patch.object(sys, "frozen", True, create=True),
+        ):
+            log_setup.setup_logging()
         handler_types = [type(h) for h in logging.root.handlers]
         self.assertNotIn(logging.StreamHandler, handler_types)
 
     def test_rotating_handler_configured_with_correct_size(self):
         import logging.handlers
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(log_setup, "_get_log_dir", return_value=tmp):
-                log_setup.setup_logging()
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
         rotating = next(
             h for h in logging.root.handlers
             if isinstance(h, logging.handlers.RotatingFileHandler)
