@@ -738,6 +738,9 @@ class HidGestureListener:
             expected_funcs = {func, (func + 1) & 0x0F}
             if r_feat == feat and r_sw == MY_SW and r_func in expected_funcs:
                 return msg
+            # Forward non-matching reports (e.g. diverted button events) so
+            # button held-state tracking stays in sync during command exchanges.
+            self._on_report(raw)
         print(f"[HidGesture] request timeout feat=0x{feat:02X} func=0x{func:X} "
               f"devIdx=0x{self._dev_idx:02X} params=[{_hex_bytes(req_params)}]")
         return None
@@ -1474,6 +1477,8 @@ class HidGestureListener:
             self._pending_battery = None
             self._last_logged_battery = None
             self._held = False
+            for info in self._extra_diverts.values():
+                info["held"] = False
             self._gesture_cid = DEFAULT_GESTURE_CID
             self._gesture_candidates = list(DEFAULT_GESTURE_CIDS)
             self._rawxy_enabled = False
