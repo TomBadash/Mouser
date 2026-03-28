@@ -102,14 +102,17 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 
 <p align="center">
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/badge/Windows-Mouser--Windows.zip-00d4aa?style=for-the-badge&logo=windows" alt="Windows Download" />
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-Windows.zip/total?style=for-the-badge&color=00d4aa&logo=windows&label=Windows" alt="Windows Downloads" />
   </a>
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/badge/macOS-Mouser--macOS.zip-00d4aa?style=for-the-badge&logo=apple" alt="macOS Download" />
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-macOS.zip/total?style=for-the-badge&color=00d4aa&logo=apple&label=macOS" alt="macOS Downloads" />
   </a>
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/badge/Linux-Mouser--Linux.zip-00d4aa?style=for-the-badge&logo=linux" alt="Linux Download" />
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-Linux.zip/total?style=for-the-badge&color=00d4aa&logo=linux&label=Linux" alt="Linux Downloads" />
   </a>
+  <br />
+  <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser.zip/total?style=for-the-badge&color=888888&label=Previous%20Releases%20(Mouser.zip)" alt="Previous Mouser.zip Downloads" />
+  <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/LogiControl.zip/total?style=for-the-badge&color=888888&label=v1.0%20(LogiControl.zip)" alt="LogiControl.zip Downloads" />
   <br />
   <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/total?style=for-the-badge&color=00d4aa&label=Total%20Downloads" alt="Downloads" />
 </p>
@@ -493,7 +496,7 @@ This project is licensed under the [MIT License](LICENSE).
 - **[@thisislvca](https://github.com/thisislvca)** — significant expansion of the project including macOS compatibility improvements, multi-device support, new UI features, and active involvement in triaging and resolving open issues
 - **[@awkure](https://github.com/awkure)** — cross-platform login startup (Windows registry + macOS LaunchAgent), single-instance guard, start minimized option, and MX Master 4 detection
 - **[@hieshima](https://github.com/hieshima)** — Linux support (evdev + HID++ + uinput), mode shift button mapping, Smart Shift toggle, and custom keyboard shortcut support
-- **[@pavelzaichyk](https://github.com/pavelzaichyk)** — Next Tab and Previous Tab browser actions, persistent rotating log file storage
+- **[@pavelzaichyk](https://github.com/pavelzaichyk)** — Next Tab and Previous Tab browser actions, persistent rotating log file storage, Smart Shift enhanced support (HID++ 0x2111) with sensitivity control and scroll mode sync
 - **[@nellwhoami](https://github.com/nellwhoami)** - Multi-language UI system (English, Simplified Chinese, Traditional Chinese) and Page Up/Down/Home/End navigation actions
 
 ---
