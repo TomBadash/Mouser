@@ -866,6 +866,53 @@ Item {
                             }
                         }
                     }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.isMacOS
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 2
+
+                                Text {
+                                    text: "Ignore trackpad"
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    text: "Only respond to mouse events, not trackpad or Magic Mouse"
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textSecondary
+                                }
+                            }
+
+                            Switch {
+                                id: ignoreTrackpadSwitch
+                                checked: backend.ignoreTrackpad
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: "Ignore trackpad"
+                                onToggled: backend.setIgnoreTrackpad(checked)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -933,6 +980,7 @@ Item {
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            ignoreTrackpadSwitch.checked = backend.ignoreTrackpad
         }
     }
 }

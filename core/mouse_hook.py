@@ -934,6 +934,10 @@ elif sys.platform == "darwin":
     _BTN_BACK = 3
     _BTN_FORWARD = 4
     _SCROLL_INVERT_MARKER = 0x4D4F5553
+    # kCGScrollWheelEventIsContinuous (field 88) distinguishes input source:
+    # 0 = line-based / discrete (physical mouse scroll wheel)
+    # 1 = pixel-based / continuous (trackpad / Magic Mouse)
+    _SCROLL_IS_CONTINUOUS = Quartz.kCGScrollWheelEventIsContinuous
 
     class MouseHook:
         """
@@ -953,6 +957,7 @@ elif sys.platform == "darwin":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.ignore_trackpad = True
             self._gesture_active = False
             self._hid_gesture = None
             self._wake_observer = None
@@ -1298,12 +1303,57 @@ elif sys.platform == "darwin":
                 except queue.Empty:
                     continue
 
+        def _is_trackpad_event(self, cg_event, event_type):
+            """Return True if the event originated from a trackpad rather than a mouse.
+
+            For scroll events we inspect kCGScrollWheelEventScrollType
+            (raw field 1):
+              0 = line-based / discrete  (physical scroll wheel)
+              1 = pixel-based / continuous (trackpad / Magic Mouse)
+            For non-scroll events (mouse moved, dragged) we check the
+            mouse sub-type field (field 109). Trackpad touch events set
+            this to NX_SUBTYPE_MOUSE_TOUCH (non-zero).
+            """
+            if event_type == Quartz.kCGEventScrollWheel:
+                scroll_type = Quartz.CGEventGetIntegerValueField(
+                    cg_event, _SCROLL_IS_CONTINUOUS
+                )
+                return scroll_type == 1
+            # For move / drag events during gesture tracking, check the
+            # mouse sub-type field (field 109). Trackpad touch events set
+            # this to NX_SUBTYPE_MOUSE_TOUCH (non-zero).
+            try:
+                subtype = Quartz.CGEventGetIntegerValueField(cg_event, 109)
+                return subtype != 0
+            except Exception:
+                return False
+
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:
                 if not self._first_event_logged:
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
+
+                # ── Trackpad filter ──────────────────────────────────
+                # When enabled, pass trackpad / Magic Mouse events
+                # through unmodified so Mouser only acts on real mouse
+                # input.  Skip our own synthetic scroll-inversion events
+                # (they use pixel units and would look like trackpad).
+                if self.ignore_trackpad:
+                    if event_type == Quartz.kCGEventScrollWheel:
+                        is_own_event = (
+                            Quartz.CGEventGetIntegerValueField(
+                                cg_event, Quartz.kCGEventSourceUserData
+                            )
+                            == _SCROLL_INVERT_MARKER
+                        )
+                        if not is_own_event and self._is_trackpad_event(
+                            cg_event, event_type
+                        ):
+                            return cg_event
+                    elif self._is_trackpad_event(cg_event, event_type):
+                        return cg_event
 
                 mouse_event = None
                 should_block = False

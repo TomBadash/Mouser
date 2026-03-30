@@ -152,6 +152,7 @@ class Backend(QObject):
     def actionCategories(self):
         """Actions grouped by category — for the action picker chips."""
         from collections import OrderedDict
+
         cats = OrderedDict()
         for aid in sorted(
             ACTIONS,
@@ -234,6 +235,14 @@ class Backend(QObject):
     @Property(bool, notify=settingsChanged)
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
+
+    @Property(bool, notify=settingsChanged)
+    def ignoreTrackpad(self):
+        return self._cfg.get("settings", {}).get("ignore_trackpad", True)
+
+    @Property(bool, constant=True)
+    def isMacOS(self):
+        return sys.platform == "darwin"
 
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
@@ -547,6 +556,14 @@ class Backend(QObject):
     @Slot(bool)
     def setInvertHScroll(self, value):
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(bool)
+    def setIgnoreTrackpad(self, value):
+        self._cfg.setdefault("settings", {})["ignore_trackpad"] = value
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

@@ -72,6 +72,8 @@ class Engine:
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        if hasattr(self.hook, "ignore_trackpad"):
+            self.hook.ignore_trackpad = settings.get("ignore_trackpad", True)
         self.hook.debug_mode = self._debug_events_enabled
         self.hook.configure_gestures(
             enabled=any(mappings.get(key, "none") != "none"
