@@ -65,7 +65,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 8,
+    "version": 9,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -104,6 +104,7 @@ DEFAULT_CONFIG = {
         "debug_mode": False,
         "device_layout_overrides": {},
         "language": "en",
+        "ignore_trackpad": True,
     },
 }
 
@@ -318,6 +319,11 @@ def _migrate(cfg):
             if mappings.get("mode_shift") == "toggle_smart_shift":
                 mappings["mode_shift"] = "switch_scroll_mode"
         cfg["version"] = 8
+
+    if version < 9:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("ignore_trackpad", True)
+        cfg["version"] = 9
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
