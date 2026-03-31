@@ -167,8 +167,77 @@ if sys.platform == "win32":
     SendInput.argtypes = [c_ulong, ctypes.POINTER(INPUT), ctypes.c_int]
     SendInput.restype = c_ulong
 
+    MOUSEEVENTF_LEFTDOWN   = 0x0002
+    MOUSEEVENTF_LEFTUP     = 0x0004
+    MOUSEEVENTF_RIGHTDOWN  = 0x0008
+    MOUSEEVENTF_RIGHTUP    = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP   = 0x0040
+    MOUSEEVENTF_XDOWN      = 0x0080
+    MOUSEEVENTF_XUP        = 0x0100
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
+
+    XBUTTON1 = 0x0001
+    XBUTTON2 = 0x0002
+
+    # Mapping from mouse-button action IDs to (down_flag, up_flag, mouseData)
+    _MOUSE_BUTTON_MAP = {
+        "mouse_left_click":    (MOUSEEVENTF_LEFTDOWN,   MOUSEEVENTF_LEFTUP,   0),
+        "mouse_right_click":   (MOUSEEVENTF_RIGHTDOWN,  MOUSEEVENTF_RIGHTUP,  0),
+        "mouse_middle_click":  (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0),
+        "mouse_back_click":    (MOUSEEVENTF_XDOWN,      MOUSEEVENTF_XUP,      XBUTTON1),
+        "mouse_forward_click": (MOUSEEVENTF_XDOWN,      MOUSEEVENTF_XUP,      XBUTTON2),
+    }
+
+    def _make_mouse_input(flags, mouse_data=0):
+        inp = INPUT()
+        inp.type = INPUT_MOUSE
+        inp.union.mi.dwFlags = flags
+        inp.union.mi.mouseData = mouse_data
+        return inp
+
+    def inject_mouse_down(action_id):
+        """Inject a mouse button press for the given mouse-button action."""
+        try:
+            entry = _MOUSE_BUTTON_MAP.get(action_id)
+            if not entry:
+                print(f"[KeySimulator] inject_mouse_down: unknown action '{action_id}'")
+                return
+            down_flag, _, mouse_data = entry
+            print(f"[KeySimulator] inject_mouse_down({action_id}) flags=0x{down_flag:04X} mouseData=0x{mouse_data:04X}")
+            inp = _make_mouse_input(down_flag, mouse_data)
+            arr = (INPUT * 1)(inp)
+            result = SendInput(1, arr, sizeof(INPUT))
+            if result == 0:
+                err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                print(f"[KeySimulator] inject_mouse_down: SendInput returned 0! error={err}")
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_down EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
+
+    def inject_mouse_up(action_id):
+        """Inject a mouse button release for the given mouse-button action."""
+        try:
+            entry = _MOUSE_BUTTON_MAP.get(action_id)
+            if not entry:
+                print(f"[KeySimulator] inject_mouse_up: unknown action '{action_id}'")
+                return
+            _, up_flag, mouse_data = entry
+            print(f"[KeySimulator] inject_mouse_up({action_id}) flags=0x{up_flag:04X} mouseData=0x{mouse_data:04X}")
+            inp = _make_mouse_input(up_flag, mouse_data)
+            arr = (INPUT * 1)(inp)
+            result = SendInput(1, arr, sizeof(INPUT))
+            if result == 0:
+                err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                print(f"[KeySimulator] inject_mouse_up: SendInput returned 0! error={err}")
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_up EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
+
+    def is_mouse_button_action(action_id):
+        """Return True if the action simulates a mouse button."""
+        return action_id in _MOUSE_BUTTON_MAP
 
     def inject_scroll(flags, delta):
         inp = INPUT()
@@ -396,6 +465,31 @@ if sys.platform == "win32":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -425,19 +519,30 @@ if sys.platform == "win32":
     }
 
     def execute_action(action_id):
-        if action_id.startswith("custom:"):
-            keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
-            if keys:
-                send_key_combo(keys)
-            return
-        action = ACTIONS.get(action_id)
-        if not action or not action["keys"]:
-            return
-        arrow_vk = _BROWSER_NAV_ARROW.get(action_id)
-        if arrow_vk is not None:
-            _send_phased_alt_arrow(arrow_vk)
-        else:
-            send_key_combo(action["keys"])
+        try:
+            print(f"[KeySimulator] execute_action({action_id})")
+            if action_id.startswith("custom:"):
+                keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
+                if keys:
+                    send_key_combo(keys)
+                return
+            if is_mouse_button_action(action_id):
+                print(f"[KeySimulator] execute_action: mouse click for {action_id}")
+                inject_mouse_down(action_id)
+                inject_mouse_up(action_id)
+                return
+            action = ACTIONS.get(action_id)
+            if not action or not action["keys"]:
+                print(f"[KeySimulator] execute_action: no keys for '{action_id}'")
+                return
+            arrow_vk = _BROWSER_NAV_ARROW.get(action_id)
+            if arrow_vk is not None:
+                _send_phased_alt_arrow(arrow_vk)
+            else:
+                send_key_combo(action["keys"])
+        except Exception as exc:
+            print(f"[KeySimulator] execute_action EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
 
 
 # ==================================================================
@@ -519,6 +624,55 @@ elif sys.platform == "darwin":
             event = Quartz.CGEventCreateScrollWheelEvent(None, 0, 2, 0, delta)
         if event:
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
+    # Mouse button simulation
+    # CGEvent mouse button constants
+    _MAC_MOUSE_MAP = {
+        "mouse_left_click": {
+            "down_type": Quartz.kCGEventLeftMouseDown if _QUARTZ_OK else 1,
+            "up_type":   Quartz.kCGEventLeftMouseUp   if _QUARTZ_OK else 2,
+            "button": 0,
+        },
+        "mouse_right_click": {
+            "down_type": Quartz.kCGEventRightMouseDown if _QUARTZ_OK else 3,
+            "up_type":   Quartz.kCGEventRightMouseUp   if _QUARTZ_OK else 4,
+            "button": 1,
+        },
+        "mouse_middle_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 2,
+        },
+        "mouse_back_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 3,
+        },
+        "mouse_forward_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 4,
+        },
+    } if _QUARTZ_OK else {}
+
+    def _inject_mac_mouse(action_id, is_down):
+        entry = _MAC_MOUSE_MAP.get(action_id)
+        if not entry or not _QUARTZ_OK:
+            return
+        evt_type = entry["down_type"] if is_down else entry["up_type"]
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
+        if ev:
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+    def inject_mouse_down(action_id):
+        _inject_mac_mouse(action_id, True)
+
+    def inject_mouse_up(action_id):
+        _inject_mac_mouse(action_id, False)
+
+    def is_mouse_button_action(action_id):
+        return action_id in _MAC_MOUSE_MAP
 
     # Modifier flag bits for CGEvent
     _MOD_FLAGS = {
@@ -867,6 +1021,31 @@ elif sys.platform == "darwin":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -898,6 +1077,10 @@ elif sys.platform == "darwin":
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if is_mouse_button_action(action_id):
+            inject_mouse_down(action_id)
+            inject_mouse_up(action_id)
             return
         action = ACTIONS.get(action_id)
         if not action:
@@ -981,6 +1164,21 @@ elif sys.platform == "linux":
     REL_WHEEL = 8
     REL_HWHEEL = 6
 
+    # Mouse button codes (linux/input-event-codes.h)
+    BTN_LEFT   = 0x110
+    BTN_RIGHT  = 0x111
+    BTN_MIDDLE = 0x112
+    BTN_SIDE   = 0x113   # Back / Mouse Button 4
+    BTN_EXTRA  = 0x114   # Forward / Mouse Button 5
+
+    _LINUX_MOUSE_BUTTON_MAP = {
+        "mouse_left_click":    BTN_LEFT,
+        "mouse_right_click":   BTN_RIGHT,
+        "mouse_middle_click":  BTN_MIDDLE,
+        "mouse_back_click":    BTN_SIDE,
+        "mouse_forward_click": BTN_EXTRA,
+    }
+
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
 
@@ -997,7 +1195,7 @@ elif sys.platform == "linux":
             try:
                 from evdev import ecodes, UInput
                 _virtual_kbd = UInput(
-                    {ecodes.EV_KEY: _ALL_KEY_CODES},
+                    {ecodes.EV_KEY: _ALL_KEY_CODES + list(_LINUX_MOUSE_BUTTON_MAP.values())},
                     name="Mouser Virtual Keyboard",
                 )
                 return _virtual_kbd
@@ -1037,6 +1235,27 @@ elif sys.platform == "linux":
             detents = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
             kbd.write(EV_REL, REL_HWHEEL, detents)
         kbd.syn()
+
+    def inject_mouse_down(action_id):
+        btn = _LINUX_MOUSE_BUTTON_MAP.get(action_id)
+        if btn is None:
+            return
+        kbd = _get_virtual_kbd()
+        if kbd:
+            kbd.write(EV_KEY, btn, 1)
+            kbd.syn()
+
+    def inject_mouse_up(action_id):
+        btn = _LINUX_MOUSE_BUTTON_MAP.get(action_id)
+        if btn is None:
+            return
+        kbd = _get_virtual_kbd()
+        if kbd:
+            kbd.write(EV_KEY, btn, 0)
+            kbd.syn()
+
+    def is_mouse_button_action(action_id):
+        return action_id in _LINUX_MOUSE_BUTTON_MAP
 
     _LINUX_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
 
@@ -1200,6 +1419,31 @@ elif sys.platform == "linux":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1235,6 +1479,10 @@ elif sys.platform == "linux":
             if keys:
                 send_key_combo(keys)
             return
+        if is_mouse_button_action(action_id):
+            inject_mouse_down(action_id)
+            inject_mouse_up(action_id)
+            return
         action = ACTIONS.get(action_id)
         if not action or not action["keys"]:
             return
@@ -1253,6 +1501,9 @@ else:
     def send_key_combo(keys, hold_ms=50): pass
     def send_key_press(vk): pass
     def execute_action(action_id): pass
+    def inject_mouse_down(action_id): pass
+    def inject_mouse_up(action_id): pass
+    def is_mouse_button_action(action_id): return False
 
     ACTIONS = {
         "switch_scroll_mode": {

@@ -58,5 +58,41 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
             [module.KEY_LEFTCTRL, module.KEY_LEFTMETA, module.KEY_RIGHT],
         )
 
+class MouseButtonActionTests(unittest.TestCase):
+    """Tests for the mouse-button-to-mouse-button remapping feature."""
+
+    _MOUSE_ACTIONS = [
+        "mouse_left_click",
+        "mouse_right_click",
+        "mouse_middle_click",
+        "mouse_back_click",
+        "mouse_forward_click",
+    ]
+
+    def test_mouse_button_actions_exist_in_actions_dict(self):
+        for action_id in self._MOUSE_ACTIONS:
+            self.assertIn(action_id, key_simulator.ACTIONS, f"{action_id} missing from ACTIONS")
+            self.assertEqual(key_simulator.ACTIONS[action_id]["category"], "Mouse")
+            self.assertEqual(key_simulator.ACTIONS[action_id]["keys"], [])
+
+    def test_is_mouse_button_action_returns_true_for_mouse_actions(self):
+        for action_id in self._MOUSE_ACTIONS:
+            self.assertTrue(
+                key_simulator.is_mouse_button_action(action_id),
+                f"is_mouse_button_action({action_id!r}) should be True",
+            )
+
+    def test_is_mouse_button_action_returns_false_for_non_mouse_actions(self):
+        self.assertFalse(key_simulator.is_mouse_button_action("alt_tab"))
+        self.assertFalse(key_simulator.is_mouse_button_action("none"))
+        self.assertFalse(key_simulator.is_mouse_button_action("custom:ctrl+c"))
+
+    def test_mouse_button_labels_are_non_empty_strings(self):
+        for action_id in self._MOUSE_ACTIONS:
+            label = key_simulator.ACTIONS[action_id]["label"]
+            self.assertIsInstance(label, str)
+            self.assertTrue(len(label) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()
