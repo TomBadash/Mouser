@@ -956,6 +956,8 @@ elif sys.platform == "darwin":
     _BTN_BACK = 3
     _BTN_FORWARD = 4
     _SCROLL_INVERT_MARKER = 0x4D4F5553
+    _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
+    _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
     class MouseHook:
         """
@@ -1330,6 +1332,15 @@ elif sys.platform == "darwin":
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:
+                if event_type in (
+                    _kCGEventTapDisabledByTimeout,
+                    _kCGEventTapDisabledByUserInput,
+                ):
+                    print(f"[MouseHook] CGEventTap disabled by system "
+                          f"(type=0x{event_type:X}), re-enabling", flush=True)
+                    Quartz.CGEventTapEnable(self._tap, True)
+                    return cg_event
+
                 if not self._first_event_logged:
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
@@ -1408,6 +1419,13 @@ elif sys.platform == "darwin":
                         Quartz.CGEventGetIntegerValueField(
                             cg_event, Quartz.kCGEventSourceUserData
                         ) == _SCROLL_INVERT_MARKER
+                    ):
+                        return cg_event
+                    # Pass through trackpad / Magic Mouse continuous scroll
+                    # events untouched — only intercept discrete mouse wheel.
+                    _kCGScrollWheelEventIsContinuous = 88
+                    if Quartz.CGEventGetIntegerValueField(
+                        cg_event, _kCGScrollWheelEventIsContinuous
                     ):
                         return cg_event
                     h_delta = Quartz.CGEventGetIntegerValueField(
