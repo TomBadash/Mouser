@@ -200,6 +200,8 @@ class _FakeMouseHook:
     def __init__(self):
         self.invert_vscroll = False
         self.invert_hscroll = False
+        self.vscroll_speed = 1
+        self.hscroll_speed = 1
         self.debug_mode = False
         self.connected_device = None
         self.device_connected = False
@@ -662,10 +664,10 @@ class ConfigV7MigrationTests(unittest.TestCase):
             "switch_scroll_mode",
         )
 
-    def test_version_bumped_to_8(self):
+    def test_version_bumped_to_9(self):
         from core.config import _migrate
         migrated = _migrate(self._v6_config())
-        self.assertEqual(migrated["version"], 8)
+        self.assertEqual(migrated["version"], 9)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -724,10 +726,10 @@ class ConfigV8MigrationTests(unittest.TestCase):
             "switch_scroll_mode",
         )
 
-    def test_version_bumped_to_8(self):
+    def test_version_bumped_to_9(self):
         from core.config import _migrate
         migrated = _migrate(self._v7_config())
-        self.assertEqual(migrated["version"], 8)
+        self.assertEqual(migrated["version"], 9)
 
 
 class HidForceReconnectTests(unittest.TestCase):

@@ -72,6 +72,8 @@ class Engine:
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        self.hook.vscroll_speed = max(1, min(10, int(settings.get("vscroll_speed", 1))))
+        self.hook.hscroll_speed = max(1, min(10, int(settings.get("hscroll_speed", 1))))
         self.hook.debug_mode = self._debug_events_enabled
         self.hook.configure_gestures(
             enabled=any(mappings.get(key, "none") != "none"
@@ -238,6 +240,7 @@ class Engine:
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
+        speed = max(1, min(10, int(self.cfg.get("settings", {}).get("hscroll_speed", 1))))
         def handler(event):
             if not self._enabled:
                 return
@@ -254,17 +257,19 @@ class Engine:
                 state["accum"] = 0.0
                 return
 
-            state["accum"] += step
+            state["accum"] += step * speed
             if state["accum"] < threshold:
                 return
 
-            state["accum"] = 0.0
+            fires = int(state["accum"] / threshold)
+            state["accum"] -= fires * threshold
             state["last_fire_at"] = now
             self._emit_debug(
                 f"Mapped {event.event_type} -> {action_id} "
-                f"({self._action_label(action_id)})"
+                f"({self._action_label(action_id)}) x{fires}"
             )
-            execute_action(action_id)
+            for _ in range(fires):
+                execute_action(action_id)
         return handler
 
     def _hscroll_step(self, raw_value):

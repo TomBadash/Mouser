@@ -11,6 +11,8 @@ class _FakeMouseHook:
     def __init__(self):
         self.invert_vscroll = False
         self.invert_hscroll = False
+        self.vscroll_speed = 1
+        self.hscroll_speed = 1
         self.debug_mode = False
         self.connected_device = None
         self.device_connected = False

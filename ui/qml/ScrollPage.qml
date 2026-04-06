@@ -866,6 +866,188 @@ Item {
                             }
                         }
                     }
+
+                    Item { width: 1; height: 4 }
+
+                    Text {
+                        text: s["scroll.scroll_sensitivity"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 11
+                            bold: true
+                            letterSpacing: 0.8
+                        }
+                        color: scrollPage.theme.textDim
+                    }
+
+                    Text {
+                        text: s["scroll.scroll_sensitivity_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                    }
+
+                    // ── Vertical Scroll Speed ──────────────────
+                    Column {
+                        width: parent.width
+                        spacing: 4
+
+                        Text {
+                            text: s["scroll.vscroll_speed"]
+                            font {
+                                family: uiState.fontFamily
+                                pixelSize: 13
+                            }
+                            color: scrollPage.theme.textPrimary
+                        }
+
+                        RowLayout {
+                            width: parent.width
+                            spacing: 8
+
+                            Text {
+                                text: "1"
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: scrollPage.theme.textDim
+                            }
+
+                            Slider {
+                                id: vScrollSpeedSlider
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 10
+                                stepSize: 1
+                                value: backend.vScrollSpeed
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.vscroll_speed"]
+
+                                onMoved: {
+                                    vScrollSpeedLabel.text = Math.round(value)
+                                    vScrollSpeedDebounce.restart()
+                                }
+                            }
+
+                            Text {
+                                text: "10"
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: scrollPage.theme.textDim
+                            }
+
+                            Rectangle {
+                                Layout.preferredWidth: 52
+                                Layout.preferredHeight: 36
+                                radius: 10
+                                color: scrollPage.theme.accentDim
+
+                                Text {
+                                    id: vScrollSpeedLabel
+                                    anchors.centerIn: parent
+                                    text: backend.vScrollSpeed
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 14
+                                        bold: true
+                                    }
+                                    color: scrollPage.theme.accent
+                                }
+                            }
+                        }
+
+                        Timer {
+                            id: vScrollSpeedDebounce
+                            interval: 400
+                            onTriggered: backend.setVScrollSpeed(Math.round(vScrollSpeedSlider.value))
+                        }
+                    }
+
+                    // ── Horizontal Scroll Speed ────────────────
+                    Column {
+                        width: parent.width
+                        spacing: 4
+
+                        Text {
+                            text: s["scroll.hscroll_speed"]
+                            font {
+                                family: uiState.fontFamily
+                                pixelSize: 13
+                            }
+                            color: scrollPage.theme.textPrimary
+                        }
+
+                        RowLayout {
+                            width: parent.width
+                            spacing: 8
+
+                            Text {
+                                text: "1"
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: scrollPage.theme.textDim
+                            }
+
+                            Slider {
+                                id: hScrollSpeedSlider
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 10
+                                stepSize: 1
+                                value: backend.hScrollSpeed
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.hscroll_speed"]
+
+                                onMoved: {
+                                    hScrollSpeedLabel.text = Math.round(value)
+                                    hScrollSpeedDebounce.restart()
+                                }
+                            }
+
+                            Text {
+                                text: "10"
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: scrollPage.theme.textDim
+                            }
+
+                            Rectangle {
+                                Layout.preferredWidth: 52
+                                Layout.preferredHeight: 36
+                                radius: 10
+                                color: scrollPage.theme.accentDim
+
+                                Text {
+                                    id: hScrollSpeedLabel
+                                    anchors.centerIn: parent
+                                    text: backend.hScrollSpeed
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 14
+                                        bold: true
+                                    }
+                                    color: scrollPage.theme.accent
+                                }
+                            }
+                        }
+
+                        Timer {
+                            id: hScrollSpeedDebounce
+                            interval: 400
+                            onTriggered: backend.setHScrollSpeed(Math.round(hScrollSpeedSlider.value))
+                        }
+                    }
+
+                    // ── Speed warning ─────────────────────────────
+                    Text {
+                        width: parent.width
+                        text: s["scroll.speed_warning"] || ""
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 11
+                            italic: true
+                        }
+                        color: scrollPage.theme.textDim
+                        wrapMode: Text.WordWrap
+                        visible: backend.vScrollSpeed > 1 || backend.hScrollSpeed > 1
+                    }
                 }
             }
 
@@ -933,6 +1115,14 @@ Item {
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            if (!vScrollSpeedSlider.pressed) {
+                vScrollSpeedSlider.value = backend.vScrollSpeed
+                vScrollSpeedLabel.text = backend.vScrollSpeed
+            }
+            if (!hScrollSpeedSlider.pressed) {
+                hScrollSpeedSlider.value = backend.hScrollSpeed
+                hScrollSpeedLabel.text = backend.hScrollSpeed
+            }
         }
     }
 }

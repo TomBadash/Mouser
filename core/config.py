@@ -67,7 +67,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 8,
+    "version": 9,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -95,6 +95,8 @@ DEFAULT_CONFIG = {
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
+        "vscroll_speed": 1,       # vertical scroll speed multiplier (1-20)
+        "hscroll_speed": 1,       # horizontal scroll speed multiplier (1-20)
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
@@ -320,6 +322,12 @@ def _migrate(cfg):
             if mappings.get("mode_shift") == "toggle_smart_shift":
                 mappings["mode_shift"] = "switch_scroll_mode"
         cfg["version"] = 8
+
+    if version < 9:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("vscroll_speed", 1)
+        settings.setdefault("hscroll_speed", 1)
+        cfg["version"] = 9
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

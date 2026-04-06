@@ -292,6 +292,14 @@ class Backend(QObject):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
     @Property(int, notify=settingsChanged)
+    def vScrollSpeed(self):
+        return int(self._cfg.get("settings", {}).get("vscroll_speed", 1))
+
+    @Property(int, notify=settingsChanged)
+    def hScrollSpeed(self):
+        return int(self._cfg.get("settings", {}).get("hscroll_speed", 1))
+
+    @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
 
@@ -603,6 +611,24 @@ class Backend(QObject):
     @Slot(bool)
     def setInvertHScroll(self, value):
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(int)
+    def setVScrollSpeed(self, value):
+        clamped = max(1, min(10, int(value)))
+        self._cfg.setdefault("settings", {})["vscroll_speed"] = clamped
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(int)
+    def setHScrollSpeed(self, value):
+        clamped = max(1, min(10, int(value)))
+        self._cfg.setdefault("settings", {})["hscroll_speed"] = clamped
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

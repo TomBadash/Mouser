@@ -218,6 +218,10 @@ if sys.platform == "win32":
     from core.key_simulator import inject_scroll as _inject_scroll_impl
     from core.key_simulator import MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL
 
+    _WHEEL_DELTA = 120
+    _MAX_SYNTH_CHUNK = _WHEEL_DELTA
+    _MAX_PENDING_VSCROLL = _WHEEL_DELTA * 4
+
     PostMessageW = windll.user32.PostMessageW
     PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
     PostMessageW.restype = wintypes.BOOL
@@ -241,10 +245,14 @@ if sys.platform == "win32":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.vscroll_speed = 1
+            self.hscroll_speed = 1
             self._pending_vscroll = 0
             self._pending_hscroll = 0
             self._vscroll_posted = False
             self._hscroll_posted = False
+            self._last_vscroll_dir = 0
+            self._scroll_log = None
             self._ri_wndproc_ref = None
             self._ri_hwnd = None
             self._device_name_cache = {}
@@ -524,6 +532,26 @@ if sys.platform == "win32":
             0x020C: "WM_XBUTTONUP",   0x020E: "WM_MOUSEHWHEEL",
         }
 
+        def enable_scroll_log(self, path):
+            """Open a file for scroll-path debug logging."""
+            try:
+                self._scroll_log = open(path, "w", buffering=1)
+                self._scroll_log.write("timestamp,source,delta,speed,pending,posted\n")
+            except Exception as e:
+                print(f"[MouseHook] scroll log open failed: {e}")
+                self._scroll_log = None
+
+        def _log_scroll(self, source, **kw):
+            if self._scroll_log:
+                t = time.perf_counter()
+                parts = [f"{t:.6f}", source]
+                for k, v in kw.items():
+                    parts.append(f"{v}")
+                try:
+                    self._scroll_log.write(",".join(parts) + "\n")
+                except Exception:
+                    pass
+
         def _low_level_handler(self, nCode, wParam, lParam):
             if nCode == HC_ACTION:
                 data = lParam.contents
@@ -574,18 +602,31 @@ if sys.platform == "win32":
                     should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
                 elif wParam == WM_MOUSEWHEEL:
-                    if self.invert_vscroll:
+                    if self.invert_vscroll or self.vscroll_speed > 1:
                         delta = hiword(mouse_data)
-                        if delta != 0 and self._ri_hwnd:
-                            self._pending_vscroll += (-delta)
-                            if self._vscroll_posted:
-                                return 1
-                            if PostMessageW(self._ri_hwnd, WM_APP_INJECT_VSCROLL, 0, 0):
-                                self._vscroll_posted = True
-                                return 1
-                            self._pending_vscroll -= (-delta)
-                        elif delta != 0:
-                            self._emit_debug("Invert vertical scroll skipped: raw input window unavailable")
+                        if delta != 0:
+                            base_delta = -delta if self.invert_vscroll else delta
+                            direction = 1 if base_delta > 0 else -1
+
+                            # Drop stale queued boost so fast reversals feel immediate.
+                            if self._last_vscroll_dir and direction != self._last_vscroll_dir:
+                                self._pending_vscroll = 0
+                            self._last_vscroll_dir = direction
+
+                            # Keep native wheel behavior; only add extra boost.
+                            if self.vscroll_speed > 1 and abs(base_delta) <= _WHEEL_DELTA:
+                                extra = int(base_delta * self.vscroll_speed) - base_delta
+                                if extra != 0 and self._ri_hwnd:
+                                    self._pending_vscroll += extra
+                                    if self._pending_vscroll > _MAX_PENDING_VSCROLL:
+                                        self._pending_vscroll = _MAX_PENDING_VSCROLL
+                                    elif self._pending_vscroll < -_MAX_PENDING_VSCROLL:
+                                        self._pending_vscroll = -_MAX_PENDING_VSCROLL
+                                    if not self._vscroll_posted:
+                                        PostMessageW(self._ri_hwnd, WM_APP_INJECT_VSCROLL, 0, 0)
+                                        self._vscroll_posted = True
+                                elif extra != 0:
+                                    self._emit_debug("Vertical scroll boost skipped: raw input window unavailable")
 
                 elif wParam == WM_MOUSEHWHEEL:
                     delta = hiword(mouse_data)
@@ -596,19 +637,24 @@ if sys.platform == "win32":
                         event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                         should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
 
-                    if self.invert_hscroll:
+                    if self.invert_hscroll or self.hscroll_speed != 1:
                         # When horizontal scroll is remapped, preserve the mapped
                         # action instead of short-circuiting into synthetic wheel injection.
                         if delta != 0 and self._ri_hwnd and not should_block:
-                            self._pending_hscroll += (-delta)
-                            if self._hscroll_posted:
-                                return 1
-                            if PostMessageW(self._ri_hwnd, WM_APP_INJECT_HSCROLL, 0, 0):
+                            modified = -delta if self.invert_hscroll else delta
+                            modified *= self.hscroll_speed
+                            self._pending_hscroll += modified
+                            cap = _WHEEL_DELTA * self.hscroll_speed
+                            if self._pending_hscroll > cap:
+                                self._pending_hscroll = cap
+                            elif self._pending_hscroll < -cap:
+                                self._pending_hscroll = -cap
+                            if not self._hscroll_posted:
+                                PostMessageW(self._ri_hwnd, WM_APP_INJECT_HSCROLL, 0, 0)
                                 self._hscroll_posted = True
-                                return 1
-                            self._pending_hscroll -= (-delta)
+                            return 1
                         elif delta != 0 and not should_block:
-                            self._emit_debug("Invert horizontal scroll skipped: raw input window unavailable")
+                            self._emit_debug("Horizontal scroll modification skipped: raw input window unavailable")
 
                 if event:
                     self._dispatch(event)
@@ -646,11 +692,23 @@ if sys.platform == "win32":
                 return 0
 
             if msg == WM_APP_INJECT_VSCROLL:
-                delta = self._pending_vscroll
-                self._pending_vscroll = 0
-                self._vscroll_posted = False
-                if delta != 0:
-                    _inject_scroll_impl(MOUSEEVENTF_WHEEL, delta)
+                if self._pending_vscroll > _MAX_SYNTH_CHUNK:
+                    chunk = _MAX_SYNTH_CHUNK
+                elif self._pending_vscroll < -_MAX_SYNTH_CHUNK:
+                    chunk = -_MAX_SYNTH_CHUNK
+                else:
+                    chunk = self._pending_vscroll
+
+                self._pending_vscroll -= chunk
+                if chunk != 0:
+                    _inject_scroll_impl(MOUSEEVENTF_WHEEL, chunk)
+
+                # Drain backlog gradually over successive message-loop turns.
+                if self._pending_vscroll != 0 and self._ri_hwnd:
+                    PostMessageW(self._ri_hwnd, WM_APP_INJECT_VSCROLL, 0, 0)
+                    self._vscroll_posted = True
+                else:
+                    self._vscroll_posted = False
                 return 0
 
             if msg == WM_APP_INJECT_HSCROLL:
@@ -975,6 +1033,8 @@ elif sys.platform == "darwin":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.vscroll_speed = 1
+            self.hscroll_speed = 1
             self._gesture_active = False
             self._hid_gesture = None
             self._wake_observer = None
@@ -1113,7 +1173,7 @@ elif sys.platform == "darwin":
                 if value:
                     Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
 
-        def _post_inverted_scroll_event(self, cg_event):
+        def _post_modified_scroll_event(self, cg_event):
             v_point = Quartz.CGEventGetIntegerValueField(
                 cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis1
             )
@@ -1124,25 +1184,33 @@ elif sys.platform == "darwin":
                 v_point = -v_point
             if self.invert_hscroll:
                 h_point = -h_point
+            v_point *= self.vscroll_speed
+            h_point *= self.hscroll_speed
+            # Cap to prevent boundary beep storms in apps that reject
+            # excessive scroll deltas (e.g. scrolling past end of document).
+            _MAX_POINT = 500
+            v_point = max(-_MAX_POINT, min(_MAX_POINT, v_point))
+            h_point = max(-_MAX_POINT, min(_MAX_POINT, h_point))
 
-            inverted = Quartz.CGEventCreateScrollWheelEvent(
+            modified = Quartz.CGEventCreateScrollWheelEvent(
                 None,
                 Quartz.kCGScrollEventUnitPixel,
                 2,
                 v_point,
                 h_point,
             )
-            if not inverted:
+            if not modified:
                 return False
-            Quartz.CGEventSetFlags(inverted, Quartz.CGEventGetFlags(cg_event))
+            Quartz.CGEventSetFlags(modified, Quartz.CGEventGetFlags(cg_event))
             Quartz.CGEventSetIntegerValueField(
-                inverted, Quartz.kCGEventSourceUserData, _SCROLL_INVERT_MARKER
+                modified, Quartz.kCGEventSourceUserData, _SCROLL_INVERT_MARKER
             )
             for axis in (1, 2):
                 sign = -1 if (
                     (axis == 1 and self.invert_vscroll) or
                     (axis == 2 and self.invert_hscroll)
                 ) else 1
+                speed = self.vscroll_speed if axis == 1 else self.hscroll_speed
                 for field_name in (
                     f"kCGScrollWheelEventDeltaAxis{axis}",
                     f"kCGScrollWheelEventFixedPtDeltaAxis{axis}",
@@ -1152,7 +1220,7 @@ elif sys.platform == "darwin":
                     if field is None:
                         continue
                     value = Quartz.CGEventGetIntegerValueField(cg_event, field)
-                    Quartz.CGEventSetIntegerValueField(inverted, field, sign * value)
+                    Quartz.CGEventSetIntegerValueField(modified, field, sign * speed * value)
             for field_name in (
                 "kCGScrollWheelEventScrollPhase",
                 "kCGScrollWheelEventMomentumPhase",
@@ -1433,8 +1501,9 @@ elif sys.platform == "darwin":
                         mouse_event = None
                     if should_block:
                         return None
-                    if self.invert_vscroll or self.invert_hscroll:
-                        if self._post_inverted_scroll_event(cg_event):
+                    if (self.invert_vscroll or self.invert_hscroll
+                            or self.vscroll_speed != 1 or self.hscroll_speed != 1):
+                        if self._post_modified_scroll_event(cg_event):
                             return None
 
                 if mouse_event:
@@ -1696,6 +1765,8 @@ elif sys.platform == "linux":
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.vscroll_speed = 1
+            self.hscroll_speed = 1
             self._gesture_active = False
             self._hid_gesture = None
             self._device_connected = False
@@ -2250,10 +2321,12 @@ elif sys.platform == "linux":
             # Vertical scroll (low-res and hi-res)
             _REL_WHEEL_HI_RES = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
             if code == _ecodes.REL_WHEEL or code == _REL_WHEEL_HI_RES:
-                if self.invert_vscroll:
-                    self._uinput.write(_ecodes.EV_REL, code, -value)
-                else:
+                base = -value if self.invert_vscroll else value
+                if self.vscroll_speed <= 1 and base == value:
                     self._uinput.write_event(event)
+                else:
+                    self._uinput.write(_ecodes.EV_REL, code, base * self.vscroll_speed)
+                    self._uinput.syn()
                 return
 
             # Horizontal scroll (low-res and hi-res)
@@ -2276,10 +2349,12 @@ elif sys.platform == "linux":
 
                 if should_block:
                     return
-                if self.invert_hscroll:
-                    self._uinput.write(_ecodes.EV_REL, code, -value)
-                else:
+                base = -value if self.invert_hscroll else value
+                if self.hscroll_speed <= 1 and base == value:
                     self._uinput.write_event(event)
+                else:
+                    self._uinput.write(_ecodes.EV_REL, code, base * self.hscroll_speed)
+                    self._uinput.syn()
                 return
 
             # Other relative events: forward as-is
@@ -2368,6 +2443,8 @@ else:
             self.debug_mode = False
             self.invert_vscroll = False
             self.invert_hscroll = False
+            self.vscroll_speed = 1
+            self.hscroll_speed = 1
             self._hid_gesture = None
             self._device_connected = False
             self._connection_change_cb = None
