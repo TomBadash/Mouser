@@ -289,13 +289,15 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             engine._on_connection_change(True)
 
         expected_dpi = engine.cfg["settings"]["dpi"]
-        expected_smart_shift = engine.cfg["settings"]["smart_shift_mode"]
+        expected_ss_mode = engine.cfg["settings"]["smart_shift_mode"]
+        expected_ss_enabled = engine.cfg["settings"]["smart_shift_enabled"]
+        expected_ss_threshold = engine.cfg["settings"]["smart_shift_threshold"]
         replay_threads = self._non_battery_threads(threads)
         self.assertEqual(len(replay_threads), 1)
         replay_threads[0].run_target()
         engine.hook._hid_gesture.set_dpi.assert_called_once_with(expected_dpi)
         engine.hook._hid_gesture.set_smart_shift.assert_called_once_with(
-            expected_smart_shift
+            expected_ss_mode, expected_ss_enabled, expected_ss_threshold
         )
 
     def test_evdev_only_connected_true_does_not_request_replay_worker(self):
@@ -362,10 +364,12 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         startup_threads[0].run_target()
 
         expected_dpi = engine.cfg["settings"]["dpi"]
-        expected_smart_shift = engine.cfg["settings"]["smart_shift_mode"]
+        expected_ss_mode = engine.cfg["settings"]["smart_shift_mode"]
+        expected_ss_enabled = engine.cfg["settings"]["smart_shift_enabled"]
+        expected_ss_threshold = engine.cfg["settings"]["smart_shift_threshold"]
         engine.hook._hid_gesture.set_dpi.assert_called_once_with(expected_dpi)
         engine.hook._hid_gesture.set_smart_shift.assert_called_once_with(
-            expected_smart_shift
+            expected_ss_mode, expected_ss_enabled, expected_ss_threshold
         )
 
     def test_replay_failure_emits_engine_status_callback(self):
