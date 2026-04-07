@@ -32,6 +32,7 @@ BUTTON_NAMES = {
     "hscroll_left":  "Horizontal scroll left",
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
+    "dpi_switch":    "DPI switch button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -62,10 +63,11 @@ BUTTON_TO_EVENTS = {
     "hscroll_left":  ("hscroll_left",),
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
+    "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
 }
 
 DEFAULT_CONFIG = {
-    "version": 6,
+    "version": 8,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -82,7 +84,7 @@ DEFAULT_CONFIG = {
                 "xbutton2": "alt_tab",
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
-                "mode_shift": "none",
+                "mode_shift": "switch_scroll_mode",
             },
         }
     },
@@ -94,6 +96,8 @@ DEFAULT_CONFIG = {
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
         "smart_shift_mode": "ratchet",
+        "smart_shift_enabled": False,
+        "smart_shift_threshold": 25,
         "gesture_threshold": 50,
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
@@ -101,6 +105,7 @@ DEFAULT_CONFIG = {
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
+        "language": "en",
     },
 }
 
@@ -282,10 +287,11 @@ def _migrate(cfg):
 
     if version < 5:
         settings = cfg.setdefault("settings", {})
-        if "start_at_login" not in settings:
-            settings["start_at_login"] = bool(
-                settings.get("start_with_windows", False)
-            )
+        if "start_at_login" not in settings and "start_with_windows" in settings:
+            settings["start_at_login"] = bool(settings["start_with_windows"])
+        else:
+            settings.setdefault("start_at_login", False)
+        settings.pop("start_with_windows", None)
         cfg["version"] = 5
 
     if version < 6:
@@ -294,14 +300,32 @@ def _migrate(cfg):
             mappings.setdefault("mode_shift", "none")
         cfg["version"] = 6
 
+    if version < 7:
+        # v6 defaulted mode_shift to "none"; remap to "toggle_smart_shift" so the
+        # physical SmartShift button behind the scroll wheel works out of the box.
+        # Users who explicitly want no action can set it back to "none" in the UI.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            if mappings.get("mode_shift") == "none":
+                mappings["mode_shift"] = "toggle_smart_shift"
+        cfg["version"] = 7
+
+    if version < 8:
+        # v7 defaulted mode_shift to "toggle_smart_shift" (SmartShift on/off toggle).
+        # The better default matches Logi Options+: switch ratchet ↔ free-spin.
+        # Upgrade "toggle_smart_shift" → "switch_scroll_mode" for all profiles.
+        # Users who prefer the old toggle can reassign it in the UI.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            if mappings.get("mode_shift") == "toggle_smart_shift":
+                mappings["mode_shift"] = "switch_scroll_mode"
+        cfg["version"] = 8
+
     cfg.setdefault("settings", {})
-    if "start_at_login" not in cfg["settings"]:
-        cfg["settings"]["start_at_login"] = bool(
-            cfg["settings"].get("start_with_windows", False)
-        )
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
+    cfg["settings"].setdefault("language", "en")
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

@@ -1,0 +1,100 @@
+name: Feature Request
+description: Suggest a new feature or improvement for Mouser
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for Mouser? We would love to hear it! Please describe what
+        you would like and why it would be useful.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: >
+        Describe the feature or improvement you would like. Be as specific as
+        you can about what it should do.
+      placeholder: "I would like Mouser to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case / motivation
+      description: >
+        Why do you want this feature? What problem does it solve or what
+        workflow does it improve? Context helps us prioritize.
+      placeholder: "This would help me because..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area of the app
+      description: Which part of Mouser does this relate to?
+      options:
+        - Button remapping / actions
+        - Gesture button / swipe actions
+        - DPI / pointer speed
+        - Scroll behavior (inversion, Smart Shift)
+        - Per-application profiles
+        - Device detection / multi-device support
+        - System tray / startup behavior
+        - UI / appearance
+        - Cross-platform / OS-specific
+        - New action type
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os-relevance
+    attributes:
+      label: OS relevance
+      description: >
+        Is this feature specific to a particular platform, or should it work
+        everywhere?
+      options:
+        - All platforms
+        - Windows only
+        - macOS only
+        - Linux only
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >
+        Have you found any workarounds, or is there an existing feature that
+        partially covers this? Mention other tools if relevant (Logitech
+        Options+, Solaar, logiops, etc.).
+    validations:
+      required: false
+
+  - type: textarea
+    id: device-info
+    attributes:
+      label: Device info JSON (if relevant)
+      description: >
+        If this feature relates to a specific device or button, paste your
+        device info. On the Mouse page, click **Copy device info** (the
+        clipboard button next to "Help us support your mouse").
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Mockups, screenshots, or references
+      description: >
+        If you have mockups, screenshots of other apps, or reference material
+        that illustrates your idea, attach them here.
+    validations:
+      required: false

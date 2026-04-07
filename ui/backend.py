@@ -8,10 +8,9 @@ import re
 import sys
 import time
 
-from PySide6.QtCore import QObject, Property, Signal, Slot, Qt
+from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt
 
 from core.accessibility import is_process_trusted
-from core import autostart
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
@@ -19,8 +18,19 @@ from core.config import (
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
-from core.logi_devices import DEFAULT_DPI_MAX, DEFAULT_DPI_MIN, clamp_dpi
+from core.logi_devices import (
+    DEFAULT_DPI_MAX,
+    DEFAULT_DPI_MIN,
+    build_evdev_connected_device_info,
+    clamp_dpi,
+    get_buttons_for_layout,
+)
 from core.key_simulator import ACTIONS, custom_action_label, valid_custom_key_names
+from core.startup import (
+    apply_login_startup,
+    supports_login_startup,
+    sync_from_config as sync_login_startup_from_config,
+)
 
 
 def _action_label(action_id):
@@ -41,6 +51,7 @@ class Backend(QObject):
     dpiFromDevice = Signal(int)
     smartShiftChanged = Signal()
     mouseConnectedChanged = Signal()
+    hidFeaturesReadyChanged = Signal()
     batteryLevelChanged = Signal()
     debugLogChanged = Signal()
     debugEventsEnabledChanged = Signal()
@@ -57,12 +68,13 @@ class Backend(QObject):
     _batteryChangeRequest = Signal(int)
     _debugMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
+    _smartShiftReadRequest = Signal()
+    _statusMessageRequest = Signal(str)
 
     def __init__(self, engine=None, parent=None):
         super().__init__(parent)
         self._engine = engine
         self._cfg = load_config()
-        self._autostart_supported = autostart.is_supported()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
         self._connected_device_key = ""
@@ -70,7 +82,9 @@ class Backend(QObject):
         self._device_layout = get_device_layout("generic_mouse")
         self._device_dpi_min = DEFAULT_DPI_MIN
         self._device_dpi_max = DEFAULT_DPI_MAX
+        self._connected_device_source = ""
         self._battery_level = -1
+        self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
             self._cfg.get("settings", {}).get("debug_mode", False)
@@ -84,6 +98,10 @@ class Backend(QObject):
         self._gesture_move_dy = 0
         self._gesture_status = "Idle"
         self._current_attempt = None
+        self._pending_smart_shift_state = None  # thread-safe staging area
+        self._effective_supported_buttons = None  # set by _apply_device_layout
+        self._connected_device_refresh_pending = False
+        self._connected_device_refresh_attempts = 0
 
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
@@ -98,6 +116,10 @@ class Backend(QObject):
             self._handleDebugMessage, Qt.QueuedConnection)
         self._gestureEventRequest.connect(
             self._handleGestureEvent, Qt.QueuedConnection)
+        self._smartShiftReadRequest.connect(
+            self._handleSmartShiftRead, Qt.QueuedConnection)
+        self._statusMessageRequest.connect(
+            self._handleStatusMessage, Qt.QueuedConnection)
 
         # Wire engine callbacks
         if engine:
@@ -110,62 +132,61 @@ class Backend(QObject):
                 engine.set_debug_callback(self._onEngineDebugMessage)
             if hasattr(engine, "set_gesture_event_callback"):
                 engine.set_gesture_event_callback(self._onEngineGestureEvent)
+            if hasattr(engine, "set_smart_shift_read_callback"):
+                engine.set_smart_shift_read_callback(self._onEngineSmartShiftRead)
+            if hasattr(engine, "set_status_callback"):
+                engine.set_status_callback(self._onEngineStatusMessage)
             if hasattr(engine, "set_debug_enabled"):
                 engine.set_debug_enabled(self.debugMode)
             self._mouse_connected = bool(getattr(engine, "device_connected", False))
-        self._sync_autostart_state()
-        self._apply_device_layout(
-            getattr(engine, "connected_device", None)
-            if engine and self._mouse_connected else None
-        )
-
-    def _sync_autostart_state(self):
-        settings = self._settings()
-        if not self._autostart_supported:
-            settings["start_at_login"] = False
-            return
-
-        enabled = autostart.is_launch_at_login_enabled()
-        if settings.get("start_at_login") != enabled:
-            settings["start_at_login"] = enabled
-            save_config(self._cfg)
-
-    def _settings(self):
-        return self._cfg.setdefault("settings", {})
-
-    def _write_launch_at_login(self, enabled, *, start_hidden=None):
-        if enabled:
-            launch_hidden = (
-                self.startMinimized if start_hidden is None else bool(start_hidden)
+            self._hid_features_ready = bool(
+                getattr(engine, "hid_features_ready", False)
             )
-            autostart.enable_launch_at_login(
-                start_hidden=launch_hidden
-            )
-            return
-        autostart.disable_launch_at_login()
+        if supports_login_startup():
+            sync_login_startup_from_config(self.startAtLogin)
+        else:
+            self._cfg.setdefault("settings", {})["start_at_login"] = False
+        self._sync_connected_device_info()
 
     # ── Properties ─────────────────────────────────────────────
 
     @Property(list, notify=mappingsChanged)
     def buttons(self):
-        """List of button dicts for the active profile."""
+        """List of button dicts for the active profile, filtered by device."""
         mappings = get_active_mappings(self._cfg)
+        device_buttons = set(
+            self._effective_supported_buttons or BUTTON_NAMES.keys()
+        )
         result = []
-        for i, (key, name) in enumerate(BUTTON_NAMES.items()):
+        idx = 0
+        for key, name in BUTTON_NAMES.items():
+            if key not in device_buttons:
+                continue
             aid = mappings.get(key, "none")
+            idx += 1
             result.append({
                 "key": key,
                 "name": name,
                 "actionId": aid,
                 "actionLabel": _action_label(aid),
-                "index": i + 1,
+                "index": idx,
             })
         return result
 
-    @Property(list, constant=True)
+    def _hidden_actions(self):
+        """Return set of action IDs to hide based on effective device buttons."""
+        btns = self._effective_supported_buttons
+        hidden = set()
+        if btns and "mode_shift" not in btns:
+            hidden.add("toggle_smart_shift")
+            hidden.add("switch_scroll_mode")
+        return hidden
+
+    @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
-        """Actions grouped by category — for the action picker chips."""
+        """Actions grouped by category, filtered by device capabilities."""
         from collections import OrderedDict
+        hidden = self._hidden_actions()
         cats = OrderedDict()
         for aid in sorted(
             ACTIONS,
@@ -174,6 +195,8 @@ class Backend(QObject):
                 ACTIONS[a]["label"],
             ),
         ):
+            if aid in hidden:
+                continue
             data = ACTIONS[aid]
             cat = data["category"]
             cats.setdefault(cat, []).append({"id": aid, "label": data["label"]})
@@ -183,9 +206,10 @@ class Backend(QObject):
         ]})
         return result
 
-    @Property(list, constant=True)
+    @Property(list, notify=deviceLayoutChanged)
     def allActions(self):
-        """Flat sorted action list (Do Nothing first) — for ComboBoxes."""
+        """Flat sorted action list (Do Nothing first), filtered by device."""
+        hidden = self._hidden_actions()
         result = []
         none_data = ACTIONS.get("none")
         if none_data:
@@ -195,7 +219,7 @@ class Backend(QObject):
             ACTIONS,
             key=lambda a: (ACTIONS[a]["category"], ACTIONS[a]["label"]),
         ):
-            if aid == "none":
+            if aid == "none" or aid in hidden:
                 continue
             data = ACTIONS[aid]
             result.append({"id": aid, "label": data["label"],
@@ -213,13 +237,53 @@ class Backend(QObject):
     def dpi(self):
         return self._cfg.get("settings", {}).get("dpi", 1000)
 
+    _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    @Property(list, notify=settingsChanged)
+    def dpiPresets(self):
+        return self._cfg.get("settings", {}).get(
+            "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
+        )
+
+    @Slot(int, int)
+    def setDpiPreset(self, index, value):
+        """Set a single DPI preset slot (0-3) to *value*."""
+        device = getattr(self._engine, "connected_device", None) if self._engine else None
+        clamped = clamp_dpi(value, device)
+        presets = list(self._cfg.get("settings", {}).get(
+            "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
+        ))
+        while len(presets) < 4:
+            presets.append(self._DEFAULT_DPI_PRESETS[len(presets) % 4])
+        if 0 <= index < len(presets):
+            presets[index] = clamped
+        self._cfg.setdefault("settings", {})["dpi_presets"] = presets
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.settingsChanged.emit()
+
     @Property(str, notify=smartShiftChanged)
     def smartShiftMode(self):
         return self._cfg.get("settings", {}).get("smart_shift_mode", "ratchet")
 
-    @Property(bool, notify=mouseConnectedChanged)
+    @Property(bool, notify=smartShiftChanged)
+    def smartShiftEnabled(self):
+        return bool(self._cfg.get("settings", {}).get("smart_shift_enabled", False))
+
+    @Property(int, notify=smartShiftChanged)
+    def smartShiftThreshold(self):
+        return int(self._cfg.get("settings", {}).get("smart_shift_threshold", 25))
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
     def smartShiftSupported(self):
         return self._engine.smart_shift_supported if self._engine else False
+
+    @Property(bool, notify=deviceLayoutChanged)
+    def deviceHasSmartShift(self):
+        """Whether the effective device has a mode_shift button (SmartShift)."""
+        btns = self._effective_supported_buttons
+        return btns is None or "mode_shift" in btns
 
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
@@ -231,7 +295,7 @@ class Backend(QObject):
 
     @Property(bool, constant=True)
     def supportsStartAtLogin(self):
-        return self._autostart_supported
+        return supports_login_startup()
 
     @Property(bool, notify=settingsChanged)
     def invertVScroll(self):
@@ -279,6 +343,10 @@ class Backend(QObject):
     @Property(bool, notify=mouseConnectedChanged)
     def mouseConnected(self):
         return self._mouse_connected
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
+    def hidFeaturesReady(self):
+        return self._hid_features_ready
 
     @Property(str, notify=deviceInfoChanged)
     def deviceDisplayName(self):
@@ -471,44 +539,32 @@ class Backend(QObject):
 
     @Slot(bool)
     def setStartMinimized(self, value):
-        enabled = bool(value)
-        settings = self._settings()
-        if settings.get("start_minimized", True) == enabled:
+        hidden = bool(value)
+        if self.startMinimized == hidden:
             return
-
-        settings["start_minimized"] = enabled
-        status_message = (
-            "Launch hidden after login enabled" if enabled
-            else "Launch hidden after login disabled"
-        )
-
-        if self._autostart_supported and self.startAtLogin:
-            try:
-                self._write_launch_at_login(True, start_hidden=enabled)
-            except Exception as exc:
-                status_message = f"Updated setting, but login item refresh failed: {exc}"
-
+        self._cfg.setdefault("settings", {})["start_minimized"] = hidden
         save_config(self._cfg)
         self.settingsChanged.emit()
-        self.statusMessage.emit(status_message)
+        self.statusMessage.emit("Saved")
 
     @Slot(bool)
     def setStartAtLogin(self, value):
         enabled = bool(value)
-        if not self._autostart_supported:
-            self.statusMessage.emit("Start at login is only available on macOS")
+        if not supports_login_startup():
+            self.statusMessage.emit(
+                "Start at login is only available on Windows and macOS"
+            )
             return
-
+        if self.startAtLogin == enabled:
+            return
+        self._cfg.setdefault("settings", {})["start_at_login"] = enabled
+        save_config(self._cfg)
         try:
-            self._write_launch_at_login(enabled)
+            apply_login_startup(enabled)
         except Exception as exc:
-            self._sync_autostart_state()
             self.settingsChanged.emit()
             self.statusMessage.emit(f"Failed to update login item: {exc}")
             return
-
-        self._settings()["start_at_login"] = enabled
-        save_config(self._cfg)
         self.settingsChanged.emit()
         self.statusMessage.emit(
             "Start at login enabled" if enabled else "Start at login disabled"
@@ -516,7 +572,7 @@ class Backend(QObject):
 
     @Slot(int)
     def setDpi(self, value):
-        device = getattr(self._engine, "connected_device", None) if self._engine else None
+        device = self._resolved_connected_device()
         dpi = clamp_dpi(value, device)
         self._cfg.setdefault("settings", {})["dpi"] = dpi
         save_config(self._cfg)
@@ -524,13 +580,35 @@ class Backend(QObject):
             self._engine.set_dpi(dpi)
         self.settingsChanged.emit()
 
-    @Slot(str)
-    def setSmartShift(self, mode):
-        self._cfg.setdefault("settings", {})["smart_shift_mode"] = mode
+    def _applySmartShift(self, mode=None, enabled=None, threshold=None):
+        """Update one or more SmartShift settings, persist config, and push to device."""
+        settings = self._cfg.setdefault("settings", {})
+        if mode is not None:
+            settings["smart_shift_mode"] = mode
+        if enabled is not None:
+            settings["smart_shift_enabled"] = enabled
+        if threshold is not None:
+            settings["smart_shift_threshold"] = threshold
         save_config(self._cfg)
         if self._engine:
-            self._engine.set_smart_shift(mode)
+            self._engine.set_smart_shift(
+                settings.get("smart_shift_mode", "ratchet"),
+                settings.get("smart_shift_enabled", False),
+                settings.get("smart_shift_threshold", 25),
+            )
         self.smartShiftChanged.emit()
+
+    @Slot(str)
+    def setSmartShift(self, mode):
+        self._applySmartShift(mode=mode)
+
+    @Slot(bool)
+    def setSmartShiftEnabled(self, enabled):
+        self._applySmartShift(enabled=enabled)
+
+    @Slot(int)
+    def setSmartShiftThreshold(self, threshold):
+        self._applySmartShift(threshold=threshold)
 
     @Slot(bool)
     def setInvertVScroll(self, value):
@@ -687,12 +765,17 @@ class Backend(QObject):
 
     @Slot(str, result=list)
     def getProfileMappings(self, profileName):
-        """Return button mappings for a specific profile."""
+        """Return button mappings for a specific profile, filtered by device."""
         profiles = self._cfg.get("profiles", {})
         pdata = profiles.get(profileName, {})
         mappings = pdata.get("mappings", {})
+        device_buttons = set(
+            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
+        )
         result = []
         for key, name in PROFILE_BUTTON_NAMES.items():
+            if key not in device_buttons:
+                continue
             aid = mappings.get(key, "none")
             result.append({
                 "key": key,
@@ -705,6 +788,25 @@ class Backend(QObject):
     @Slot(str, result=str)
     def actionLabelFor(self, actionId):
         return _action_label(actionId)
+
+    @Slot(result=str)
+    def dumpDeviceInfo(self):
+        """Return JSON describing the connected device for contributor use."""
+        import json
+        if not self._engine:
+            return ""
+        info = self._engine.dump_device_info()
+        if not info:
+            return ""
+        return json.dumps(info, indent=2)
+
+    @Slot(str)
+    def copyToClipboard(self, text):
+        """Copy text to the system clipboard."""
+        from PySide6.QtGui import QGuiApplication
+        clipboard = QGuiApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
 
     @Slot(str)
     def setDeviceLayoutOverride(self, layoutKey):
@@ -761,6 +863,44 @@ class Backend(QObject):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._gestureEventRequest.emit(event)
 
+    def _onEngineSmartShiftRead(self, state):
+        """Called from engine/hook thread — posts to Qt main thread.
+
+        Uses QMetaObject.invokeMethod instead of a signal because the call may
+        originate on the Windows LL hook thread, whose message pump context can
+        prevent PySide6 signal queuing from working reliably.
+        """
+        self._pending_smart_shift_state = state
+        QMetaObject.invokeMethod(
+            self, "_handleSmartShiftRead", Qt.QueuedConnection
+        )
+
+    @Slot()
+    def _handleSmartShiftRead(self):
+        """Runs on Qt main thread — updates config and notifies QML."""
+        state = self._pending_smart_shift_state
+        if isinstance(state, dict):
+            settings = self._cfg.setdefault("settings", {})
+            settings["smart_shift_mode"] = state.get("mode", "ratchet")
+            settings["smart_shift_enabled"] = state.get("enabled", False)
+            # Only accept the device-reported threshold when SmartShift is
+            # enabled (device returns the real value 1-50).  When disabled the
+            # device returns 0xFF which the read code maps to a hardcoded 25,
+            # overwriting whatever the user chose in the UI.
+            if state.get("enabled", False):
+                settings["smart_shift_threshold"] = state.get("threshold", 25)
+        self.smartShiftChanged.emit()
+
+    def _onEngineStatusMessage(self, message):
+        """Called from engine thread — posts to Qt main thread."""
+        self._statusMessageRequest.emit(str(message or ""))
+
+    @Slot(str)
+    def _handleStatusMessage(self, message):
+        """Runs on Qt main thread."""
+        if message:
+            self.statusMessage.emit(message)
+
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):
         """Runs on Qt main thread."""
@@ -780,23 +920,97 @@ class Backend(QObject):
     @Slot(bool)
     def _handleConnectionChange(self, connected):
         """Runs on Qt main thread."""
+        previous_connected = self._mouse_connected
+        previous_hid_features_ready = self._hid_features_ready
         self._mouse_connected = connected
-        device = getattr(self._engine, "connected_device", None) if self._engine else None
+        self._hid_features_ready = bool(
+            getattr(self._engine, "hid_features_ready", False)
+        ) if self._engine else False
+        self._connected_device_refresh_attempts = 0
+        device = None
         if connected:
-            self._apply_device_layout(device)
+            self._sync_connected_device_info()
+            device = self._resolved_connected_device()
         else:
             self._apply_device_layout(None)
-        if not connected and self._battery_level != -1:
+        device_source = getattr(device, "source", "") if device is not None else ""
+        if (not connected or device_source == "evdev") and self._battery_level != -1:
             self._battery_level = -1
             self.batteryLevelChanged.emit()
-        self.mouseConnectedChanged.emit()
-        self._append_debug_line(
-            f"Mouse {'connected' if connected else 'disconnected'}"
+        if self._hid_features_ready != previous_hid_features_ready:
+            self.hidFeaturesReadyChanged.emit()
+        if connected != previous_connected:
+            self.mouseConnectedChanged.emit()
+            self._append_debug_line(
+                f"Mouse {'connected' if connected else 'disconnected'}"
+            )
+
+    def _resolved_connected_device(self):
+        device = getattr(self._engine, "connected_device", None) if self._engine else None
+        if device is not None:
+            return device
+        if sys.platform != "linux" or not self._engine:
+            return None
+        hook = getattr(self._engine, "hook", None)
+        hook_connected = bool(
+            getattr(self._engine, "device_connected", False)
+            or getattr(hook, "evdev_ready", False)
+            or getattr(hook, "_device_connected", False)
         )
+        if not (self._mouse_connected or hook_connected):
+            return None
+        evdev_device = getattr(hook, "_evdev_device", None) if hook else None
+        if not evdev_device:
+            return None
+        info = getattr(evdev_device, "info", None)
+        return build_evdev_connected_device_info(
+            product_id=getattr(info, "product", None) if info else None,
+            product_name=getattr(evdev_device, "name", None),
+            transport="evdev",
+            source="evdev",
+        )
+
+    def _sync_connected_device_info(self):
+        device = self._resolved_connected_device()
+        self._apply_device_layout(device)
+        if self._should_retry_device_info(device):
+            self._schedule_connected_device_info_refresh()
+
+    def _should_retry_device_info(self, device):
+        if sys.platform != "linux" or not self._engine:
+            return False
+        hook = getattr(self._engine, "hook", None)
+        hook_connected = bool(
+            self._mouse_connected
+            or getattr(self._engine, "device_connected", False)
+            or getattr(hook, "evdev_ready", False)
+            or getattr(hook, "_device_connected", False)
+        )
+        if not hook_connected:
+            return False
+        if getattr(self._engine, "connected_device", None) is not None:
+            return False
+        if getattr(device, "source", "") != "evdev":
+            return False
+        return self._connected_device_refresh_attempts < 20
+
+    def _schedule_connected_device_info_refresh(self):
+        if self._connected_device_refresh_pending:
+            return
+        self._connected_device_refresh_pending = True
+        QTimer.singleShot(250, self._refresh_connected_device_info)
+
+    def _refresh_connected_device_info(self):
+        self._connected_device_refresh_pending = False
+        if not self._mouse_connected:
+            return
+        self._connected_device_refresh_attempts += 1
+        self._sync_connected_device_info()
 
     def _apply_device_layout(self, device):
         device_key = getattr(device, "key", "") or ""
         display_name = getattr(device, "display_name", "") or "Logitech mouse"
+        source = getattr(device, "source", "") or ""
         dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
         dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
         info_changed = False
@@ -805,6 +1019,9 @@ class Backend(QObject):
             info_changed = True
         if device_key != self._connected_device_key:
             self._connected_device_key = device_key
+            info_changed = True
+        if source != self._connected_device_source:
+            self._connected_device_source = source
             info_changed = True
         if dpi_min != self._device_dpi_min:
             self._device_dpi_min = dpi_min
@@ -842,6 +1059,22 @@ class Backend(QObject):
         if layout_changed:
             self.deviceLayoutChanged.emit()
 
+        # Compute effective supported buttons (override wins over physical).
+        if override_key:
+            eff = get_buttons_for_layout(override_key)
+        else:
+            eff = getattr(device, "supported_buttons", None)
+        old_eff = self._effective_supported_buttons
+        self._effective_supported_buttons = eff
+
+        # Refresh button list -- different devices have different buttons.
+        if info_changed or layout_changed:
+            self.mappingsChanged.emit()
+
+        # If the effective button set changed, action lists may need updating.
+        if eff != old_eff:
+            self.deviceLayoutChanged.emit()
+
     @Slot(int)
     def _handleBatteryChange(self, level):
         """Runs on Qt main thread."""
@@ -852,6 +1085,12 @@ class Backend(QObject):
     def _handleDebugMessage(self, message):
         """Runs on Qt main thread."""
         self._append_debug_line(message)
+
+    @Slot(str)
+    def _handleStatusMessage(self, message):
+        """Runs on Qt main thread."""
+        if message:
+            self.statusMessage.emit(message)
 
     def _append_debug_line(self, message):
         timestamp = time.strftime("%H:%M:%S")

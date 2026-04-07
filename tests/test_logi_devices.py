@@ -14,7 +14,7 @@ class LogiDeviceRegistryTests(unittest.TestCase):
 
         self.assertIsNotNone(device)
         self.assertEqual(device.key, "mx_master_4")
-        self.assertEqual(device.ui_layout, "mx_master")
+        self.assertEqual(device.ui_layout, "mx_master_4")
 
     def test_resolve_mx_master_4_by_hid_product_string(self):
         device = resolve_device(product_name="MX_Master_4")
@@ -48,7 +48,7 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.product_id, 0xB023)
         self.assertEqual(info.transport, "Bluetooth Low Energy")
         self.assertEqual(info.gesture_cids, DEFAULT_GESTURE_CIDS)
-        self.assertEqual(info.ui_layout, "mx_master")
+        self.assertEqual(info.ui_layout, "mx_master_3")
 
     def test_build_connected_device_info_falls_back_to_runtime_name(self):
         info = build_connected_device_info(

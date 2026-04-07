@@ -101,15 +101,15 @@ python main_qml.py
 python main_qml.py --start-hidden
 ```
 
-Use `--start-hidden` to launch straight into the menu bar without opening the settings window. This is the same flag the macOS login item uses when **Launch hidden after login** is enabled.
+Use `--start-hidden` to launch straight into the menu bar without opening the settings window.
 
 ## Start at Login
 
 Mouser can now manage **Start at login** from the app UI on macOS.
 
 - The toggle writes a LaunchAgent plist to `~/Library/LaunchAgents/io.github.tombadash.mouser.plist`
-- If **Launch hidden after login** is enabled, the login item passes `--start-hidden` so Mouser starts in the menu bar without popping the settings window
 - The setting is designed for the packaged `.app`, but it also works in a source checkout by launching the current Python interpreter directly
+- If **Start minimized** is enabled in Mouser, the app still launches tray-first after login because that preference is read from config at startup
 - Turning **Start at login** back off removes that LaunchAgent plist again
 
 ## Accessibility for the Packaged App

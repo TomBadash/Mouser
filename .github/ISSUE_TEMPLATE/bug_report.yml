@@ -1,0 +1,160 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Mouser
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections
+        below so we can reproduce and fix the issue.
+
+  - type: input
+    id: mouser-version
+    attributes:
+      label: Mouser version
+      description: >
+        Which version of Mouser are you using? Check the release you downloaded
+        from the [releases page](https://github.com/TomBadash/MouseControl/releases),
+        or look at the zip/dmg filename (e.g. "v3.5.0").
+      placeholder: "e.g. v3.5.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS 15 (Sequoia)
+        - macOS 14 (Sonoma)
+        - macOS 13 (Ventura)
+        - macOS 12 (Monterey)
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version details
+      description: >
+        Specific build or version number, if known. For Linux, include distro
+        and desktop environment.
+      placeholder: "e.g. Windows 11 23H2, macOS 14.3, Ubuntu 24.04 GNOME Wayland"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: connection-type
+    attributes:
+      label: Mouse connection type
+      options:
+        - Bluetooth
+        - USB receiver (Bolt / Unifying)
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: logi-options-check
+    attributes:
+      label: Logitech Options+ status
+      description: >
+        Logitech Options+ conflicts with Mouser over HID++ access and can cause
+        crashes or unexpected behavior. Please confirm it is not running.
+      options:
+        - label: I have confirmed that Logitech Options+ is **not** running
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly. What did you do, and what went wrong?
+      placeholder: "When I click the gesture button, Mouser..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+      placeholder: "I expected the gesture button to trigger..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Step-by-step instructions to trigger the bug. The more detail, the
+        easier it is to track down.
+      placeholder: |
+        1. Open Mouser
+        2. Go to Mouse page
+        3. Assign "Copy" to the gesture button
+        4. Press the gesture button in Notepad
+        5. Nothing happens
+    validations:
+      required: true
+
+  - type: textarea
+    id: device-info
+    attributes:
+      label: Device info JSON
+      description: >
+        On the Mouse page, click **Copy device info** (the clipboard button next
+        to "Help us support your mouse"). Paste the JSON below. This tells us
+        exactly which device, buttons, and HID++ features were discovered.
+      render: json
+      placeholder: "Paste the JSON from 'Copy device info' here"
+    validations:
+      required: false
+
+  - type: textarea
+    id: log-file
+    attributes:
+      label: Log file contents
+      description: >
+        Logs help a lot when diagnosing issues. Paste the relevant portion of
+        your log file (the last ~100 lines around the time of the bug are
+        usually enough).
+
+
+        **Log file locations:**
+
+        - **Windows:** `%APPDATA%\Mouser\logs\mouser.log`
+
+        - **macOS:** `~/Library/Logs/Mouser/mouser.log`
+
+        - **Linux:** `~/.local/state/Mouser/logs/mouser.log`
+      render: text
+      placeholder: "Paste relevant log output here"
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or screen recordings
+      description: >
+        If applicable, add screenshots or short screen recordings to help
+        illustrate the problem. Drag and drop files here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: >
+        Any other details that might help: other software running, special
+        system configuration, whether the issue started after an update, etc.
+    validations:
+      required: false

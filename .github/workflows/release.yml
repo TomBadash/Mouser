@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: pyinstaller Mouser.spec --noconfirm
+
+      - name: Create archive
+        run: Compress-Archive -Path dist\Mouser -DestinationPath Mouser-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mouser-Windows
+          path: Mouser-Windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build macOS app
+        run: |
+          chmod +x build_macos_app.sh
+          ./build_macos_app.sh
+
+      - name: Create archive
+        run: cd dist && zip -r -y ../Mouser-macOS.zip Mouser.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mouser-macOS
+          path: Mouser-macOS.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: pyinstaller Mouser-linux.spec --noconfirm
+
+      - name: Create archive
+        run: cd dist && zip -r ../Mouser-Linux.zip Mouser
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mouser-Linux
+          path: Mouser-Linux.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            # Release already exists — just upload the assets
+            gh release upload "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              Mouser-Windows/Mouser-Windows.zip \
+              Mouser-macOS/Mouser-macOS.zip \
+              Mouser-Linux/Mouser-Linux.zip
+          else
+            gh release create "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --title "Mouser ${{ github.ref_name }}" \
+              --generate-notes \
+              Mouser-Windows/Mouser-Windows.zip \
+              Mouser-macOS/Mouser-macOS.zip \
+              Mouser-Linux/Mouser-Linux.zip
+          fi

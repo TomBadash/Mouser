@@ -27,7 +27,9 @@ a = Analysis(
     hiddenimports=[
         # conditional / lazy imports PyInstaller may miss
         "hid",
+        "logging.handlers",
         "ctypes.wintypes",
+        "ui.locale_manager",
         # PySide6 QML runtime
         "PySide6.QtQuick",
         "PySide6.QtQuickControls2",
@@ -255,7 +257,8 @@ if sys.platform == 'darwin':
         icon='images/AppIcon.icns',
         bundle_identifier='com.mouser.app',
         info_plist={
-            'CFBundleShortVersionString': '1.0.0',
+            'CFBundleShortVersionString': '3.5.0',
+            'CFBundleVersion': '3.5.0',
             'LSUIElement': True, # Runs in background (menu bar app)
             'NSHighResolutionCapable': True,
         },

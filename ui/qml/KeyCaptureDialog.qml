@@ -8,6 +8,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: dialog
     readonly property var theme: Theme.palette(uiState.darkMode)
+    property var s: lm.strings
 
     property string targetButton: ""
     property string targetProfile: ""
@@ -102,7 +103,7 @@ Rectangle {
             spacing: 12
 
             Text {
-                text: "Custom Shortcut"
+                text: s["key_capture.title"]
                 font { family: uiState.fontFamily; pixelSize: 16; bold: true }
                 color: dialog.theme.textPrimary
             }
@@ -110,7 +111,7 @@ Rectangle {
             TextField {
                 id: shortcutField
                 width: parent.width
-                placeholderText: "e.g. ctrl+shift+f5"
+                placeholderText: s["key_capture.placeholder"]
                 font { family: uiState.fontFamily; pixelSize: 13 }
                 Material.accent: dialog.theme.accent
                 onTextChanged: dialog._validate(text)
@@ -134,7 +135,7 @@ Rectangle {
             }
 
             Text {
-                text: "Valid keys: ctrl, shift, alt, super, a\u2013z, f1\u2013f12,\nspace, tab, enter, esc, left, right, up, down, delete, ..."
+                text: s["key_capture.valid_keys"]
                 font { family: uiState.fontFamily; pixelSize: 10 }
                 color: dialog.theme.textDim
                 lineHeight: 1.4
@@ -150,7 +151,7 @@ Rectangle {
                                                   : "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: "Cancel"
+                        text: s["key_capture.cancel"]
                         font { family: uiState.fontFamily; pixelSize: 12 }
                         color: dialog.theme.textSecondary
                     }
@@ -171,7 +172,7 @@ Rectangle {
 
                     Text {
                         anchors.centerIn: parent
-                        text: "Confirm"
+                        text: s["key_capture.confirm"]
                         font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                         color: dialog._valid ? dialog.theme.accent
                                              : dialog.theme.textDim

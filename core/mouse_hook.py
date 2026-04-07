@@ -39,6 +39,8 @@ class MouseEvent:
     HSCROLL_RIGHT = "hscroll_right"
     MODE_SHIFT_DOWN = "mode_shift_down"
     MODE_SHIFT_UP = "mode_shift_up"
+    DPI_SWITCH_DOWN = "dpi_switch_down"
+    DPI_SWITCH_UP = "dpi_switch_up"
 
     def __init__(self, event_type, raw_data=None):
         self.event_type = event_type
@@ -247,6 +249,7 @@ if sys.platform == "win32":
             self._ri_hwnd = None
             self._device_name_cache = {}
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_active = False
             self._prev_raw_buttons = {}
             self._hid_gesture = None
@@ -269,6 +272,8 @@ if sys.platform == "win32":
             self._gesture_cooldown_until = 0.0
             self._gesture_input_source = None
             self._connected_device = None
+            self._dispatch_queue = queue.Queue()
+            self._dispatch_worker_thread = None
 
         def register(self, event_type, callback):
             self._callbacks.setdefault(event_type, []).append(callback)
@@ -306,6 +311,12 @@ if sys.platform == "win32":
         @property
         def connected_device(self):
             return self._connected_device
+
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
 
         def _set_device_connected(self, connected):
             if connected == self._device_connected:
@@ -366,6 +377,18 @@ if sys.platform == "win32":
 
         def _hid_gesture_available(self):
             return self._hid_gesture is not None and self._device_connected
+
+        def _dispatch_worker(self):
+            """Background thread: drains the event queue so the hook callback returns fast."""
+            while self._running:
+                try:
+                    event = self._dispatch_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                try:
+                    self._dispatch(event)
+                except Exception as e:
+                    print(f"[MouseHook] dispatch worker error: {e}")
 
         def _gesture_cooldown_active(self):
             return time.monotonic() < self._gesture_cooldown_until
@@ -516,6 +539,19 @@ if sys.platform == "win32":
         }
 
         def _low_level_handler(self, nCode, wParam, lParam):
+            try:
+                return self._low_level_handler_inner(nCode, wParam, lParam)
+            except Exception as exc:
+                # CRITICAL: never let an exception escape the hook callback —
+                # Windows would silently uninstall the hook, killing all remapping.
+                try:
+                    print(f"[MouseHook] CRITICAL _low_level_handler EXCEPTION: {exc}")
+                    import traceback; traceback.print_exc()
+                except Exception:
+                    pass
+                return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
+        def _low_level_handler_inner(self, nCode, wParam, lParam):
             if nCode == HC_ACTION:
                 data = lParam.contents
                 mouse_data = data.mouseData
@@ -602,7 +638,7 @@ if sys.platform == "win32":
                             self._emit_debug("Invert horizontal scroll skipped: raw input window unavailable")
 
                 if event:
-                    self._dispatch(event)
+                    self._dispatch_queue.put(event)
                     if should_block:
                         return 1
 
@@ -844,6 +880,14 @@ if sys.platform == "win32":
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
@@ -886,6 +930,11 @@ if sys.platform == "win32":
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
                     }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
+                    }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
@@ -897,6 +946,10 @@ if sys.platform == "win32":
                 self._hid_gesture = listener
                 if not listener.start():
                     self._hid_gesture = None
+            # Start the dispatch worker — processes events off the hook thread
+            self._dispatch_worker_thread = threading.Thread(
+                target=self._dispatch_worker, daemon=True, name="HookDispatch")
+            self._dispatch_worker_thread.start()
             return True
 
         def stop(self):
@@ -905,6 +958,9 @@ if sys.platform == "win32":
                 self._hid_gesture.stop()
                 self._hid_gesture = None
             self._connected_device = None
+            if self._dispatch_worker_thread:
+                self._dispatch_worker_thread.join(timeout=1)
+                self._dispatch_worker_thread = None
             if self._thread_id:
                 PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
             if self._hook_thread:
@@ -934,6 +990,8 @@ elif sys.platform == "darwin":
     _BTN_BACK = 3
     _BTN_FORWARD = 4
     _SCROLL_INVERT_MARKER = 0x4D4F5553
+    _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
+    _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
     class MouseHook:
         """
@@ -955,12 +1013,16 @@ elif sys.platform == "darwin":
             self.invert_hscroll = False
             self._gesture_active = False
             self._hid_gesture = None
+            self._wake_observer = None
+            self._session_resign_observer = None
+            self._session_activate_observer = None
             self._dispatch_queue = queue.Queue()
             self._dispatch_thread = None
             self._first_event_logged = False
             self._device_connected = False
             self._connection_change_cb = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
             self._gesture_deadzone = 40.0
@@ -1010,6 +1072,12 @@ elif sys.platform == "darwin":
         @property
         def connected_device(self):
             return self._connected_device
+
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
 
         def _set_device_connected(self, connected):
             if connected == self._device_connected:
@@ -1298,6 +1366,15 @@ elif sys.platform == "darwin":
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:
+                if event_type in (
+                    _kCGEventTapDisabledByTimeout,
+                    _kCGEventTapDisabledByUserInput,
+                ):
+                    print(f"[MouseHook] CGEventTap disabled by system "
+                          f"(type=0x{event_type:X}), re-enabling", flush=True)
+                    Quartz.CGEventTapEnable(self._tap, True)
+                    return cg_event
+
                 if not self._first_event_logged:
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
@@ -1378,6 +1455,13 @@ elif sys.platform == "darwin":
                         ) == _SCROLL_INVERT_MARKER
                     ):
                         return cg_event
+                    # Pass through trackpad / Magic Mouse continuous scroll
+                    # events untouched — only intercept discrete mouse wheel.
+                    _kCGScrollWheelEventIsContinuous = 88
+                    if Quartz.CGEventGetIntegerValueField(
+                        cg_event, _kCGScrollWheelEventIsContinuous
+                    ):
+                        return cg_event
                     h_delta = Quartz.CGEventGetIntegerValueField(
                         cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2)
                     h_delta = h_delta / 65536.0
@@ -1452,6 +1536,14 @@ elif sys.platform == "darwin":
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
@@ -1473,6 +1565,57 @@ elif sys.platform == "darwin":
         def _on_hid_disconnect(self):
             self._connected_device = None
             self._set_device_connected(False)
+
+        def _register_wake_observer(self):
+            """Register NSWorkspace observers for wake and fast-user-switch events.
+
+            On wake or session-activate: re-enable the CGEventTap and request a
+            full HID++ reconnect so button diverts (including CID 0x00C4) are
+            re-applied after the device soft-resets.
+            """
+            try:
+                from AppKit import NSWorkspace
+            except ImportError:
+                return
+            nc = NSWorkspace.sharedWorkspace().notificationCenter()
+            hg = self._hid_gesture
+
+            def _re_enable_tap_and_reconnect(reason):
+                if self._tap and self._running:
+                    Quartz.CGEventTapEnable(self._tap, True)
+                    ok = Quartz.CGEventTapIsEnabled(self._tap)
+                    print(f"[MouseHook] Event tap re-enabled ({reason}): "
+                          f"{'OK' if ok else 'FAILED — may need restart'}", flush=True)
+                if hg:
+                    hg.force_reconnect()
+
+            def _on_wake(n):
+                _re_enable_tap_and_reconnect("wake")
+
+            def _on_session_resign(n):
+                print("[MouseHook] Session deactivated", flush=True)
+
+            def _on_session_activate(n):
+                _re_enable_tap_and_reconnect("user-switch")
+
+            self._wake_observer = nc.addObserverForName_object_queue_usingBlock_(
+                "NSWorkspaceDidWakeNotification", None, None, _on_wake)
+            self._session_resign_observer = nc.addObserverForName_object_queue_usingBlock_(
+                "NSWorkspaceSessionDidResignActiveNotification", None, None, _on_session_resign)
+            self._session_activate_observer = nc.addObserverForName_object_queue_usingBlock_(
+                "NSWorkspaceSessionDidBecomeActiveNotification", None, None, _on_session_activate)
+
+        def _unregister_wake_observer(self):
+            try:
+                from AppKit import NSWorkspace
+                nc = NSWorkspace.sharedWorkspace().notificationCenter()
+                for attr in ("_wake_observer", "_session_resign_observer", "_session_activate_observer"):
+                    obs = getattr(self, attr, None)
+                    if obs is not None:
+                        nc.removeObserver_(obs)
+                        setattr(self, attr, None)
+            except Exception:
+                pass
 
         def start(self):
             if not _QUARTZ_OK:
@@ -1527,6 +1670,11 @@ elif sys.platform == "darwin":
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
                     }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
+                    }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
@@ -1538,9 +1686,11 @@ elif sys.platform == "darwin":
                 self._hid_gesture = listener
                 if not listener.start():
                     self._hid_gesture = None
+            self._register_wake_observer()
             return True
 
         def stop(self):
+            self._unregister_wake_observer()
             self._running = False
             if self._hid_gesture:
                 self._hid_gesture.stop()
@@ -1578,6 +1728,8 @@ elif sys.platform == "linux":
         _EVDEV_OK = False
         print("[MouseHook] python-evdev not installed — pip install evdev")
 
+    from core.logi_devices import build_evdev_connected_device_info
+
     _LOGI_VENDOR = 0x046D
 
     class MouseHook:
@@ -1601,9 +1753,13 @@ elif sys.platform == "linux":
             self._gesture_active = False
             self._hid_gesture = None
             self._device_connected = False
+            self._evdev_ready = False
+            self._hid_ready = False
             self._connection_change_cb = None
             self._connected_device = None
+            self._evdev_connected_device = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
             self._gesture_deadzone = 40.0
@@ -1623,6 +1779,8 @@ elif sys.platform == "linux":
             self._uinput = None
             self._evdev_thread = None
             self._rescan_requested = threading.Event()
+            self._evdev_wakeup = threading.Event()
+            self._ignored_non_logitech = set()
 
         # -- standard interface methods ---------------------------------
 
@@ -1659,20 +1817,70 @@ elif sys.platform == "linux":
             return self._device_connected
 
         @property
+        def evdev_ready(self):
+            return self._evdev_ready
+
+        @property
+        def hid_ready(self):
+            return self._hid_ready
+
+        @property
         def connected_device(self):
             return self._connected_device
 
-        def _set_device_connected(self, connected):
-            if connected == self._device_connected:
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
+
+        def _set_evdev_ready(self, ready):
+            if ready == self._evdev_ready:
+                return
+            self._evdev_ready = ready
+            self._refresh_device_state(force=True)
+
+        def _set_device_connected(self, connected, force=False):
+            changed = connected != self._device_connected
+            if not changed and not force:
                 return
             self._device_connected = connected
-            state = "Connected" if connected else "Disconnected"
-            print(f"[MouseHook] Device {state}")
+            if changed:
+                state = "Connected" if connected else "Disconnected"
+                print(f"[MouseHook] Device {state}")
             if self._connection_change_cb:
                 try:
                     self._connection_change_cb(connected)
                 except Exception:
                     pass
+
+        def _build_evdev_connected_device(self, dev):
+            info = getattr(dev, "info", None)
+            return build_evdev_connected_device_info(
+                product_id=getattr(info, "product", None) if info else None,
+                product_name=getattr(dev, "name", None),
+                transport="evdev",
+                source="evdev",
+            )
+
+        def _refresh_device_state(self, force=False):
+            previous = self._connected_device
+            next_device = None
+            if self._hid_ready and self._hid_gesture:
+                next_device = self._hid_gesture.connected_device
+            if next_device is None:
+                next_device = self._evdev_connected_device
+            self._connected_device = next_device
+
+            prev_source = getattr(previous, "source", None) if previous is not None else None
+            next_source = getattr(next_device, "source", None) if next_device is not None else None
+            if prev_source != next_source:
+                if next_source == "evdev":
+                    print("[MouseHook] Using evdev fallback device info")
+                elif prev_source == "evdev" and next_device is not None:
+                    print("[MouseHook] Device info upgraded from evdev fallback to HID++")
+
+            self._set_device_connected(self._evdev_ready, force=force)
 
         def set_debug_callback(self, callback):
             self._debug_callback = callback
@@ -1720,7 +1928,7 @@ elif sys.platform == "linux":
                     print(f"[MouseHook] callback error: {e}")
 
         def _hid_gesture_available(self):
-            return self._hid_gesture is not None and self._device_connected
+            return self._hid_gesture is not None and self._evdev_ready
 
         # -- gesture detection (shared logic) ---------------------------
 
@@ -1918,6 +2126,14 @@ elif sys.platform == "linux":
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
@@ -1931,27 +2147,36 @@ elif sys.platform == "linux":
             self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
         def _on_hid_connect(self):
-            self._connected_device = (
-                self._hid_gesture.connected_device if self._hid_gesture else None
-            )
-            self._set_device_connected(True)
-            # If evdev is currently grabbing a non-Logitech device,
-            # request a rescan so we switch to the reconnected Logitech.
+            self._hid_ready = True
+            self._refresh_device_state(force=True)
             dev = self._evdev_device
-            if dev is not None and dev.info.vendor != _LOGI_VENDOR:
-                print("[MouseHook] Logitech HID reconnected; requesting evdev rescan")
+            should_wake_evdev = (
+                self._running
+                and _EVDEV_OK
+                and (
+                    dev is None
+                    or not self._evdev_ready
+                    or dev.info.vendor != _LOGI_VENDOR
+                )
+            )
+            if should_wake_evdev:
+                print("[MouseHook] Logitech HID connected; waking evdev scan")
                 self._rescan_requested.set()
+                self._evdev_wakeup.set()
 
         def _on_hid_disconnect(self):
-            self._connected_device = None
-            self._set_device_connected(False)
+            self._hid_ready = False
+            if self._gesture_active:
+                self._gesture_active = False
+                self._finish_gesture_tracking()
+                self._gesture_triggered = False
+            self._refresh_device_state(force=True)
 
         # -- Linux evdev specifics --------------------------------------
 
         def _find_mouse_device(self):
-            """Find the best mouse evdev device (prefer Logitech)."""
+            """Find the best Logitech mouse evdev device."""
             logi_mice = []
-            other_mice = []
             for path in _evdev_mod.list_devices():
                 try:
                     dev = _InputDevice(path)
@@ -1981,13 +2206,24 @@ elif sys.platform == "linux":
                 if dev.info.vendor == _LOGI_VENDOR:
                     logi_mice.append((dev, has_side))
                 else:
-                    other_mice.append((dev, has_side))
+                    info = getattr(dev, "info", None)
+                    dedupe_key = (
+                        dev.path,
+                        getattr(info, "vendor", 0),
+                        getattr(info, "product", 0),
+                        dev.name or "",
+                    )
+                    if dedupe_key not in self._ignored_non_logitech:
+                        self._ignored_non_logitech.add(dedupe_key)
+                        print(
+                            "[MouseHook] Ignoring non-Logitech evdev candidate: "
+                            f"{dev.name} ({dev.path}) "
+                            f"vendor=0x{getattr(info, 'vendor', 0):04X} "
+                            f"product=0x{getattr(info, 'product', 0):04X}"
+                        )
+                    dev.close()
 
-            ordered = sorted(
-                logi_mice, key=lambda x: -x[1]
-            ) + sorted(
-                other_mice, key=lambda x: -x[1]
-            )
+            ordered = sorted(logi_mice, key=lambda x: -x[1])
             if ordered:
                 chosen = ordered[0][0]
                 for dev, _ in ordered[1:]:
@@ -2008,6 +2244,8 @@ elif sys.platform == "linux":
                 )
                 dev.grab()
                 self._evdev_device = dev
+                self._evdev_connected_device = self._build_evdev_connected_device(dev)
+                self._set_evdev_ready(True)
                 print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
                 return True
             except PermissionError:
@@ -2038,6 +2276,8 @@ elif sys.platform == "linux":
                 except Exception:
                     pass
                 self._uinput = None
+            self._evdev_connected_device = None
+            self._set_evdev_ready(False)
 
         def _evdev_loop(self):
             """Outer loop: find device -> listen -> reconnect on error."""
@@ -2045,7 +2285,7 @@ elif sys.platform == "linux":
                 self._rescan_requested.clear()
                 if not self._setup_evdev():
                     if self._running:
-                        time.sleep(2)
+                        self._wait_for_evdev_wakeup(2)
                     continue
                 try:
                     self._listen_loop()
@@ -2058,7 +2298,13 @@ elif sys.platform == "linux":
                 finally:
                     self._cleanup_evdev()
                 if self._running:
-                    time.sleep(1)
+                    if self._rescan_requested.is_set():
+                        continue
+                    self._wait_for_evdev_wakeup(1)
+
+        def _wait_for_evdev_wakeup(self, timeout):
+            self._evdev_wakeup.wait(timeout)
+            self._evdev_wakeup.clear()
 
         def _listen_loop(self):
             """Read events from the grabbed device, forward or block."""
@@ -2200,6 +2446,11 @@ elif sys.platform == "linux":
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
                     }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
+                    }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
@@ -2230,7 +2481,11 @@ elif sys.platform == "linux":
             if self._hid_gesture:
                 self._hid_gesture.stop()
                 self._hid_gesture = None
+            self._hid_ready = False
             self._connected_device = None
+            self._evdev_connected_device = None
+            self._rescan_requested.set()
+            self._evdev_wakeup.set()
             if self._evdev_thread:
                 self._evdev_thread.join(timeout=2)
                 self._evdev_thread = None
@@ -2256,6 +2511,7 @@ else:
             self._gesture_callback = None
             self._connected_device = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             print(f"[MouseHook] Platform \'{sys.platform}\' not supported")
 
         def register(self, event_type, callback): pass
@@ -2271,5 +2527,6 @@ else:
         def device_connected(self): return False
         @property
         def connected_device(self): return None
+        def dump_device_info(self): return None
         def start(self): pass
         def stop(self): pass

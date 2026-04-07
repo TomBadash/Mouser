@@ -23,7 +23,22 @@ class DeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(choices[0], {"key": "", "label": "Auto-detect"})
         self.assertIn({"key": "mx_master", "label": "MX Master family"}, choices)
-        self.assertNotIn({"key": "mx_anywhere", "label": "MX Anywhere family"}, choices)
+        self.assertIn({"key": "mx_anywhere", "label": "MX Anywhere family"}, choices)
+        self.assertIn({"key": "mx_vertical", "label": "MX Vertical family"}, choices)
+
+    def test_mx_anywhere_layout_is_interactive(self):
+        layout = get_device_layout("mx_anywhere")
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["image_asset"], "mouse_mx_anywhere_3s.png")
+        self.assertGreater(len(layout["hotspots"]), 0)
+
+    def test_mx_vertical_layout_is_interactive(self):
+        layout = get_device_layout("mx_vertical")
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["image_asset"], "mx_vertical.png")
+        self.assertGreater(len(layout["hotspots"]), 0)
 
 
 if __name__ == "__main__":

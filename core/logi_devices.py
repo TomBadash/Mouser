@@ -15,7 +15,11 @@ from typing import Iterable
 DEFAULT_GESTURE_CIDS = (0x00C3, 0x00D7)
 DEFAULT_DPI_MIN = 200
 DEFAULT_DPI_MAX = 8000
-DEFAULT_BUTTON_LAYOUT = (
+
+# -- Per-family button layouts ------------------------------------------------
+# Each tuple lists the config button keys the device physically supports.
+
+MX_MASTER_BUTTONS = (
     "middle",
     "gesture",
     "gesture_left",
@@ -28,6 +32,39 @@ DEFAULT_BUTTON_LAYOUT = (
     "hscroll_right",
     "mode_shift",
 )
+
+# MX Anywhere has a gesture button but no horizontal scroll tilt and no
+# dedicated mode-shift button.  Gesture support is a best guess -- needs
+# validation by an owner.
+MX_ANYWHERE_BUTTONS = (
+    "middle",
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+    "xbutton1",
+    "xbutton2",
+)
+
+# MX Vertical has no gesture button, no horizontal scroll, no mode-shift,
+# but has a dedicated DPI switch button on top.
+MX_VERTICAL_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+    "dpi_switch",
+)
+
+# Safe minimum for any unrecognised Logitech mouse.
+GENERIC_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+)
+
+# Backward-compat alias used by config.py and other modules.
+DEFAULT_BUTTON_LAYOUT = MX_MASTER_BUTTONS
 
 
 @dataclass(frozen=True)
@@ -82,28 +119,28 @@ KNOWN_LOGI_DEVICES = (
             "MX_Master_4",
             "MX Master 4 for Business",
         ),
-        ui_layout="mx_master",
+        ui_layout="mx_master_4",
     ),
     LogiDeviceSpec(
         key="mx_master_3s",
         display_name="MX Master 3S",
         product_ids=(0xB034,),
         aliases=("Logitech MX Master 3S", "MX Master 3S for Mac"),
-        ui_layout="mx_master",
+        ui_layout="mx_master_3s",
     ),
     LogiDeviceSpec(
         key="mx_master_3",
         display_name="MX Master 3",
         product_ids=(0xB023,),
         aliases=("Wireless Mouse MX Master 3", "MX Master 3 for Mac", "MX Master 3 Mac"),
-        ui_layout="mx_master",
+        ui_layout="mx_master_3",
     ),
     LogiDeviceSpec(
         key="mx_master_2s",
         display_name="MX Master 2S",
         product_ids=(0xB019,),
         aliases=("Wireless Mouse MX Master 2S",),
-        ui_layout="mx_master",
+        ui_layout="mx_master_2s",
         dpi_max=4000,
     ),
     LogiDeviceSpec(
@@ -120,6 +157,8 @@ KNOWN_LOGI_DEVICES = (
         product_ids=(0xB020,),
         aliases=("MX Vertical Wireless Mouse", "MX Vertical Advanced Ergonomic Mouse"),
         ui_layout="mx_vertical",
+        image_asset="mx_vertical.png",
+        supported_buttons=MX_VERTICAL_BUTTONS,
         dpi_max=4000,
     ),
     LogiDeviceSpec(
@@ -127,7 +166,9 @@ KNOWN_LOGI_DEVICES = (
         display_name="MX Anywhere 3S",
         product_ids=(0xB037,),
         aliases=("MX Anywhere 3S for Mac",),
-        ui_layout="mx_anywhere",
+        ui_layout="mouse_mx_anywhere_3s.png",
+        image_asset="mouse_mx_anywhere_3s.png",
+        supported_buttons=MX_ANYWHERE_BUTTONS,
         dpi_max=8000,
     ),
     LogiDeviceSpec(
@@ -135,7 +176,9 @@ KNOWN_LOGI_DEVICES = (
         display_name="MX Anywhere 3",
         product_ids=(0xB025,),
         aliases=("MX Anywhere 3 for Mac",),
-        ui_layout="mx_anywhere",
+        ui_layout="mx_anywhere_3",
+        image_asset="mouse_mx_anywhere_3s.png",
+        supported_buttons=MX_ANYWHERE_BUTTONS,
         dpi_max=4000,
     ),
     LogiDeviceSpec(
@@ -143,7 +186,9 @@ KNOWN_LOGI_DEVICES = (
         display_name="MX Anywhere 2S",
         product_ids=(0xB01A,),
         aliases=("Wireless Mobile Mouse MX Anywhere 2S",),
-        ui_layout="mx_anywhere",
+        ui_layout="mx_anywhere_2s",
+        image_asset="mouse_mx_anywhere_3s.png",
+        supported_buttons=MX_ANYWHERE_BUTTONS,
         dpi_max=4000,
     ),
 )
@@ -170,6 +215,26 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
     for device in KNOWN_LOGI_DEVICES:
         if device.matches(product_id=product_id, product_name=product_name):
             return device
+    return None
+
+
+# Maps family layout keys to their button sets so the override picker can
+# resolve buttons even when individual devices use per-device ui_layout keys.
+_LAYOUT_BUTTONS = {
+    "mx_master": MX_MASTER_BUTTONS,
+    "mx_anywhere": MX_ANYWHERE_BUTTONS,
+    "mx_vertical": MX_VERTICAL_BUTTONS,
+    "generic_mouse": GENERIC_BUTTONS,
+}
+
+
+def get_buttons_for_layout(ui_layout_key: str) -> tuple[str, ...] | None:
+    """Return supported_buttons for a layout key (family or per-device)."""
+    if ui_layout_key in _LAYOUT_BUTTONS:
+        return _LAYOUT_BUTTONS[ui_layout_key]
+    for device in KNOWN_LOGI_DEVICES:
+        if device.ui_layout == ui_layout_key:
+            return device.supported_buttons
     return None
 
 
@@ -212,5 +277,23 @@ def build_connected_device_info(
         source=source,
         ui_layout="generic_mouse",
         image_asset="icons/mouse-simple.svg",
+        supported_buttons=GENERIC_BUTTONS,
         gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
+    )
+
+
+def build_evdev_connected_device_info(
+    *,
+    product_id=None,
+    product_name=None,
+    transport="evdev",
+    source="evdev",
+    gesture_cids=None,
+) -> ConnectedDeviceInfo:
+    return build_connected_device_info(
+        product_id=product_id,
+        product_name=product_name,
+        transport=transport,
+        source=source,
+        gesture_cids=gesture_cids,
     )

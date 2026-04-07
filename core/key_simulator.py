@@ -94,6 +94,11 @@ if sys.platform == "win32":
     VK_MEDIA_STOP = 0xB2
     VK_MEDIA_PLAY_PAUSE = 0xB3
 
+    VK_PRIOR = 0x21   # Page Up
+    VK_NEXT  = 0x22   # Page Down
+    VK_END   = 0x23   # End
+    VK_HOME  = 0x24   # Home
+
     VK_F1 = 0x70
     VK_F2 = 0x71
     VK_F3 = 0x72
@@ -162,8 +167,77 @@ if sys.platform == "win32":
     SendInput.argtypes = [c_ulong, ctypes.POINTER(INPUT), ctypes.c_int]
     SendInput.restype = c_ulong
 
+    MOUSEEVENTF_LEFTDOWN   = 0x0002
+    MOUSEEVENTF_LEFTUP     = 0x0004
+    MOUSEEVENTF_RIGHTDOWN  = 0x0008
+    MOUSEEVENTF_RIGHTUP    = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP   = 0x0040
+    MOUSEEVENTF_XDOWN      = 0x0080
+    MOUSEEVENTF_XUP        = 0x0100
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
+
+    XBUTTON1 = 0x0001
+    XBUTTON2 = 0x0002
+
+    # Mapping from mouse-button action IDs to (down_flag, up_flag, mouseData)
+    _MOUSE_BUTTON_MAP = {
+        "mouse_left_click":    (MOUSEEVENTF_LEFTDOWN,   MOUSEEVENTF_LEFTUP,   0),
+        "mouse_right_click":   (MOUSEEVENTF_RIGHTDOWN,  MOUSEEVENTF_RIGHTUP,  0),
+        "mouse_middle_click":  (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0),
+        "mouse_back_click":    (MOUSEEVENTF_XDOWN,      MOUSEEVENTF_XUP,      XBUTTON1),
+        "mouse_forward_click": (MOUSEEVENTF_XDOWN,      MOUSEEVENTF_XUP,      XBUTTON2),
+    }
+
+    def _make_mouse_input(flags, mouse_data=0):
+        inp = INPUT()
+        inp.type = INPUT_MOUSE
+        inp.union.mi.dwFlags = flags
+        inp.union.mi.mouseData = mouse_data
+        return inp
+
+    def inject_mouse_down(action_id):
+        """Inject a mouse button press for the given mouse-button action."""
+        try:
+            entry = _MOUSE_BUTTON_MAP.get(action_id)
+            if not entry:
+                print(f"[KeySimulator] inject_mouse_down: unknown action '{action_id}'")
+                return
+            down_flag, _, mouse_data = entry
+            print(f"[KeySimulator] inject_mouse_down({action_id}) flags=0x{down_flag:04X} mouseData=0x{mouse_data:04X}")
+            inp = _make_mouse_input(down_flag, mouse_data)
+            arr = (INPUT * 1)(inp)
+            result = SendInput(1, arr, sizeof(INPUT))
+            if result == 0:
+                err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                print(f"[KeySimulator] inject_mouse_down: SendInput returned 0! error={err}")
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_down EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
+
+    def inject_mouse_up(action_id):
+        """Inject a mouse button release for the given mouse-button action."""
+        try:
+            entry = _MOUSE_BUTTON_MAP.get(action_id)
+            if not entry:
+                print(f"[KeySimulator] inject_mouse_up: unknown action '{action_id}'")
+                return
+            _, up_flag, mouse_data = entry
+            print(f"[KeySimulator] inject_mouse_up({action_id}) flags=0x{up_flag:04X} mouseData=0x{mouse_data:04X}")
+            inp = _make_mouse_input(up_flag, mouse_data)
+            arr = (INPUT * 1)(inp)
+            result = SendInput(1, arr, sizeof(INPUT))
+            if result == 0:
+                err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                print(f"[KeySimulator] inject_mouse_up: SendInput returned 0! error={err}")
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_up EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
+
+    def is_mouse_button_action(action_id):
+        """Return True if the action simulates a mouse button."""
+        return action_id in _MOUSE_BUTTON_MAP
 
     def inject_scroll(flags, delta):
         inp = INPUT()
@@ -182,6 +256,7 @@ if sys.platform == "win32":
         VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
         VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
         VK_DELETE, VK_RETURN, VK_TAB,
+        VK_PRIOR, VK_NEXT, VK_HOME, VK_END,   # navigation cluster (extended)
     })
 
     def _is_extended(vk):
@@ -360,6 +435,66 @@ if sys.platform == "win32":
             "keys": [VK_MEDIA_PREV_TRACK],
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [VK_PRIOR],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [VK_NEXT],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [VK_HOME],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [VK_END],
+            "category": "Navigation",
+        },
+        "switch_scroll_mode": {
+            "label": "Switch Scroll Mode (Ratchet / Free Spin)",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_smart_shift": {
+            "label": "Toggle SmartShift",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -373,6 +508,7 @@ if sys.platform == "win32":
         "enter": VK_RETURN, "esc": VK_ESCAPE, "backspace": VK_BACK,
         "delete": VK_DELETE, "left": VK_LEFT, "right": VK_RIGHT,
         "up": VK_UP, "down": VK_DOWN,
+        "pageup": VK_PRIOR, "pagedown": VK_NEXT, "home": VK_HOME, "end": VK_END,
         "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45,
         "f": 0x46, "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A,
         "k": 0x4B, "l": 0x4C, "m": 0x4D, "n": 0x4E, "o": 0x4F,
@@ -388,19 +524,30 @@ if sys.platform == "win32":
     }
 
     def execute_action(action_id):
-        if action_id.startswith("custom:"):
-            keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
-            if keys:
-                send_key_combo(keys)
-            return
-        action = ACTIONS.get(action_id)
-        if not action or not action["keys"]:
-            return
-        arrow_vk = _BROWSER_NAV_ARROW.get(action_id)
-        if arrow_vk is not None:
-            _send_phased_alt_arrow(arrow_vk)
-        else:
-            send_key_combo(action["keys"])
+        try:
+            print(f"[KeySimulator] execute_action({action_id})")
+            if action_id.startswith("custom:"):
+                keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
+                if keys:
+                    send_key_combo(keys)
+                return
+            if is_mouse_button_action(action_id):
+                print(f"[KeySimulator] execute_action: mouse click for {action_id}")
+                inject_mouse_down(action_id)
+                inject_mouse_up(action_id)
+                return
+            action = ACTIONS.get(action_id)
+            if not action or not action["keys"]:
+                print(f"[KeySimulator] execute_action: no keys for '{action_id}'")
+                return
+            arrow_vk = _BROWSER_NAV_ARROW.get(action_id)
+            if arrow_vk is not None:
+                _send_phased_alt_arrow(arrow_vk)
+            else:
+                send_key_combo(action["keys"])
+        except Exception as exc:
+            print(f"[KeySimulator] execute_action EXCEPTION: {exc}")
+            import traceback; traceback.print_exc()
 
 
 # ==================================================================
@@ -415,6 +562,13 @@ elif sys.platform == "darwin":
         _QUARTZ_OK = True
     except ImportError:
         _QUARTZ_OK = False
+
+    try:
+        import AppKit as _AppKit
+        _APPKIT_OK = True
+    except ImportError:
+        _AppKit = None
+        _APPKIT_OK = False
 
     # CGKeyCode values used on macOS
     kVK_Command = 0x37
@@ -431,6 +585,10 @@ elif sys.platform == "darwin":
     kVK_RightArrow = 0x7C
     kVK_DownArrow = 0x7D
     kVK_UpArrow = 0x7E
+    kVK_Home = 0x73
+    kVK_End = 0x77
+    kVK_PageUp = 0x74
+    kVK_PageDown = 0x79
 
     kVK_ANSI_A = 0x00
     kVK_ANSI_S = 0x01
@@ -472,6 +630,55 @@ elif sys.platform == "darwin":
         if event:
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
+    # Mouse button simulation
+    # CGEvent mouse button constants
+    _MAC_MOUSE_MAP = {
+        "mouse_left_click": {
+            "down_type": Quartz.kCGEventLeftMouseDown if _QUARTZ_OK else 1,
+            "up_type":   Quartz.kCGEventLeftMouseUp   if _QUARTZ_OK else 2,
+            "button": 0,
+        },
+        "mouse_right_click": {
+            "down_type": Quartz.kCGEventRightMouseDown if _QUARTZ_OK else 3,
+            "up_type":   Quartz.kCGEventRightMouseUp   if _QUARTZ_OK else 4,
+            "button": 1,
+        },
+        "mouse_middle_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 2,
+        },
+        "mouse_back_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 3,
+        },
+        "mouse_forward_click": {
+            "down_type": Quartz.kCGEventOtherMouseDown if _QUARTZ_OK else 25,
+            "up_type":   Quartz.kCGEventOtherMouseUp   if _QUARTZ_OK else 26,
+            "button": 4,
+        },
+    } if _QUARTZ_OK else {}
+
+    def _inject_mac_mouse(action_id, is_down):
+        entry = _MAC_MOUSE_MAP.get(action_id)
+        if not entry or not _QUARTZ_OK:
+            return
+        evt_type = entry["down_type"] if is_down else entry["up_type"]
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
+        if ev:
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+    def inject_mouse_down(action_id):
+        _inject_mac_mouse(action_id, True)
+
+    def inject_mouse_up(action_id):
+        _inject_mac_mouse(action_id, False)
+
+    def is_mouse_button_action(action_id):
+        return action_id in _MAC_MOUSE_MAP
+
     # Modifier flag bits for CGEvent
     _MOD_FLAGS = {
         kVK_Command: Quartz.kCGEventFlagMaskCommand if _QUARTZ_OK else 0,
@@ -510,11 +717,10 @@ elif sys.platform == "darwin":
     def _send_media_key(key_id):
         """Send a media key event via NSEvent (Fn-key based)."""
         try:
-            import AppKit
-            ev_down = AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            ev_down = _AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
                 14, (0, 0), 0xa00, 0, 0, None, 8, (key_id << 16) | (0xa << 8), -1
             )
-            ev_up = AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            ev_up = _AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
                 14, (0, 0), 0xb00, 0, 0, None, 8, (key_id << 16) | (0xb << 8), -1
             )
             cg_down = ev_down.CGEvent()
@@ -790,6 +996,66 @@ elif sys.platform == "darwin":
             "mac_fn": _NX_PREV,
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [kVK_PageUp],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [kVK_PageDown],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [kVK_Home],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [kVK_End],
+            "category": "Navigation",
+        },
+        "switch_scroll_mode": {
+            "label": "Switch Scroll Mode (Ratchet / Free Spin)",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_smart_shift": {
+            "label": "Toggle SmartShift",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -803,6 +1069,8 @@ elif sys.platform == "darwin":
         "enter": kVK_Return, "esc": kVK_Escape, "backspace": kVK_Delete,
         "delete": kVK_ForwardDelete, "left": kVK_LeftArrow,
         "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
+        "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
+        "home": kVK_Home, "end": kVK_End,
         "a": 0x00, "b": 0x0B, "c": 0x08, "d": 0x02, "e": 0x0E,
         "f": 0x03, "g": 0x05, "h": 0x04, "i": 0x22, "j": 0x26,
         "k": 0x28, "l": 0x25, "m": 0x2E, "n": 0x2D, "o": 0x1F,
@@ -819,6 +1087,10 @@ elif sys.platform == "darwin":
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if is_mouse_button_action(action_id):
+            inject_mouse_down(action_id)
+            inject_mouse_up(action_id)
             return
         action = ACTIONS.get(action_id)
         if not action:
@@ -853,6 +1125,8 @@ elif sys.platform == "linux":
     KEY_DOWN = 108
     KEY_PAGEUP = 104
     KEY_PAGEDOWN = 109
+    KEY_HOME = 102
+    KEY_END = 107
     KEY_A = 30; KEY_B = 48; KEY_C = 46; KEY_D = 32; KEY_E = 18
     KEY_F = 33; KEY_G = 34; KEY_H = 35; KEY_I = 23; KEY_J = 36
     KEY_K = 37; KEY_L = 38; KEY_M = 50; KEY_N = 49; KEY_O = 24
@@ -883,7 +1157,8 @@ elif sys.platform == "linux":
     _ALL_KEY_CODES = [
         KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_LEFTMETA,
         KEY_TAB, KEY_SPACE, KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_ESC,
-        KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN, KEY_PAGEUP, KEY_PAGEDOWN,
+        KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN,
+        KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END,
         KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
         KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
         KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
@@ -898,6 +1173,21 @@ elif sys.platform == "linux":
     EV_REL = 2
     REL_WHEEL = 8
     REL_HWHEEL = 6
+
+    # Mouse button codes (linux/input-event-codes.h)
+    BTN_LEFT   = 0x110
+    BTN_RIGHT  = 0x111
+    BTN_MIDDLE = 0x112
+    BTN_SIDE   = 0x113   # Back / Mouse Button 4
+    BTN_EXTRA  = 0x114   # Forward / Mouse Button 5
+
+    _LINUX_MOUSE_BUTTON_MAP = {
+        "mouse_left_click":    BTN_LEFT,
+        "mouse_right_click":   BTN_RIGHT,
+        "mouse_middle_click":  BTN_MIDDLE,
+        "mouse_back_click":    BTN_SIDE,
+        "mouse_forward_click": BTN_EXTRA,
+    }
 
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
@@ -915,7 +1205,7 @@ elif sys.platform == "linux":
             try:
                 from evdev import ecodes, UInput
                 _virtual_kbd = UInput(
-                    {ecodes.EV_KEY: _ALL_KEY_CODES},
+                    {ecodes.EV_KEY: _ALL_KEY_CODES + list(_LINUX_MOUSE_BUTTON_MAP.values())},
                     name="Mouser Virtual Keyboard",
                 )
                 return _virtual_kbd
@@ -955,6 +1245,27 @@ elif sys.platform == "linux":
             detents = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
             kbd.write(EV_REL, REL_HWHEEL, detents)
         kbd.syn()
+
+    def inject_mouse_down(action_id):
+        btn = _LINUX_MOUSE_BUTTON_MAP.get(action_id)
+        if btn is None:
+            return
+        kbd = _get_virtual_kbd()
+        if kbd:
+            kbd.write(EV_KEY, btn, 1)
+            kbd.syn()
+
+    def inject_mouse_up(action_id):
+        btn = _LINUX_MOUSE_BUTTON_MAP.get(action_id)
+        if btn is None:
+            return
+        kbd = _get_virtual_kbd()
+        if kbd:
+            kbd.write(EV_KEY, btn, 0)
+            kbd.syn()
+
+    def is_mouse_button_action(action_id):
+        return action_id in _LINUX_MOUSE_BUTTON_MAP
 
     _LINUX_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
 
@@ -1088,6 +1399,66 @@ elif sys.platform == "linux":
             "keys": [KEY_PREVIOUSSONG],
             "category": "Media",
         },
+        "page_up": {
+            "label": "Page Up",
+            "keys": [KEY_PAGEUP],
+            "category": "Navigation",
+        },
+        "page_down": {
+            "label": "Page Down",
+            "keys": [KEY_PAGEDOWN],
+            "category": "Navigation",
+        },
+        "home": {
+            "label": "Home",
+            "keys": [KEY_HOME],
+            "category": "Navigation",
+        },
+        "end": {
+            "label": "End",
+            "keys": [KEY_END],
+            "category": "Navigation",
+        },
+        "switch_scroll_mode": {
+            "label": "Switch Scroll Mode (Ratchet / Free Spin)",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_smart_shift": {
+            "label": "Toggle SmartShift",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "mouse_left_click": {
+            "label": "Left Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_right_click": {
+            "label": "Right Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_middle_click": {
+            "label": "Middle Click",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_back_click": {
+            "label": "Back (Mouse Button 4)",
+            "keys": [],
+            "category": "Mouse",
+        },
+        "mouse_forward_click": {
+            "label": "Forward (Mouse Button 5)",
+            "keys": [],
+            "category": "Mouse",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1101,6 +1472,8 @@ elif sys.platform == "linux":
         "enter": KEY_ENTER, "esc": KEY_ESC, "backspace": KEY_BACKSPACE,
         "delete": KEY_DELETE, "left": KEY_LEFT, "right": KEY_RIGHT,
         "up": KEY_UP, "down": KEY_DOWN,
+        "pageup": KEY_PAGEUP, "pagedown": KEY_PAGEDOWN,
+        "home": KEY_HOME, "end": KEY_END,
         "a": KEY_A, "b": KEY_B, "c": KEY_C, "d": KEY_D, "e": KEY_E,
         "f": KEY_F, "g": KEY_G, "h": KEY_H, "i": KEY_I, "j": KEY_J,
         "k": KEY_K, "l": KEY_L, "m": KEY_M, "n": KEY_N, "o": KEY_O,
@@ -1121,6 +1494,10 @@ elif sys.platform == "linux":
             if keys:
                 send_key_combo(keys)
             return
+        if is_mouse_button_action(action_id):
+            inject_mouse_down(action_id)
+            inject_mouse_up(action_id)
+            return
         action = ACTIONS.get(action_id)
         if not action or not action["keys"]:
             return
@@ -1139,8 +1516,26 @@ else:
     def send_key_combo(keys, hold_ms=50): pass
     def send_key_press(vk): pass
     def execute_action(action_id): pass
+    def inject_mouse_down(action_id): pass
+    def inject_mouse_up(action_id): pass
+    def is_mouse_button_action(action_id): return False
 
     ACTIONS = {
+        "switch_scroll_mode": {
+            "label": "Switch Scroll Mode (Ratchet / Free Spin)",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_smart_shift": {
+            "label": "Toggle SmartShift",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],

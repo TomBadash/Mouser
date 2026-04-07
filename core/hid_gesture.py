@@ -473,7 +473,8 @@ BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
-FEAT_SMART_SHIFT = 0x2110    # Smart Shift (scroll wheel mode)
+FEAT_SMART_SHIFT          = 0x2110  # Smart Shift basic
+FEAT_SMART_SHIFT_ENHANCED = 0x2111  # Smart Shift Enhanced (MX Master 3/3S, MX Master 4)
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
@@ -496,6 +497,7 @@ KNOWN_CID_NAMES = {
     0x00C3: "Mouse Gesture Button",
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
+    0x00FD: "DPI Switch",
 }
 
 KEY_FLAG_BITS = (
@@ -594,13 +596,17 @@ class HidGestureListener:
         self._rawxy_enabled = False
         self._pending_dpi = None        # set by set_dpi(), applied in loop
         self._dpi_result  = None        # True/False after apply
-        self._smart_shift_idx = None    # feature index of SMART_SHIFT
+        self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
+        self._smart_shift_enhanced = False  # True → use fn 1/2; False → fn 0/1
         self._pending_smart_shift = None
         self._smart_shift_result = None
+        self._reconnect_requested = False
         self._pending_battery = None
         self._battery_result = None
         self._last_logged_battery = None
         self._connected_device_info = None
+        self._last_controls = []   # REPROG_V4 controls from last connection
+        self._consecutive_request_timeouts = 0
 
     # ── public API ────────────────────────────────────────────────
 
@@ -632,6 +638,57 @@ class HidGestureListener:
     @property
     def connected_device(self):
         return self._connected_device_info
+
+    def dump_device_info(self):
+        """Return a dict describing everything we know about the connected device.
+
+        Intended for community contributors who want to submit device definitions.
+        Returns None when no device is connected.
+        """
+        dev = self._connected_device_info
+        if dev is None:
+            return None
+
+        features = {}
+        if self._feat_idx is not None:
+            features["REPROG_V4 (0x1B04)"] = f"index 0x{self._feat_idx:02X}"
+        if self._dpi_idx is not None:
+            features["ADJUSTABLE_DPI (0x2201)"] = f"index 0x{self._dpi_idx:02X}"
+        if self._smart_shift_idx is not None:
+            feat_name = ("SMART_SHIFT_ENHANCED (0x2111)"
+                         if self._smart_shift_enhanced
+                         else "SMART_SHIFT (0x2110)")
+            features[feat_name] = f"index 0x{self._smart_shift_idx:02X}"
+        if self._battery_idx is not None:
+            feat_name = (f"0x{self._battery_feature_id:04X}"
+                         if self._battery_feature_id else "unknown")
+            features[f"BATTERY ({feat_name})"] = f"index 0x{self._battery_idx:02X}"
+
+        controls = []
+        for c in self._last_controls:
+            controls.append({
+                "index": c["index"],
+                "cid": f"0x{c['cid']:04X}",
+                "task": f"0x{c['task']:04X}",
+                "flags": f"0x{c['flags']:04X}",
+                "mapped_to": f"0x{c['mapped_to']:04X}",
+                "mapping_flags": f"0x{c['mapping_flags']:04X}",
+            })
+
+        return {
+            "device_key": dev.key,
+            "display_name": dev.display_name,
+            "product_id": f"0x{dev.product_id:04X}" if dev.product_id else None,
+            "product_name": dev.product_name,
+            "transport": dev.transport,
+            "ui_layout": dev.ui_layout,
+            "supported_buttons": list(dev.supported_buttons),
+            "gesture_cids": [f"0x{c:04X}" for c in dev.gesture_cids],
+            "dpi_range": [dev.dpi_min, dev.dpi_max],
+            "discovered_features": features,
+            "reprog_controls": controls,
+            "gesture_candidates": [f"0x{c:04X}" for c in self._gesture_candidates],
+        }
 
     # ── device discovery ──────────────────────────────────────────
 
@@ -734,9 +791,15 @@ class HidGestureListener:
 
             expected_funcs = {func, (func + 1) & 0x0F}
             if r_feat == feat and r_sw == MY_SW and r_func in expected_funcs:
+                self._consecutive_request_timeouts = 0
                 return msg
+            # Forward non-matching reports (e.g. diverted button events) so
+            # button held-state tracking stays in sync during command exchanges.
+            self._on_report(raw)
+        self._consecutive_request_timeouts += 1
         print(f"[HidGesture] request timeout feat=0x{feat:02X} func=0x{func:X} "
-              f"devIdx=0x{self._dev_idx:02X} params=[{_hex_bytes(req_params)}]")
+              f"devIdx=0x{self._dev_idx:02X} params=[{_hex_bytes(req_params)}] "
+              f"(consecutive={self._consecutive_request_timeouts})")
         return None
 
     # ── feature helpers ───────────────────────────────────────────
@@ -978,6 +1041,7 @@ class HidGestureListener:
                 return self._dpi_result
             time.sleep(0.1)
         print("[HidGesture] DPI read timed out")
+        self._pending_dpi = None
         return None
 
     def _apply_pending_read_dpi(self):
@@ -1002,16 +1066,24 @@ class HidGestureListener:
 
     SMART_SHIFT_FREESPIN = 0x01
     SMART_SHIFT_RATCHET  = 0x02
+    # auto_disengage byte: 1-50 → SmartShift active with that sensitivity threshold.
+    # 0xFF → fixed ratchet (SmartShift effectively disabled, used by Logi Options+).
+    SMART_SHIFT_THRESHOLD_MIN     = 1
+    SMART_SHIFT_THRESHOLD_MAX     = 50
+    SMART_SHIFT_DISABLE_THRESHOLD = 0xFF
 
     @property
     def smart_shift_supported(self):
         return self._smart_shift_idx is not None
 
-    def set_smart_shift(self, mode):
-        """Queue a Smart Shift mode change. mode: 'ratchet' or 'freespin'.
+    def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
+        """Queue a Smart Shift settings change.
+        mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
+        smart_shift_enabled: True to enable auto SmartShift (auto-switching)
+        threshold: 1-50 sensitivity when SmartShift is enabled
         Can be called from any thread.  Returns True on success."""
         self._smart_shift_result = None
-        self._pending_smart_shift = mode
+        self._pending_smart_shift = (mode, smart_shift_enabled, threshold)
         for _ in range(30):
             if self._pending_smart_shift is None:
                 return self._smart_shift_result is True
@@ -1020,32 +1092,60 @@ class HidGestureListener:
         return False
 
     def _apply_pending_smart_shift(self):
-        mode = self._pending_smart_shift
-        if mode is None:
+        pending = self._pending_smart_shift
+        if pending is None:
             return
         if self._smart_shift_idx is None or self._dev is None:
             print("[HidGesture] Cannot set Smart Shift — not connected")
-            self._smart_shift_result = False
+            self._smart_shift_result = None if pending == "read" else False
             self._pending_smart_shift = None
             return
-        if mode == "read":
+        if pending == "read":
             self._apply_pending_read_smart_shift()
             return
-        mode_byte = (self.SMART_SHIFT_FREESPIN if mode == "freespin"
-                     else self.SMART_SHIFT_RATCHET)
-        # setRatchetControlMode: function 1, params [mode, autoDisengage, 0]
-        resp = self._request(self._smart_shift_idx, 1,
-                             [mode_byte, 0x00, 0x00])
+        mode, smart_shift_enabled, threshold = pending
+        # Function IDs differ between basic (0x2110) and enhanced (0x2111):
+        #   enhanced: read fn=1, write fn=2
+        #   basic:    read fn=0, write fn=1
+        write_fn = 2 if self._smart_shift_enhanced else 1
+        if smart_shift_enabled:
+            # SmartShift enabled: mode=ratchet (0x02) + autoDisengage threshold (1-50).
+            # Sending mode=0x02 explicitly avoids "no-change" ambiguity with 0x00.
+            threshold = max(self.SMART_SHIFT_THRESHOLD_MIN,
+                            min(self.SMART_SHIFT_THRESHOLD_MAX, int(threshold)))
+            resp = self._request(self._smart_shift_idx, write_fn,
+                                 [self.SMART_SHIFT_RATCHET, threshold, 0x00])
+            label = f"SmartShift enabled (threshold={threshold})"
+        elif mode == "freespin":
+            resp = self._request(self._smart_shift_idx, write_fn,
+                                 [self.SMART_SHIFT_FREESPIN, 0x00, 0x00])
+            label = "fixed freespin"
+        else:
+            # Disable SmartShift + fixed ratchet: threshold=0xFF means always-ratchet
+            # (matches Solaar's max-threshold approach; hardware ignores auto_disengage for mode writes).
+            resp = self._request(self._smart_shift_idx, write_fn,
+                                 [self.SMART_SHIFT_RATCHET, self.SMART_SHIFT_DISABLE_THRESHOLD, 0x00])
+            label = "fixed ratchet (SmartShift disabled)"
         if resp:
-            print(f"[HidGesture] Smart Shift set to {mode}")
+            print(f"[HidGesture] Smart Shift set to {label}")
             self._smart_shift_result = True
         else:
             print("[HidGesture] Smart Shift set FAILED")
             self._smart_shift_result = False
         self._pending_smart_shift = None
 
+    def force_reconnect(self):
+        """Request the listener thread to drop and re-establish the HID++ connection.
+
+        Thread-safe: sets a flag checked at the top of the inner event loop.
+        The loop raises IOError, which triggers full cleanup + _try_connect(),
+        re-applying all button diverts (including CID 0x00C4).
+        """
+        self._reconnect_requested = True
+
     def read_smart_shift(self):
-        """Queue a Smart Shift read. Returns 'ratchet', 'freespin', or None."""
+        """Queue a Smart Shift read.
+        Returns dict {'mode': str, 'enabled': bool, 'threshold': int} or None."""
         self._smart_shift_result = None
         self._pending_smart_shift = "read"
         for _ in range(30):
@@ -1053,6 +1153,7 @@ class HidGestureListener:
                 return self._smart_shift_result
             time.sleep(0.1)
         print("[HidGesture] Smart Shift read timed out")
+        self._pending_smart_shift = None   # prevent stale processing
         return None
 
     def _apply_pending_read_smart_shift(self):
@@ -1060,14 +1161,28 @@ class HidGestureListener:
             self._smart_shift_result = None
             self._pending_smart_shift = None
             return
-        # getRatchetControlMode: function 0
-        resp = self._request(self._smart_shift_idx, 0, [])
+        # enhanced (0x2111): read fn=1; basic (0x2110): read fn=0
+        read_fn = 1 if self._smart_shift_enhanced else 0
+        resp = self._request(self._smart_shift_idx, read_fn, [])
         if resp:
             _, _, _, _, p = resp
             mode_byte = p[0] if p else 0
+            auto_disengage = p[1] if len(p) > 1 else 0
+            print(f"[HidGesture] Smart Shift raw: mode=0x{mode_byte:02X} auto_disengage=0x{auto_disengage:02X}")
+            # Freespin mode means fixed free-spin — SmartShift auto-switching is always OFF.
+            # The device preserves the auto_disengage byte in freespin state, so we must
+            # not use it to infer enabled=True; only ratchet mode can have SmartShift active.
+            # For ratchet: auto_disengage 1-50 → SmartShift active; 0 or ≥51 → disabled.
             mode = "freespin" if mode_byte == self.SMART_SHIFT_FREESPIN else "ratchet"
-            print(f"[HidGesture] Smart Shift mode = {mode}")
-            self._smart_shift_result = mode
+            if mode == "freespin":
+                threshold = auto_disengage if self.SMART_SHIFT_THRESHOLD_MIN <= auto_disengage <= self.SMART_SHIFT_THRESHOLD_MAX else 25
+                result = {"mode": "freespin", "enabled": False, "threshold": threshold}
+            elif self.SMART_SHIFT_THRESHOLD_MIN <= auto_disengage <= self.SMART_SHIFT_THRESHOLD_MAX:
+                result = {"mode": "ratchet", "enabled": True, "threshold": auto_disengage}
+            else:
+                result = {"mode": "ratchet", "enabled": False, "threshold": 25}
+            print(f"[HidGesture] Smart Shift state = {result}")
+            self._smart_shift_result = result
         else:
             print("[HidGesture] Smart Shift read FAILED")
             self._smart_shift_result = None
@@ -1082,6 +1197,7 @@ class HidGestureListener:
                 return self._battery_result
             time.sleep(0.1)
         print("[HidGesture] Battery read timed out")
+        self._pending_battery = None
         return None
 
     def _apply_pending_read_battery(self):
@@ -1130,6 +1246,32 @@ class HidGestureListener:
         if value & 0x8000:
             value -= 0x10000
         return value
+
+    def _force_release_stale_holds(self):
+        """Synthesize UP events for any buttons stuck in the held state.
+
+        Called from the main loop when consecutive _rx() calls return no data,
+        indicating the device may have stalled or gone to sleep while a
+        button was physically held.
+        """
+        if self._held:
+            self._held = False
+            print("[HidGesture] Gesture force-released (stale hold)")
+            if self._on_up:
+                try:
+                    self._on_up()
+                except Exception:
+                    pass
+        for info in self._extra_diverts.values():
+            if info["held"]:
+                info["held"] = False
+                cb = info.get("on_up")
+                if cb:
+                    print("[HidGesture] Extra button force-released (stale hold)")
+                    try:
+                        cb()
+                    except Exception:
+                        pass
 
     def _on_report(self, raw):
         """Inspect an incoming HID++ report for diverted button / raw XY events."""
@@ -1248,6 +1390,9 @@ class HidGestureListener:
                 getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
             )
             self._rawxy_enabled = False
+            opened_transport = None
+            opened_up = int(up or 0)
+            opened_usage = int(usage or 0)
             open_attempts = []
             if _BACKEND_PREFERENCE in ("auto", "hidapi") and info.get("path"):
                 open_attempts.append(("hidapi", info))
@@ -1286,6 +1431,9 @@ class HidGestureListener:
                             d = _HidDeviceCompat(open_info["path"])
                         d.set_nonblocking(False)
                     self._dev = d
+                    opened_transport = open_info.get("transport") or transport
+                    opened_up = int(open_info.get("usage_page", up) or 0)
+                    opened_usage = int(open_info.get("usage", usage) or 0)
                     print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport}")
                     break
                 except Exception as exc:
@@ -1298,14 +1446,17 @@ class HidGestureListener:
                 continue
 
             # Try Bluetooth direct (0xFF) first, then Bolt receiver slots
+            reprog_found = False
             for idx in (0xFF, 1, 2, 3, 4, 5, 6):
                 self._dev_idx = idx
                 fi = self._find_feature(FEAT_REPROG_V4)
                 if fi is not None:
+                    reprog_found = True
                     self._feat_idx = fi
                     print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
                           f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
                     controls = self._discover_reprog_controls()
+                    self._last_controls = controls
                     self._gesture_candidates = self._choose_gesture_candidates(
                         controls,
                         device_spec=device_spec,
@@ -1317,10 +1468,19 @@ class HidGestureListener:
                     if dpi_fi:
                         self._dpi_idx = dpi_fi
                         print(f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}")
-                    ss_fi = self._find_feature(FEAT_SMART_SHIFT)
+                    # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
+                    # Fall back to 0x2110 (basic) for older devices.
+                    ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
                     if ss_fi:
                         self._smart_shift_idx = ss_fi
-                        print(f"[HidGesture] Found SMART_SHIFT @0x{ss_fi:02X}")
+                        self._smart_shift_enhanced = True
+                        print(f"[HidGesture] Found SMART_SHIFT_ENHANCED @0x{ss_fi:02X}")
+                    else:
+                        ss_fi = self._find_feature(FEAT_SMART_SHIFT)
+                        if ss_fi:
+                            self._smart_shift_idx = ss_fi
+                            self._smart_shift_enhanced = False
+                            print(f"[HidGesture] Found SMART_SHIFT (basic) @0x{ss_fi:02X}")
                     batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
                     if batt_fi:
                         self._battery_idx = batt_fi
@@ -1343,6 +1503,13 @@ class HidGestureListener:
                         )
                         return True
                     break        # right device but divert failed
+            if not reprog_found:
+                print(
+                    "[HidGesture] Opened candidate but REPROG_V4 was not found "
+                    f"on tested devIdx values PID=0x{int(pid or 0):04X} "
+                    f"UP=0x{opened_up:04X} usage=0x{opened_usage:04X} "
+                    f"transport={opened_transport or '-'} source={source}"
+                )
 
             # Couldn't use this interface — close and try next
             try:
@@ -1375,8 +1542,22 @@ class HidGestureListener:
                 except Exception:
                     pass
             print("[HidGesture] Listening for gesture events…")
+            _no_data_count = 0          # consecutive _rx() returning None
+            _STALE_HOLD_LIMIT = 3       # force-release held buttons after this many empty reads (~3 s)
+            _CONSECUTIVE_TIMEOUT_RECONNECT = 3  # force reconnect after this many request timeouts
+            self._consecutive_request_timeouts = 0
             try:
                 while self._running:
+                    if self._reconnect_requested:
+                        self._reconnect_requested = False
+                        raise IOError("reconnect requested")
+                    # If too many consecutive HID++ requests timed out, the
+                    # device likely went to sleep or power-cycled.  Force a
+                    # full reconnect so button diverts are re-applied.
+                    if self._consecutive_request_timeouts >= _CONSECUTIVE_TIMEOUT_RECONNECT:
+                        print(f"[HidGesture] {self._consecutive_request_timeouts} consecutive "
+                              f"request timeouts — forcing reconnect")
+                        raise IOError("consecutive request timeouts — device likely asleep")
                     # Apply any queued DPI command
                     if self._pending_dpi is not None:
                         if self._pending_dpi == "read":
@@ -1389,7 +1570,14 @@ class HidGestureListener:
                         self._apply_pending_read_battery()
                     raw = self._rx(1000)
                     if raw:
+                        _no_data_count = 0
                         self._on_report(raw)
+                    else:
+                        _no_data_count += 1
+                        # Force-release buttons stuck in held state when the
+                        # device stops sending reports (firmware stall / sleep).
+                        if _no_data_count >= _STALE_HOLD_LIMIT:
+                            self._force_release_stale_holds()
             except Exception as e:
                 print(f"[HidGesture] read error: {e}")
 
@@ -1407,12 +1595,33 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._pending_battery = None
+            self._pending_dpi = None
+            self._pending_smart_shift = None
             self._last_logged_battery = None
-            self._held = False
+            self._consecutive_request_timeouts = 0
+            if self._held:
+                self._held = False
+                print("[HidGesture] Gesture force-released on disconnect")
+                if self._on_up:
+                    try:
+                        self._on_up()
+                    except Exception:
+                        pass
+            for info in self._extra_diverts.values():
+                if info["held"]:
+                    info["held"] = False
+                    cb = info.get("on_up")
+                    if cb:
+                        print("[HidGesture] Extra button force-released on disconnect")
+                        try:
+                            cb()
+                        except Exception:
+                            pass
             self._gesture_cid = DEFAULT_GESTURE_CID
             self._gesture_candidates = list(DEFAULT_GESTURE_CIDS)
             self._rawxy_enabled = False
             self._connected_device_info = None
+            self._reconnect_requested = False
             if self._connected:
                 self._connected = False
                 if self._on_disconnect:

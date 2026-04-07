@@ -1,0 +1,151 @@
+name: Device Support Request
+description: Request support for a Logitech mouse not yet supported by Mouser
+title: "[Device] "
+labels: ["device-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Want Mouser to support your Logitech mouse? The device info dump is the
+        single most useful thing you can provide.
+
+        **Before opening this issue**, check
+        [CONTRIBUTING_DEVICES.md](https://github.com/TomBadash/Mouser/blob/master/CONTRIBUTING_DEVICES.md)
+        for the full guide on how device support works. If you are able to
+        submit a PR yourself, even better!
+
+  - type: input
+    id: device-name
+    attributes:
+      label: Device name and model
+      description: >
+        The full product name as Logitech markets it.
+      placeholder: "e.g. Logitech MX Ergo"
+    validations:
+      required: true
+
+  - type: input
+    id: product-id
+    attributes:
+      label: Product ID (if known)
+      description: >
+        The USB/Bluetooth Product ID (PID). If Mouser showed something like
+        "Logitech PID 0xB0XX", paste that value. You can also find it in the
+        device info JSON under `product_id`.
+      placeholder: "e.g. 0xB0XX"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: connection-type
+    attributes:
+      label: How is the device connected?
+      options:
+        - Bluetooth
+        - USB receiver (Bolt / Unifying)
+        - Both (I have tried both)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mouser-detection
+    attributes:
+      label: Does Mouser detect the device at all?
+      description: >
+        When you connect the mouse and open Mouser, does the UI show a device
+        name or "Not Connected"?
+      options:
+        - "Yes, it shows the correct model name"
+        - "Yes, but it shows a generic name (e.g. 'Logitech PID 0xXXXX')"
+        - "No, Mouser says 'Not Connected'"
+        - "I have not tried connecting it to Mouser yet"
+    validations:
+      required: true
+
+  - type: textarea
+    id: device-info
+    attributes:
+      label: Device info JSON
+      description: >
+        This is the most important piece of information for adding device
+        support. Even if Mouser does not fully support your mouse, it may still
+        detect and probe it.
+
+
+        **How to get it:**
+
+        1. Connect your Logitech mouse via Bluetooth or USB receiver
+
+        2. Open Mouser and go to the **Mouse** page
+
+        3. Click **Copy device info** (the clipboard button next to "Help us support your mouse")
+
+        4. Paste the JSON below
+
+
+        If Mouser does not detect your device at all, skip this field and
+        mention that in the description.
+      render: json
+      placeholder: "Paste the JSON from 'Copy device info' here"
+    validations:
+      required: false
+
+  - type: textarea
+    id: button-description
+    attributes:
+      label: Physical buttons on your mouse
+      description: >
+        Describe the buttons your mouse has and which ones you would like Mouser
+        to support. Photos of the mouse are very welcome!
+      placeholder: |
+        My mouse has:
+        - Left / right click
+        - Middle click (scroll wheel press)
+        - Back and forward side buttons
+        - A thumb button (gesture?)
+        - Horizontal scroll tilt
+        - DPI switch button on top
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-features
+    attributes:
+      label: What features would you like Mouser to support for this device?
+      description: >
+        Beyond basic detection, what do you want? Button remapping, gesture
+        swipes, DPI control, Smart Shift, per-app profiles, an interactive
+        layout with clickable hotspots, etc.
+      placeholder: |
+        - Remap the side buttons
+        - DPI slider support
+        - An interactive layout image
+    validations:
+      required: false
+
+  - type: dropdown
+    id: willing-to-test
+    attributes:
+      label: Are you willing to help test?
+      description: >
+        Adding a new device usually requires someone with the physical hardware
+        to test changes. Can we count on you for testing?
+      options:
+        - "Yes, I can test builds and provide feedback"
+        - "Yes, I can test and I am also willing to submit a PR"
+        - "I can test occasionally but have limited availability"
+        - "No, I just want to register interest"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: >
+        Any other details: photos of the mouse, links to the Logitech product
+        page, whether Solaar or logiops supports this device, the OS you are
+        using, etc.
+    validations:
+      required: false

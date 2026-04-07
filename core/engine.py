@@ -7,7 +7,10 @@ Supports per-application auto-switching of profiles.
 import threading
 import time
 from core.mouse_hook import MouseHook, MouseEvent
-from core.key_simulator import ACTIONS, execute_action
+from core.key_simulator import (
+    ACTIONS, execute_action, is_mouse_button_action,
+    inject_mouse_down, inject_mouse_up,
+)
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
@@ -16,6 +19,8 @@ from core.app_detector import AppDetector
 from core.logi_devices import clamp_dpi
 
 HSCROLL_ACTION_COOLDOWN_S = 0.35
+HSCROLL_VOLUME_COOLDOWN_S = 0.06
+_VOLUME_ACTIONS = {"volume_up", "volume_down"}
 
 
 class Engine:
@@ -37,6 +42,7 @@ class Engine:
         self._app_detector = AppDetector(self._on_app_change)
         self._profile_change_cb = None       # UI callback
         self._connection_change_cb = None   # UI callback for device status
+        self._status_cb = None             # UI callback for status messages
         self._battery_read_cb = None        # UI callback for battery level
         self._dpi_read_cb = None            # UI callback for current DPI
         self._smart_shift_read_cb = None   # UI callback for Smart Shift mode
@@ -46,6 +52,14 @@ class Engine:
             self.cfg.get("settings", {}).get("debug_mode", False)
         )
         self._battery_poll_stop = threading.Event()
+        self._battery_poll_thread = None          # track the poller thread
+        self._last_connection_state = bool(self.hook.device_connected)
+        self._last_hid_features_ready = bool(self.hid_features_ready)
+        self._hid_replay_requested_this_launch = False
+        self._replay_inflight = False
+        self._replay_pending_rerun = False
+        self._replay_lock = threading.Lock()
+        self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -79,21 +93,44 @@ class Engine:
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
         )
-        # Divert mode shift CID only when mapped to an action
-        self.hook.divert_mode_shift = any(
-            pdata.get("mappings", {}).get("mode_shift", "none") != "none"
-            for pdata in self.cfg.get("profiles", {}).values()
+        # Divert mode shift CID only when the device has the button and
+        # at least one profile maps it to an action.  When no device is
+        # connected yet, assume the button exists (safe: if the device
+        # turns out not to have it, the divert simply has no effect).
+        device = getattr(self, "connected_device", None)
+        device_buttons = getattr(device, "supported_buttons", None)
+        has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
+        self.hook.divert_mode_shift = (
+            has_mode_shift
+            and any(
+                pdata.get("mappings", {}).get("mode_shift", "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            )
+        )
+
+        # Divert DPI switch CID (0x00FD) on MX Vertical when mapped.
+        has_dpi_switch = device_buttons is None or "dpi_switch" in device_buttons
+        self.hook.divert_dpi_switch = (
+            has_dpi_switch
+            and any(
+                pdata.get("mappings", {}).get("dpi_switch", "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            )
         )
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
+            has_paired_down = any(e.endswith("_down") for e in events)
+            has_up = any(e.endswith("_up") for e in events)
 
             for evt_type in events:
-                if evt_type.endswith("_up"):
+                if has_paired_down and evt_type.endswith("_up"):
                     if action_id != "none":
                         self.hook.block(evt_type)
+                        if is_mouse_button_action(action_id):
+                            self.hook.register(evt_type, self._make_mouse_up_handler(action_id))
                     continue
 
                 if action_id != "none":
@@ -101,25 +138,179 @@ class Engine:
 
                     if "hscroll" in evt_type:
                         self.hook.register(evt_type, self._make_hscroll_handler(action_id))
+                    elif is_mouse_button_action(action_id):
+                        if has_up:
+                            # Button has a matching _up event → split press/release
+                            self.hook.register(evt_type, self._make_mouse_down_handler(action_id))
+                        else:
+                            # Single-fire event (gesture, swipe) → full click
+                            self.hook.register(evt_type, self._make_handler(action_id))
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id))
 
     def _make_handler(self, action_id):
         def handler(event):
-            if self._enabled:
-                self._emit_debug(
-                    f"Mapped {event.event_type} -> {action_id} "
-                    f"({self._action_label(action_id)})"
-                )
-                if event.event_type.startswith("gesture_"):
-                    self._emit_gesture_event({
-                        "type": "mapped",
-                        "event_name": event.event_type,
-                        "action_id": action_id,
-                        "action_label": self._action_label(action_id),
-                    })
-                execute_action(action_id)
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} "
+                        f"({self._action_label(action_id)})"
+                    )
+                    if event.event_type.startswith("gesture_"):
+                        self._emit_gesture_event({
+                            "type": "mapped",
+                            "event_name": event.event_type,
+                            "action_id": action_id,
+                            "action_label": self._action_label(action_id),
+                        })
+                    if action_id == "toggle_smart_shift":
+                        self._toggle_smart_shift()
+                    elif action_id == "switch_scroll_mode":
+                        self._switch_scroll_mode()
+                    elif action_id == "cycle_dpi":
+                        self._cycle_dpi()
+                    else:
+                        execute_action(action_id)
+            except Exception as exc:
+                print(f"[Engine] _make_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
         return handler
+
+    def _make_mouse_down_handler(self, action_id):
+        def _safety_release():
+            """Auto-release if the UP event never fires."""
+            try:
+                print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
+                self._mouse_release_timers.pop(action_id, None)
+                inject_mouse_up(action_id)
+            except Exception as exc:
+                print(f"[Engine] _safety_release EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+
+        def handler(event):
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} (mouse down)"
+                    )
+                    inject_mouse_down(action_id)
+                    # Safety: auto-release after 20s if UP event is never received
+                    old = self._mouse_release_timers.pop(action_id, None)
+                    if old is not None:
+                        old.cancel()
+                    t = threading.Timer(20.0, _safety_release)
+                    t.daemon = True
+                    self._mouse_release_timers[action_id] = t
+                    t.start()
+            except Exception as exc:
+                print(f"[Engine] mouse_down_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _make_mouse_up_handler(self, action_id):
+        def handler(event):
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} (mouse up)"
+                    )
+                    # Cancel safety timer
+                    old = self._mouse_release_timers.pop(action_id, None)
+                    if old is not None:
+                        old.cancel()
+                    inject_mouse_up(action_id)
+            except Exception as exc:
+                print(f"[Engine] mouse_up_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _toggle_smart_shift(self):
+        """Toggle SmartShift auto-switching on/off.
+
+        IMPORTANT: this is called from a HID event callback which runs on the HID
+        loop thread.  Calling hg.set_smart_shift() directly would block waiting for
+        the same loop to process the pending request — a deadlock that causes the
+        3-second timeout seen in the logs.  Config and UI are updated synchronously;
+        the device write is dispatched to a separate thread.
+        """
+        settings = self.cfg.get("settings", {})
+        new_enabled = not settings.get("smart_shift_enabled", False)
+        mode = settings.get("smart_shift_mode", "ratchet")
+        threshold = settings.get("smart_shift_threshold", 25)
+        print(f"[Engine] toggle_smart_shift -> enabled={new_enabled}")
+        settings["smart_shift_enabled"] = new_enabled
+        save_config(self.cfg)
+        if self._smart_shift_read_cb:
+            try:
+                self._smart_shift_read_cb({"mode": mode, "enabled": new_enabled, "threshold": threshold})
+            except Exception:
+                pass
+        hg = self.hook._hid_gesture
+        if hg:
+            def _write():
+                ok = hg.set_smart_shift(mode, new_enabled, threshold)
+                print(f"[Engine] toggle_smart_shift device write -> {'OK' if ok else 'FAILED'}")
+            threading.Thread(target=_write, daemon=True, name="ToggleSmartShift").start()
+
+    def _switch_scroll_mode(self):
+        """Switch between ratchet and free-spin (Logi Options+ physical button behaviour).
+
+        SmartShift auto-switching is disabled so the chosen fixed mode takes effect.
+        Same deadlock caveat as _toggle_smart_shift — device write runs off-thread.
+        """
+        settings = self.cfg.get("settings", {})
+        current_mode = settings.get("smart_shift_mode", "ratchet")
+        new_mode = "freespin" if current_mode == "ratchet" else "ratchet"
+        threshold = settings.get("smart_shift_threshold", 25)
+        print(f"[Engine] switch_scroll_mode -> {new_mode}")
+        settings["smart_shift_mode"] = new_mode
+        settings["smart_shift_enabled"] = False
+        save_config(self.cfg)
+        if self._smart_shift_read_cb:
+            try:
+                self._smart_shift_read_cb({"mode": new_mode, "enabled": False, "threshold": threshold})
+            except Exception:
+                pass
+        hg = self.hook._hid_gesture
+        if hg:
+            def _write():
+                ok = hg.set_smart_shift(new_mode, False, threshold)
+                print(f"[Engine] switch_scroll_mode device write -> {'OK' if ok else 'FAILED'}")
+            threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
+
+    _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    def _cycle_dpi(self):
+        """Cycle through user-configured DPI presets.
+
+        Advances to the next preset in the list.  If the current DPI doesn't
+        match any preset, jumps to the first one.  Updates config, notifies
+        the UI, and writes to the device off-thread.
+        """
+        settings = self.cfg.setdefault("settings", {})
+        presets = settings.get("dpi_presets") or list(self._DEFAULT_DPI_PRESETS)
+        if not presets:
+            return
+        current_dpi = settings.get("dpi", 1000)
+        try:
+            idx = presets.index(current_dpi)
+            next_idx = (idx + 1) % len(presets)
+        except ValueError:
+            next_idx = 0
+        new_dpi = clamp_dpi(presets[next_idx], self.connected_device)
+        print(f"[Engine] cycle_dpi {current_dpi} -> {new_dpi} (preset {next_idx + 1}/{len(presets)})")
+        settings["dpi"] = new_dpi
+        save_config(self.cfg)
+        if self._dpi_read_cb:
+            try:
+                self._dpi_read_cb(new_dpi)
+            except Exception:
+                pass
+        hg = self.hook._hid_gesture
+        if hg:
+            def _write():
+                hg.set_dpi(new_dpi)
+            threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
@@ -133,7 +324,8 @@ class Engine:
             threshold = self._hscroll_threshold()
             now = getattr(event, "timestamp", None) or time.time()
 
-            if now - state["last_fire_at"] < HSCROLL_ACTION_COOLDOWN_S:
+            cooldown = HSCROLL_VOLUME_COOLDOWN_S if action_id in _VOLUME_ACTIONS else HSCROLL_ACTION_COOLDOWN_S
+            if now - state["last_fire_at"] < cooldown:
                 state["accum"] = 0.0
                 return
 
@@ -198,6 +390,10 @@ class Engine:
         """Register ``cb(message: str)`` invoked for debug events."""
         self._debug_cb = cb
 
+    def set_status_callback(self, cb):
+        """Register ``cb(message: str)`` invoked for status messages."""
+        self._status_cb = cb
+
     def set_gesture_event_callback(self, cb):
         """Register ``cb(event: dict)`` invoked for structured gesture debug events."""
         self._gesture_event_cb = cb
@@ -229,6 +425,13 @@ class Engine:
             except Exception:
                 pass
 
+    def _emit_status(self, message):
+        if self._status_cb:
+            try:
+                self._status_cb(message)
+            except Exception:
+                pass
+
     def _emit_gesture_event(self, event):
         if not self._debug_events_enabled:
             return
@@ -253,38 +456,143 @@ class Engine:
         summary = ", ".join(f"{key}={mappings.get(key, 'none')}" for key in interesting)
         self._emit_debug(f"{prefix}: {summary}")
 
+    def _replay_saved_settings_once(self):
+        hg = self.hook._hid_gesture
+        if hg is None:
+            return False
+        if hasattr(hg, "connected_device") and hg.connected_device is None:
+            return False
+
+        replay_ok = True
+        saved_dpi = self.cfg.get("settings", {}).get("dpi")
+        if saved_dpi is not None:
+            if not hasattr(hg, "set_dpi"):
+                replay_ok = False
+            elif hg.set_dpi(saved_dpi):
+                if self._dpi_read_cb:
+                    try:
+                        self._dpi_read_cb(saved_dpi)
+                    except Exception:
+                        pass
+            else:
+                replay_ok = False
+
+        saved_ss = self.cfg.get("settings", {}).get("smart_shift_mode")
+        if saved_ss and getattr(hg, "smart_shift_supported", False):
+            ss_enabled = self.cfg.get("settings", {}).get("smart_shift_enabled", False)
+            ss_threshold = self.cfg.get("settings", {}).get("smart_shift_threshold", 25)
+            if not hasattr(hg, "set_smart_shift"):
+                replay_ok = False
+            elif hg.set_smart_shift(saved_ss, ss_enabled, ss_threshold):
+                if self._smart_shift_read_cb:
+                    try:
+                        self._smart_shift_read_cb(saved_ss)
+                    except Exception:
+                        pass
+            else:
+                replay_ok = False
+        return replay_ok
+
+    def _replay_saved_settings_worker(self):
+        while True:
+            with self._replay_lock:
+                self._replay_pending_rerun = False
+            replay_ok = self._replay_saved_settings_once()
+            with self._replay_lock:
+                if self._replay_pending_rerun:
+                    continue
+                self._replay_inflight = False
+                if not replay_ok:
+                    self._emit_status(
+                        "Mouse reconnected, but saved device settings could not be restored yet."
+                    )
+                return
+
+    def _request_saved_settings_replay(self, *, startup_fallback=False):
+        with self._replay_lock:
+            if startup_fallback and self._hid_replay_requested_this_launch:
+                return
+            if self._replay_inflight:
+                self._replay_pending_rerun = True
+                return
+            self._hid_replay_requested_this_launch = True
+            self._replay_inflight = True
+        if startup_fallback:
+            self._emit_status("Using startup fallback to replay saved device settings")
+        threading.Thread(
+            target=self._replay_saved_settings_worker,
+            daemon=True,
+            name="SavedSettingsReplay",
+        ).start()
+
     def _on_connection_change(self, connected):
-        self._battery_poll_stop.set()
+        connection_changed = connected != self._last_connection_state
+        hid_features_ready = self.hid_features_ready
+        hid_features_changed = hid_features_ready != self._last_hid_features_ready
+        if connection_changed:
+            self._last_connection_state = connected
+            self._battery_poll_stop.set()
+            if self._battery_poll_thread is not None:
+                self._battery_poll_thread.join(timeout=5)
+                self._battery_poll_thread = None
+        self._last_hid_features_ready = hid_features_ready
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
             except Exception:
                 pass
-        if connected:
+        if connected and connection_changed:
             self._battery_poll_stop = threading.Event()
-            threading.Thread(
+            self._battery_poll_thread = threading.Thread(
                 target=self._battery_poll_loop,
                 args=(self._battery_poll_stop,),
                 daemon=True,
                 name="BatteryPoll",
-            ).start()
+            )
+            self._battery_poll_thread.start()
+        if hid_features_ready and hid_features_changed:
+            self._request_saved_settings_replay()
 
     def _battery_poll_loop(self, stop_event):
-        """Read battery on connect and refresh it periodically until disconnected."""
-        if stop_event.wait(1):
-            return
+        """Read battery and smart shift mode periodically until disconnected."""
+        _battery_poll_interval = 300   # seconds between battery reads
+        _ss_poll_interval = 15         # seconds between scroll-mode reads
+        _last_battery = time.time() - _battery_poll_interval  # fire immediately
+        _last_ss = time.time() - _ss_poll_interval            # fire immediately
+        _last_ss_mode = None
+
         while not stop_event.is_set():
+            now = time.time()
             hg = self.hook._hid_gesture
-            if hg:
-                level = hg.read_battery()
-                if stop_event.is_set():
-                    return
-                if level is not None and self._battery_read_cb:
-                    try:
-                        self._battery_read_cb(level)
-                    except Exception:
-                        pass
-            if stop_event.wait(300):
+            if hg and hg.connected_device is not None:
+                if now - _last_battery >= _battery_poll_interval:
+                    _last_battery = now
+                    level = hg.read_battery()
+                    if stop_event.is_set():
+                        return
+                    if level is not None and self._battery_read_cb:
+                        try:
+                            self._battery_read_cb(level)
+                        except Exception:
+                            pass
+
+                if now - _last_ss >= _ss_poll_interval and hg.smart_shift_supported:
+                    _last_ss = now
+                    ss_mode = hg.read_smart_shift()
+                    if stop_event.is_set():
+                        return
+                    if ss_mode is not None:
+                        if ss_mode != _last_ss_mode:
+                            print(f"[Engine] Scroll mode: {ss_mode}"
+                                  + (" (changed)" if _last_ss_mode is not None else ""))
+                            _last_ss_mode = ss_mode
+                        if self._smart_shift_read_cb:
+                            try:
+                                self._smart_shift_read_cb(ss_mode)
+                            except Exception:
+                                pass
+
+            if stop_event.wait(5):
                 return
 
     def set_battery_callback(self, cb):
@@ -308,6 +616,14 @@ class Engine:
     def connected_device(self):
         return getattr(self.hook, "connected_device", None)
 
+    def dump_device_info(self):
+        return getattr(self.hook, "dump_device_info", lambda: None)()
+
+    @property
+    def hid_features_ready(self):
+        hg = self.hook._hid_gesture
+        return hg is not None and getattr(hg, "connected_device", None) is not None
+
     @property
     def enabled(self):
         return self._enabled
@@ -327,14 +643,23 @@ class Engine:
         print("[Engine] No HID++ connection — DPI not applied")
         return False
 
-    def set_smart_shift(self, mode):
-        """Send Smart Shift mode change ('ratchet' or 'freespin')."""
-        self.cfg.setdefault("settings", {})["smart_shift_mode"] = mode
+    def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
+        """Send Smart Shift settings to device.
+        mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
+        smart_shift_enabled: True to enable auto SmartShift
+        threshold: 1-50 sensitivity when SmartShift is enabled"""
+        print(f"[Engine] set_smart_shift({mode}, enabled={smart_shift_enabled}, threshold={threshold}) called")
+        settings = self.cfg.setdefault("settings", {})
+        settings["smart_shift_mode"] = mode
+        settings["smart_shift_enabled"] = smart_shift_enabled
+        settings["smart_shift_threshold"] = threshold
         save_config(self.cfg)
         hg = self.hook._hid_gesture
         if hg:
-            return hg.set_smart_shift(mode)
-        print("[Engine] No HID++ connection — Smart Shift not applied")
+            result = hg.set_smart_shift(mode, smart_shift_enabled, threshold)
+            print(f"[Engine] set_smart_shift -> {'OK' if result else 'FAILED'}")
+            return result
+        print("[Engine] set_smart_shift: No HID++ connection — not applied")
         return False
 
     @property
@@ -357,32 +682,95 @@ class Engine:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
+    def _apply_device_settings(self, source="startup"):
+        """Push persisted DPI and SmartShift settings to the device.
+
+        Called at startup and on every reconnect (e.g. after waking from sleep).
+
+        SmartShift is written immediately (before any delay) so the scroll wheel
+        is in the correct mode as soon as possible — avoiding the window where the
+        device is in its firmware-default SmartShift state (typically enabled with a
+        low threshold).  The UI is also updated immediately with the saved state.
+
+        DPI and a second SmartShift write are sent after a 3 s settling delay.
+        The second write is important for enhanced SmartShift (0x2111) devices:
+        immediately after wake the feature probe can transiently fall back to basic
+        (0x2110) whose function IDs differ, so the first write may fail.  If both
+        writes fail, a final retry happens after another 5 s.
+        """
+        hg = self.hook._hid_gesture
+        if not hg:
+            return
+
+        s = self.cfg.get("settings", {})
+        ss_mode = s.get("smart_shift_mode", "ratchet")
+        ss_enabled = s.get("smart_shift_enabled", False)
+        ss_threshold = s.get("smart_shift_threshold", 25)
+
+        # ── immediate SmartShift write ────────────────────────────────────────
+        # Runs before the settling delay so the physical scroll wheel snaps to
+        # the saved mode within ~1 s of connect/wake (beats the first battery-
+        # poll SmartShift read at T+1 s).  May fail on enhanced-feature devices
+        # right after wake; the settled write below handles that case.
+        if hg.smart_shift_supported:
+            hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
+            if self._smart_shift_read_cb:
+                try:
+                    self._smart_shift_read_cb({
+                        "mode": ss_mode,
+                        "enabled": ss_enabled,
+                        "threshold": ss_threshold,
+                    })
+                except Exception:
+                    pass
+
+        time.sleep(3)  # let HID++ settle before sending DPI and settled SS write
+        hg = self.hook._hid_gesture
+        if not hg:
+            return
+
+        saved_dpi = self.cfg.get("settings", {}).get("dpi")
+        if saved_dpi:
+            hg.set_dpi(saved_dpi)
+            if self._dpi_read_cb:
+                try:
+                    self._dpi_read_cb(saved_dpi)
+                except Exception:
+                    pass
+
+        if hg.smart_shift_supported:
+            ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
+            if not ok:
+                print(f"[Engine] SmartShift apply failed ({source}) — retrying in 5s")
+                time.sleep(5)
+                hg = self.hook._hid_gesture
+                if hg and hg.smart_shift_supported:
+                    ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
+                    print(f"[Engine] SmartShift retry ({source}) -> {'OK' if ok else 'FAILED'}")
+            # Re-push saved state to UI after the settled write in case the
+            # battery-poll loop updated it with stale device state between the
+            # immediate write and now.
+            if self._smart_shift_read_cb:
+                try:
+                    self._smart_shift_read_cb({
+                        "mode": ss_mode,
+                        "enabled": ss_enabled,
+                        "threshold": ss_threshold,
+                    })
+                except Exception:
+                    pass
+
     def start(self):
         self.hook.start()
         self._app_detector.start()
-        # Apply persisted DPI and Smart Shift to the device once HID++ is ready
-        def _apply_saved_settings():
-            import time
-            time.sleep(3)  # give HID++ time to connect
-            hg = self.hook._hid_gesture
-            if hg:
-                saved_dpi = self.cfg.get("settings", {}).get("dpi")
-                if saved_dpi:
-                    hg.set_dpi(saved_dpi)
-                    if self._dpi_read_cb:
-                        try:
-                            self._dpi_read_cb(saved_dpi)
-                        except Exception:
-                            pass
-                saved_ss = self.cfg.get("settings", {}).get("smart_shift_mode")
-                if saved_ss and hg.smart_shift_supported:
-                    hg.set_smart_shift(saved_ss)
-                    if self._smart_shift_read_cb:
-                        try:
-                            self._smart_shift_read_cb(saved_ss)
-                        except Exception:
-                            pass
-        threading.Thread(target=_apply_saved_settings, daemon=True).start()
+        # Temporary safety-net: keep the old delayed replay path until the
+        # hid-ready transition path has proven out in the field.
+        def _startup_replay_fallback():
+            time.sleep(3)
+            if not self.hid_features_ready:
+                return
+            self._request_saved_settings_replay(startup_fallback=True)
+        threading.Thread(target=_startup_replay_fallback, daemon=True).start()
 
     def set_dpi_read_callback(self, cb):
         """Register a callback ``cb(dpi_value)`` invoked when DPI is read from device."""
@@ -394,5 +782,8 @@ class Engine:
 
     def stop(self):
         self._battery_poll_stop.set()
+        if self._battery_poll_thread is not None:
+            self._battery_poll_thread.join(timeout=5)
+            self._battery_poll_thread = None
         self._app_detector.stop()
         self.hook.stop()

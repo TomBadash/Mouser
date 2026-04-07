@@ -20,7 +20,7 @@ This document contains technical details designed to help new developers underst
 - `UiState(QObject)`: A bridge class that tracks the OS's system appearance (Dark vs. Light mode) and exposes it to the QML frontend via Qt Properties and Signals.
 - `_check_accessibility()`: A macOS-specific function that checks (and prompts) the user for Accessibility Permissions. This is crucial for intercepting or simulating mouse/keyboard events on Mac.
 - `core/accessibility.py`: Centralizes the native macOS trust check used by both startup and backend-exposed state.
-- `core/autostart.py`: Builds and writes the per-user macOS LaunchAgent used by the **Start at login** UI toggle.
+- `core/startup.py`: Owns login startup integration on both Windows and macOS, including the per-user macOS LaunchAgent used by the **Start at login** UI toggle.
 - `AppIconProvider` & `SystemIconProvider`: Subclasses of `QQuickImageProvider`. QML uses these to request images dynamically (e.g., rendering SVGs cleanly at various DPIs or reading native file icons via `QFileIconProvider`).
 - `_app_icon()`, `_tray_icon()`, & `_render_svg_pixmap()`: Utility functions that construct high-resolution (`QIcon` / `QPixmap`) icons for the taskbar and the system tray, handling platform differences.
 
