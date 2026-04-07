@@ -474,6 +474,8 @@ FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
 FEAT_SMART_SHIFT = 0x2110    # Smart Shift (scroll wheel mode)
+FEAT_HI_RES_SCROLL = 0x2120  # Hi-Res Scrolling (simple on/off)
+FEAT_HIRES_WHEEL   = 0x2121  # Hi-Res Wheel (resolution + invert + divert bits)
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
@@ -597,6 +599,10 @@ class HidGestureListener:
         self._smart_shift_idx = None    # feature index of SMART_SHIFT
         self._pending_smart_shift = None
         self._smart_shift_result = None
+        self._hi_res_scroll_idx = None  # feature index of HI_RES_SCROLLING (0x2120)
+        self._hires_wheel_idx = None    # feature index of HIRES_WHEEL (0x2121)
+        self._pending_hi_res_scroll = None
+        self._hi_res_scroll_result = None
         self._pending_battery = None
         self._battery_result = None
         self._last_logged_battery = None
@@ -1073,6 +1079,73 @@ class HidGestureListener:
             self._smart_shift_result = None
         self._pending_smart_shift = None
 
+    # ── Hi-Res Scroll control ───────────────────────────────────
+
+    # HIRES_WHEEL (0x2121) mode byte bits
+    _HIRES_WHEEL_RES_BIT = 0x02   # bit 1: 1 = high-res, 0 = low-res
+
+    @property
+    def hi_res_scroll_supported(self):
+        return self._hires_wheel_idx is not None or self._hi_res_scroll_idx is not None
+
+    def set_hi_res_scroll(self, enabled):
+        """Queue a hi-res scroll change. enabled: True or False.
+        Can be called from any thread.  Returns True on success."""
+        self._hi_res_scroll_result = None
+        self._pending_hi_res_scroll = bool(enabled)
+        for _ in range(30):
+            if self._pending_hi_res_scroll is None:
+                return self._hi_res_scroll_result is True
+            time.sleep(0.1)
+        print("[HidGesture] Hi-Res Scroll set timed out")
+        return False
+
+    def _apply_pending_hi_res_scroll(self):
+        """Called from the listener thread to apply the queued hi-res scroll state."""
+        enabled = self._pending_hi_res_scroll
+        if enabled is None:
+            return
+        if self._dev is None:
+            print("[HidGesture] Cannot set Hi-Res Scroll — not connected")
+            self._hi_res_scroll_result = False
+            self._pending_hi_res_scroll = None
+            return
+        # Prefer HIRES_WHEEL (0x2121): read-modify-write the mode byte
+        if self._hires_wheel_idx is not None:
+            resp = self._request(self._hires_wheel_idx, 0x01, [])  # getMode fnid=0x10→func 1
+            if resp:
+                _, _, _, _, p = resp
+                current = p[0] if p else 0x00
+                if enabled:
+                    new_mode = current | self._HIRES_WHEEL_RES_BIT
+                else:
+                    new_mode = current & ~self._HIRES_WHEEL_RES_BIT
+                wr = self._request(self._hires_wheel_idx, 0x02, [new_mode & 0xFF])  # setMode fnid=0x20→func 2
+                if wr:
+                    print(f"[HidGesture] Hi-Res Scroll (HIRES_WHEEL) set to {'on' if enabled else 'off'}")
+                    self._hi_res_scroll_result = True
+                    self._pending_hi_res_scroll = None
+                    return
+            print("[HidGesture] Hi-Res Scroll (HIRES_WHEEL) set FAILED")
+            self._hi_res_scroll_result = False
+            self._pending_hi_res_scroll = None
+            return
+        # Fall back to HI_RES_SCROLLING (0x2120): write a single mode byte
+        if self._hi_res_scroll_idx is not None:
+            mode_byte = 0x01 if enabled else 0x00
+            resp = self._request(self._hi_res_scroll_idx, 0x01, [mode_byte])  # setMode fnid=0x10→func 1
+            if resp:
+                print(f"[HidGesture] Hi-Res Scroll (HI_RES_SCROLLING) set to {'on' if enabled else 'off'}")
+                self._hi_res_scroll_result = True
+            else:
+                print("[HidGesture] Hi-Res Scroll (HI_RES_SCROLLING) set FAILED")
+                self._hi_res_scroll_result = False
+            self._pending_hi_res_scroll = None
+            return
+        print("[HidGesture] Cannot set Hi-Res Scroll — feature not found on device")
+        self._hi_res_scroll_result = False
+        self._pending_hi_res_scroll = None
+
     def read_battery(self):
         """Queue a battery read and wait for the listener thread result."""
         self._battery_result = None
@@ -1241,6 +1314,8 @@ class HidGestureListener:
             self._feat_idx = None
             self._dpi_idx = None
             self._smart_shift_idx = None
+            self._hi_res_scroll_idx = None
+            self._hires_wheel_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
             self._gesture_cid = DEFAULT_GESTURE_CID
@@ -1312,7 +1387,7 @@ class HidGestureListener:
                     )
                     print("[HidGesture] Gesture CID candidates: "
                           + ", ".join(_format_cid(cid) for cid in self._gesture_candidates))
-                    # Also discover ADJUSTABLE_DPI and SMART_SHIFT
+                    # Also discover ADJUSTABLE_DPI, SMART_SHIFT, and hi-res scroll features
                     dpi_fi = self._find_feature(FEAT_ADJ_DPI)
                     if dpi_fi:
                         self._dpi_idx = dpi_fi
@@ -1321,6 +1396,14 @@ class HidGestureListener:
                     if ss_fi:
                         self._smart_shift_idx = ss_fi
                         print(f"[HidGesture] Found SMART_SHIFT @0x{ss_fi:02X}")
+                    hw_fi = self._find_feature(FEAT_HIRES_WHEEL)
+                    if hw_fi:
+                        self._hires_wheel_idx = hw_fi
+                        print(f"[HidGesture] Found HIRES_WHEEL @0x{hw_fi:02X}")
+                    hrs_fi = self._find_feature(FEAT_HI_RES_SCROLL)
+                    if hrs_fi:
+                        self._hi_res_scroll_idx = hrs_fi
+                        print(f"[HidGesture] Found HI_RES_SCROLLING @0x{hrs_fi:02X}")
                     batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
                     if batt_fi:
                         self._battery_idx = batt_fi
@@ -1385,6 +1468,8 @@ class HidGestureListener:
                             self._apply_pending_dpi()
                     if self._pending_smart_shift is not None:
                         self._apply_pending_smart_shift()
+                    if self._pending_hi_res_scroll is not None:
+                        self._apply_pending_hi_res_scroll()
                     if self._pending_battery is not None:
                         self._apply_pending_read_battery()
                     raw = self._rx(1000)
@@ -1404,6 +1489,8 @@ class HidGestureListener:
             self._feat_idx = None
             self._dpi_idx = None
             self._smart_shift_idx = None
+            self._hi_res_scroll_idx = None
+            self._hires_wheel_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
             self._pending_battery = None

@@ -221,6 +221,14 @@ class Backend(QObject):
     def smartShiftSupported(self):
         return self._engine.smart_shift_supported if self._engine else False
 
+    @Property(bool, notify=mouseConnectedChanged)
+    def hiResScrollSupported(self):
+        return self._engine.hi_res_scroll_supported if self._engine else False
+
+    @Property(bool, notify=settingsChanged)
+    def hiResScroll(self):
+        return bool(self._cfg.get("settings", {}).get("hi_res_scroll", False))
+
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
         return bool(self._cfg.get("settings", {}).get("start_minimized", True))
@@ -531,6 +539,15 @@ class Backend(QObject):
         if self._engine:
             self._engine.set_smart_shift(mode)
         self.smartShiftChanged.emit()
+
+    @Slot(bool)
+    def setHiResScroll(self, value):
+        enabled = bool(value)
+        self._cfg.setdefault("settings", {})["hi_res_scroll"] = enabled
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.set_hi_res_scroll(enabled)
+        self.settingsChanged.emit()
 
     @Slot(bool)
     def setInvertVScroll(self, value):

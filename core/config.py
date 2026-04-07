@@ -65,7 +65,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 6,
+    "version": 7,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -94,6 +94,7 @@ DEFAULT_CONFIG = {
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
         "smart_shift_mode": "ratchet",
+        "hi_res_scroll": False,
         "gesture_threshold": 50,
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
@@ -293,6 +294,11 @@ def _migrate(cfg):
             mappings = pdata.setdefault("mappings", {})
             mappings.setdefault("mode_shift", "none")
         cfg["version"] = 6
+
+    if version < 7:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("hi_res_scroll", False)
+        cfg["version"] = 7
 
     cfg.setdefault("settings", {})
     if "start_at_login" not in cfg["settings"]:

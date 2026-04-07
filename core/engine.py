@@ -327,6 +327,22 @@ class Engine:
         print("[Engine] No HID++ connection — DPI not applied")
         return False
 
+    def set_hi_res_scroll(self, enabled):
+        """Send Hi-Res Scroll state change to the mouse via HID++."""
+        enabled = bool(enabled)
+        self.cfg.setdefault("settings", {})["hi_res_scroll"] = enabled
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.set_hi_res_scroll(enabled)
+        print("[Engine] No HID++ connection — Hi-Res Scroll not applied")
+        return False
+
+    @property
+    def hi_res_scroll_supported(self):
+        hg = self.hook._hid_gesture
+        return hg.hi_res_scroll_supported if hg else False
+
     def set_smart_shift(self, mode):
         """Send Smart Shift mode change ('ratchet' or 'freespin')."""
         self.cfg.setdefault("settings", {})["smart_shift_mode"] = mode
@@ -382,6 +398,9 @@ class Engine:
                             self._smart_shift_read_cb(saved_ss)
                         except Exception:
                             pass
+                saved_hrs = self.cfg.get("settings", {}).get("hi_res_scroll")
+                if saved_hrs and hg.hi_res_scroll_supported:
+                    hg.set_hi_res_scroll(saved_hrs)
         threading.Thread(target=_apply_saved_settings, daemon=True).start()
 
     def set_dpi_read_callback(self, cb):
