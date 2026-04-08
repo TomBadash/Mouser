@@ -84,6 +84,90 @@ MX_MASTER_LAYOUT = {
     ],
 }
 
+MX_MASTER_4_LAYOUT = {
+    "key": "mx_master_4",
+    "label": "MX Master 4",
+    "image_asset": "mxm4.png",
+    "image_width": 460,
+    "image_height": 360,
+    "interactive": True,
+    "manual_selectable": True,
+    "note": "",
+    "hotspots": [
+        {
+            "buttonKey": "middle",
+            "label": "Middle button",
+            "summaryType": "mapping",
+            "normX": 0.37,
+            "normY": 0.27,
+            "labelSide": "left",
+            "labelOffX": -80,
+            "labelOffY": -100,
+        },
+        {
+            "buttonKey": "gesture",
+            "label": "Gesture button",
+            "summaryType": "gesture",
+            "normX": 0.44,
+            "normY": 0.56,
+            "labelSide": "left",
+            "labelOffX": -240,
+            "labelOffY": 60,
+        },
+        {
+            "buttonKey": "xbutton2",
+            "label": "Forward button",
+            "summaryType": "mapping",
+            "normX": 0.48,
+            "normY": 0.62,
+            "labelSide": "left",
+            "labelOffX": -300,
+            "labelOffY": 0,
+        },
+        {
+            "buttonKey": "xbutton1",
+            "label": "Back button",
+            "summaryType": "mapping",
+            "normX": 0.53,
+            "normY": 0.50,
+            "labelSide": "right",
+            "labelOffX": 200,
+            "labelOffY": 50,
+        },
+        {
+            "buttonKey": "hscroll_left",
+            "label": "Horizontal scroll",
+            "summaryType": "hscroll",
+            "isHScroll": True,
+            "normX": 0.25,
+            "normY": 0.46,
+            "labelSide": "left",
+            "labelOffX": -200,
+            "labelOffY": -30,
+        },
+        {
+            "buttonKey": "mode_shift",
+            "label": "Mode shift button",
+            "summaryType": "mapping",
+            "normX": 0.38,
+            "normY": 0.40,
+            "labelSide": "right",
+            "labelOffX": 150,
+            "labelOffY": -80,
+        },
+        {
+            "buttonKey": "actions_ring",
+            "label": "Actions Ring",
+            "summaryType": "mapping",
+            "normX": 0.62,
+            "normY": 0.70,
+            "labelSide": "right",
+            "labelOffX": 160,
+            "labelOffY": 50,
+        },
+    ],
+}
+
 GENERIC_MOUSE_LAYOUT = {
     "key": "generic_mouse",
     "label": "Generic mouse",
@@ -208,6 +292,7 @@ MX_VERTICAL_LAYOUT = {
 
 DEVICE_LAYOUTS = {
     "mx_master": MX_MASTER_LAYOUT,
+    "mx_master_4": MX_MASTER_4_LAYOUT,
     "mx_anywhere": MX_ANYWHERE_LAYOUT,
     "mx_vertical": MX_VERTICAL_LAYOUT,
     "generic_mouse": GENERIC_MOUSE_LAYOUT,
@@ -217,7 +302,6 @@ DEVICE_LAYOUTS = {
 # Entries here let per-device keys fall back to the family layout until a
 # dedicated layout is added.  Extend this dict as new devices are cataloged.
 _FAMILY_FALLBACKS = {
-    "mx_master_4": "mx_master",
     "mx_master_3s": "mx_master",
     "mx_master_3": "mx_master",
     "mx_master_2s": "mx_master",

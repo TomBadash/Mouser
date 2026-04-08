@@ -33,6 +33,9 @@ MX_MASTER_BUTTONS = (
     "mode_shift",
 )
 
+# MX Master 4 adds an Actions Ring / Haptic Sense button on the thumb rest.
+MX_MASTER_4_BUTTONS = MX_MASTER_BUTTONS + ("actions_ring",)
+
 # MX Anywhere has a gesture button but no horizontal scroll tilt and no
 # dedicated mode-shift button.  Gesture support is a best guess -- needs
 # validation by an owner.
@@ -120,6 +123,8 @@ KNOWN_LOGI_DEVICES = (
             "MX Master 4 for Business",
         ),
         ui_layout="mx_master_4",
+        image_asset="mxm4.png",
+        supported_buttons=MX_MASTER_4_BUTTONS,
     ),
     LogiDeviceSpec(
         key="mx_master_3s",
@@ -222,6 +227,7 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
 # resolve buttons even when individual devices use per-device ui_layout keys.
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
+    "mx_master_4": MX_MASTER_4_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,

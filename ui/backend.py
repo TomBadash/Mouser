@@ -59,6 +59,7 @@ class Backend(QObject):
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
+    hapticChanged = Signal()
     knownAppsChanged = Signal()
 
     # Internal cross-thread signals
@@ -284,6 +285,20 @@ class Backend(QObject):
         """Whether the effective device has a mode_shift button (SmartShift)."""
         btns = self._effective_supported_buttons
         return btns is None or "mode_shift" in btns
+
+    @Property(bool, notify=deviceLayoutChanged)
+    def deviceHasActionsRing(self):
+        """Whether the effective device has an Actions Ring button."""
+        btns = self._effective_supported_buttons
+        return btns is not None and "actions_ring" in btns
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
+    def hapticSupported(self):
+        return self._engine.haptic_supported if self._engine else False
+
+    @Property(int, notify=hapticChanged)
+    def hapticLevel(self):
+        return int(self._cfg.get("settings", {}).get("haptic_level", 2))
 
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
@@ -609,6 +624,28 @@ class Backend(QObject):
     @Slot(int)
     def setSmartShiftThreshold(self, threshold):
         self._applySmartShift(threshold=threshold)
+
+    @Slot(int)
+    def setHapticLevel(self, level):
+        level = max(0, min(3, int(level)))
+        self._cfg.setdefault("settings", {})["haptic_level"] = level
+        save_config(self._cfg)
+        self.hapticChanged.emit()
+        if self._engine:
+            import threading
+            threading.Thread(
+                target=lambda: self._engine.set_haptic_level(level),
+                daemon=True, name="SetHapticLevel"
+            ).start()
+
+    @Slot()
+    def playHapticTest(self):
+        if self._engine:
+            import threading
+            threading.Thread(
+                target=lambda: self._engine.play_haptic_waveform(0),
+                daemon=True, name="HapticTest"
+            ).start()
 
     @Slot(bool)
     def setInvertVScroll(self, value):

@@ -31,7 +31,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 8)
+        self.assertEqual(migrated["version"], 9)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -73,7 +73,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 8)
+        self.assertEqual(migrated["version"], 9)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -112,7 +112,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 8)
+        self.assertEqual(loaded["version"], 9)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -136,12 +136,37 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 8)
+        self.assertEqual(migrated["version"], 9)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
         )
+
+    def test_migrate_v8_to_v9_adds_actions_ring_and_haptic(self):
+        v8_cfg = {
+            "version": 8,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {
+                        "middle": "none",
+                        "mode_shift": "switch_scroll_mode",
+                    },
+                }
+            },
+            "settings": {"dpi": 1000},
+        }
+
+        migrated = config._migrate(v8_cfg)
+
+        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["actions_ring"], "none"
+        )
+        self.assertEqual(migrated["settings"]["haptic_level"], 2)
 
     def test_get_profile_for_app_matches_aliases(self):
         cfg = {

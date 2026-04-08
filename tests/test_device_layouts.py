@@ -40,6 +40,33 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertEqual(layout["image_asset"], "mx_vertical.png")
         self.assertGreater(len(layout["hotspots"]), 0)
 
+    # ── MX Master 4 layout tests ──────────────────────────────
+
+    def test_mx_master_4_layout_exists(self):
+        layout = get_device_layout("mx_master_4")
+
+        self.assertEqual(layout["key"], "mx_master_4")
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["image_asset"], "mxm4.png")
+
+    def test_mx_master_4_has_actions_ring_hotspot(self):
+        layout = get_device_layout("mx_master_4")
+        hotspot_keys = [h["buttonKey"] for h in layout["hotspots"]]
+
+        self.assertIn("actions_ring", hotspot_keys)
+
+    def test_mx_master_4_no_longer_falls_back(self):
+        layout = get_device_layout("mx_master_4")
+
+        self.assertNotEqual(layout["key"], "mx_master",
+                            "mx_master_4 should have its own layout, not fall back")
+
+    def test_mx_master_4_in_manual_choices(self):
+        choices = get_manual_layout_choices()
+        keys = [c["key"] for c in choices]
+
+        self.assertIn("mx_master_4", keys)
+
 
 if __name__ == "__main__":
     unittest.main()

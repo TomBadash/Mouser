@@ -11,6 +11,21 @@ _TRANSLATIONS = {
         # Navigation sidebar
         "nav.mouse_profiles": "Mouse & Profiles",
         "nav.point_scroll": "Point & Scroll",
+        "nav.haptic_feedback": "Haptic Feedback",
+
+        # Haptic Feedback page
+        "haptic.title": "Haptic Feedback",
+        "haptic.subtitle": "Configure the haptic motor in your MX Master 4",
+        "haptic.level": "Feedback Intensity",
+        "haptic.level_desc": "Choose how strongly the haptic motor responds. Higher levels use more battery.",
+        "haptic.level_subtle": "Subtle",
+        "haptic.level_low": "Low",
+        "haptic.level_medium": "Medium",
+        "haptic.level_high": "High",
+        "haptic.test_title": "Test Haptic",
+        "haptic.test_desc": "Play a brief haptic pulse to preview the current intensity.",
+        "haptic.test": "Test",
+        "haptic.experimental_note": "Haptic feedback support is experimental. Some settings may not take effect until the protocol is fully documented.",
 
         # Mouse page — profile list
         "mouse.profiles": "Profiles",
@@ -177,6 +192,20 @@ _TRANSLATIONS = {
     "zh_CN": {
         "nav.mouse_profiles": "\u9f20\u6807\u4e0e\u914d\u7f6e\u6587\u4ef6",
         "nav.point_scroll": "\u6307\u9488\u4e0e\u6eda\u8f6e",
+        "nav.haptic_feedback": "\u89e6\u89c9\u53cd\u9988",
+
+        "haptic.title": "\u89e6\u89c9\u53cd\u9988",
+        "haptic.subtitle": "\u914d\u7f6e MX Master 4 \u7684\u89e6\u89c9\u9a6c\u8fbe",
+        "haptic.level": "\u53cd\u9988\u5f3a\u5ea6",
+        "haptic.level_desc": "\u9009\u62e9\u89e6\u89c9\u9a6c\u8fbe\u7684\u54cd\u5e94\u5f3a\u5ea6\u3002\u8f83\u9ad8\u7ea7\u522b\u4f1a\u6d88\u8017\u66f4\u591a\u7535\u91cf\u3002",
+        "haptic.level_subtle": "\u5fae\u5f31",
+        "haptic.level_low": "\u4f4e",
+        "haptic.level_medium": "\u4e2d",
+        "haptic.level_high": "\u9ad8",
+        "haptic.test_title": "\u6d4b\u8bd5\u89e6\u89c9",
+        "haptic.test_desc": "\u64ad\u653e\u4e00\u6b21\u77ed\u6682\u7684\u89e6\u89c9\u8109\u51b2\u4ee5\u9884\u89c8\u5f53\u524d\u5f3a\u5ea6\u3002",
+        "haptic.test": "\u6d4b\u8bd5",
+        "haptic.experimental_note": "\u89e6\u89c9\u53cd\u9988\u652f\u6301\u4e3a\u5b9e\u9a8c\u6027\u529f\u80fd\u3002\u90e8\u5206\u8bbe\u7f6e\u53ef\u80fd\u5728\u534f\u8bae\u5b8c\u5168\u6587\u6863\u5316\u540e\u624d\u751f\u6548\u3002",
 
         "mouse.profiles": "\u914d\u7f6e\u6587\u4ef6",
         "mouse.all_applications": "\u6240\u6709\u5e94\u7528\u7a0b\u5e8f",
@@ -328,6 +357,20 @@ _TRANSLATIONS = {
     "zh_TW": {
         "nav.mouse_profiles": "\u6ed1\u9f20\u8207\u8a2d\u5b9a\u6a94",
         "nav.point_scroll": "\u6307\u6a19\u8207\u6372\u8ef8",
+        "nav.haptic_feedback": "\u89f8\u89ba\u56de\u994b",
+
+        "haptic.title": "\u89f8\u89ba\u56de\u994b",
+        "haptic.subtitle": "\u8a2d\u5b9a MX Master 4 \u7684\u89f8\u89ba\u99ac\u9054",
+        "haptic.level": "\u56de\u994b\u5f37\u5ea6",
+        "haptic.level_desc": "\u9078\u64c7\u89f8\u89ba\u99ac\u9054\u7684\u97ff\u61c9\u5f37\u5ea6\u3002\u8f03\u9ad8\u7d1a\u5225\u6703\u6d88\u8017\u66f4\u591a\u96fb\u91cf\u3002",
+        "haptic.level_subtle": "\u5fae\u5f31",
+        "haptic.level_low": "\u4f4e",
+        "haptic.level_medium": "\u4e2d",
+        "haptic.level_high": "\u9ad8",
+        "haptic.test_title": "\u6e2c\u8a66\u89f8\u89ba",
+        "haptic.test_desc": "\u64ad\u653e\u4e00\u6b21\u77ed\u66ab\u7684\u89f8\u89ba\u8108\u885d\u4ee5\u9810\u89bd\u76ee\u524d\u5f37\u5ea6\u3002",
+        "haptic.test": "\u6e2c\u8a66",
+        "haptic.experimental_note": "\u89f8\u89ba\u56de\u994b\u652f\u63f4\u70ba\u5be6\u9a57\u6027\u529f\u80fd\u3002\u90e8\u5206\u8a2d\u5b9a\u53ef\u80fd\u5728\u5354\u5b9a\u5b8c\u5168\u6587\u4ef6\u5316\u5f8c\u624d\u751f\u6548\u3002",
 
         "mouse.profiles": "\u8a2d\u5b9a\u6a94",
         "mouse.all_applications": "\u6240\u6709\u61c9\u7528\u7a0b\u5f0f",

@@ -153,5 +153,17 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         fake_dev.close.assert_not_called()
 
 
+class MxMaster4ConstantTests(unittest.TestCase):
+    def test_actions_ring_cid_named(self):
+        self.assertIn(0x01A0, hid_gesture.KNOWN_CID_NAMES)
+        self.assertEqual(hid_gesture.KNOWN_CID_NAMES[0x01A0], "Actions Ring")
+
+    def test_haptic_feature_constant(self):
+        self.assertEqual(hid_gesture.FEAT_HAPTIC, 0x19B0)
+
+    def test_force_sensing_constant(self):
+        self.assertEqual(hid_gesture.FEAT_FORCE_SENSING, 0x19C0)
+
+
 if __name__ == "__main__":
     unittest.main()

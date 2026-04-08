@@ -118,6 +118,16 @@ class Engine:
             )
         )
 
+        # Divert Actions Ring CID (0x01A0) on MX Master 4 when mapped.
+        has_actions_ring = device_buttons is None or "actions_ring" in device_buttons
+        self.hook.divert_actions_ring = (
+            has_actions_ring
+            and any(
+                pdata.get("mappings", {}).get("actions_ring", "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            )
+        )
+
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
@@ -491,6 +501,11 @@ class Engine:
                         pass
             else:
                 replay_ok = False
+
+        saved_haptic = self.cfg.get("settings", {}).get("haptic_level")
+        if saved_haptic is not None and getattr(hg, "haptic_supported", False):
+            if hasattr(hg, "set_haptic_level"):
+                hg.set_haptic_level(saved_haptic)
         return replay_ok
 
     def _replay_saved_settings_worker(self):
@@ -666,6 +681,30 @@ class Engine:
     def smart_shift_supported(self):
         hg = self.hook._hid_gesture
         return hg.smart_shift_supported if hg else False
+
+    @property
+    def haptic_supported(self):
+        hg = self.hook._hid_gesture
+        return hg.haptic_supported if hg else False
+
+    def set_haptic_level(self, level):
+        """Send haptic level to the mouse and persist to config."""
+        level = max(0, min(3, int(level)))
+        settings = self.cfg.setdefault("settings", {})
+        settings["haptic_level"] = level
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.set_haptic_level(level)
+        print("[Engine] No HID++ connection -- haptic level not applied")
+        return False
+
+    def play_haptic_waveform(self, waveform_id=0):
+        """Trigger a haptic waveform on the mouse."""
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.play_haptic_waveform(waveform_id)
+        return False
 
     def reload_mappings(self):
         """

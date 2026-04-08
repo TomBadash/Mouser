@@ -392,5 +392,11 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
 
 
+class ActionsRingEventTests(unittest.TestCase):
+    def test_actions_ring_event_constants_exist(self):
+        self.assertEqual(mouse_hook.MouseEvent.ACTIONS_RING_DOWN, "actions_ring_down")
+        self.assertEqual(mouse_hook.MouseEvent.ACTIONS_RING_UP, "actions_ring_up")
+
+
 if __name__ == "__main__":
     unittest.main()

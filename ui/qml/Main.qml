@@ -27,6 +27,17 @@ ApplicationWindow {
     property real hoveredNavCenterX: 0
     property real hoveredNavCenterY: 0
 
+    property var navModel: {
+        var items = [
+            { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+            { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
+        ]
+        if (backend.hapticSupported) {
+            items.push({ icon: "circle", tipKey: "nav.haptic_feedback", page: 2 })
+        }
+        return items
+    }
+
     color: theme.bg
 
     Material.theme: darkMode ? Material.Dark : Material.Light
@@ -73,10 +84,7 @@ ApplicationWindow {
                 Item { width: 1; height: 18 }
 
                 Repeater {
-                    model: [
-                        { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
-                        { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
-                    ]
+                    model: root.navModel
 
                     delegate: FocusScope {
                         id: navItem
@@ -169,6 +177,10 @@ ApplicationWindow {
             Loader {
                 active: root.currentPage === 1 || item
                 source: "ScrollPage.qml"
+            }
+            Loader {
+                active: (root.currentPage === 2 || item) && backend.hapticSupported
+                source: "HapticPage.qml"
             }
         }
     }

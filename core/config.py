@@ -33,6 +33,7 @@ BUTTON_NAMES = {
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
     "dpi_switch":    "DPI switch button",
+    "actions_ring":  "Actions Ring button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -64,10 +65,11 @@ BUTTON_TO_EVENTS = {
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
     "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
+    "actions_ring":  ("actions_ring_down", "actions_ring_up"),
 }
 
 DEFAULT_CONFIG = {
-    "version": 8,
+    "version": 9,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -85,6 +87,7 @@ DEFAULT_CONFIG = {
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
+                "actions_ring": "none",
             },
         }
     },
@@ -106,6 +109,7 @@ DEFAULT_CONFIG = {
         "debug_mode": False,
         "device_layout_overrides": {},
         "language": "en",
+        "haptic_level": 2,          # 0=subtle, 1=low, 2=medium, 3=high
     },
 }
 
@@ -320,6 +324,16 @@ def _migrate(cfg):
             if mappings.get("mode_shift") == "toggle_smart_shift":
                 mappings["mode_shift"] = "switch_scroll_mode"
         cfg["version"] = 8
+
+    if version < 9:
+        # v8 -> v9: add Actions Ring button mapping for MX Master 4,
+        # add haptic feedback level setting.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            mappings.setdefault("actions_ring", "none")
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("haptic_level", 2)
+        cfg["version"] = 9
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
