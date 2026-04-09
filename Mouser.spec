@@ -14,16 +14,96 @@ block_cipher = None
 ROOT = os.path.abspath(".")
 PYSIDE6_DIR = os.path.dirname(PySide6.__file__)
 
+
+def _dir_if_exists(src, dest):
+    if os.path.isdir(src):
+        return [(src, dest)]
+    return []
+
+
+def _file_if_exists(src, dest):
+    if os.path.isfile(src):
+        return [(src, dest)]
+    return []
+
+
+_manual_qt_datas = []
+for rel in (
+    os.path.join("plugins", "platforms"),
+    os.path.join("plugins", "imageformats"),
+    os.path.join("plugins", "iconengines"),
+    os.path.join("plugins", "styles"),
+    os.path.join("plugins", "platforminputcontexts"),
+    os.path.join("qml", "Qt"),
+    os.path.join("qml", "QtCore"),
+    os.path.join("qml", "QtNetwork"),
+    os.path.join("qml", "QtQml"),
+    os.path.join("qml", "QtQuick"),
+):
+    _manual_qt_datas += _dir_if_exists(
+        os.path.join(PYSIDE6_DIR, rel),
+        os.path.join("PySide6", rel),
+    )
+
+_manual_qt_binaries = []
+for name in (
+    "MSVCP140.dll",
+    "MSVCP140_1.dll",
+    "MSVCP140_2.dll",
+    "VCRUNTIME140.dll",
+    "VCRUNTIME140_1.dll",
+    "opengl32sw.dll",
+    "pyside6.abi3.dll",
+    "pyside6qml.abi3.dll",
+    "shiboken6.abi3.dll",
+    "Qt6Core.dll",
+    "Qt6Gui.dll",
+    "Qt6Network.dll",
+    "Qt6OpenGL.dll",
+    "Qt6Qml.dll",
+    "Qt6QmlCore.dll",
+    "Qt6QmlMeta.dll",
+    "Qt6QmlModels.dll",
+    "Qt6QmlNetwork.dll",
+    "Qt6QmlWorkerScript.dll",
+    "Qt6Quick.dll",
+    "Qt6QuickControls2.dll",
+    "Qt6QuickControls2Basic.dll",
+    "Qt6QuickControls2BasicStyleImpl.dll",
+    "Qt6QuickControls2Impl.dll",
+    "Qt6QuickControls2Material.dll",
+    "Qt6QuickControls2MaterialStyleImpl.dll",
+    "Qt6QuickControls2WindowsStyleImpl.dll",
+    "Qt6QuickEffects.dll",
+    "Qt6QuickLayouts.dll",
+    "Qt6QuickShapes.dll",
+    "Qt6QuickTemplates2.dll",
+    "Qt6ShaderTools.dll",
+    "Qt6Svg.dll",
+    "Qt6Widgets.dll",
+    "Qt6LabsAnimation.dll",
+    "Qt6LabsFolderListModel.dll",
+    "Qt6LabsPlatform.dll",
+    "Qt6LabsQmlModels.dll",
+    "Qt6LabsSettings.dll",
+    "Qt6LabsSharedImage.dll",
+    "Qt6LabsWavefrontMesh.dll",
+):
+    _manual_qt_binaries += _file_if_exists(
+        os.path.join(PYSIDE6_DIR, name),
+        "PySide6",
+    )
+
 a = Analysis(
     ["main_qml.py"],
     pathex=[ROOT],
-    binaries=[],
+    binaries=_manual_qt_binaries,
     datas=[
         # QML UI files
         (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
         # Image assets
         (os.path.join(ROOT, "images"), "images"),
-    ],
+    ] + _manual_qt_datas,
     hiddenimports=[
         # conditional / lazy imports PyInstaller may miss
         "hid",
@@ -119,10 +199,14 @@ _qt_keep = {
     "Qt6Quick", "Qt6QuickControls2", "Qt6QuickControls2Impl",
     "Qt6QuickControls2Basic", "Qt6QuickControls2BasicStyleImpl",
     "Qt6QuickControls2Material", "Qt6QuickControls2MaterialStyleImpl",
+    "Qt6QuickControls2WindowsStyleImpl",
     "Qt6QuickTemplates2", "Qt6QuickLayouts", "Qt6QuickEffects",
     "Qt6QuickShapes",
+    "Qt6LabsAnimation", "Qt6LabsFolderListModel", "Qt6LabsPlatform",
+    "Qt6LabsQmlModels", "Qt6LabsSettings", "Qt6LabsSharedImage",
+    "Qt6LabsWavefrontMesh",
     # Rendering
-    "Qt6ShaderTools", "Qt6Svg",
+    "Qt6ShaderTools", "Qt6Svg", "opengl32sw",
     # PySide6 runtime
     "pyside6.abi3", "pyside6qml.abi3", "shiboken6.abi3",
     # VC runtime
@@ -150,7 +234,7 @@ def _should_keep(name):
         if keep in name:
             return True
     # Keep QML dirs we need
-    for keep_qml in ("QtCore", "QtQml", "QtQuick", "QtNetwork"):
+    for keep_qml in ("Qt", "QtCore", "QtQml", "QtQuick", "QtNetwork"):
         pat = os.path.join("qml", keep_qml)
         if pat in name.replace("/", os.sep):
             return True
@@ -194,7 +278,7 @@ _dist = os.path.join("dist", "Mouser", "_internal", "PySide6")
 
 # QML dirs to KEEP (everything else under qml/ is deleted)
 _keep_qml = {
-    "QtCore", "QtQml", "QtQuick", "QtNetwork",
+    "Qt", "QtCore", "QtQml", "QtQuick", "QtNetwork",
 }
 
 # Under QtQuick, keep only what the app uses

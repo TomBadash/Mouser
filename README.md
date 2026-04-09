@@ -80,7 +80,7 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 
 | Category | Actions |
 |---|---|
-| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS) |
+| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Snipping Tool (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS) |
 | **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab) |
 | **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
 | **Media** | Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track |
