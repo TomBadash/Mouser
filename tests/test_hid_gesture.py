@@ -99,6 +99,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
                 hid_gesture,
                 "_hid",
                 SimpleNamespace(device=lambda: fake_dev),
+                create=True,
             ),
             patch("builtins.print") as print_mock,
         ):
@@ -135,6 +136,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
                 hid_gesture,
                 "_hid",
                 SimpleNamespace(device=lambda: fake_dev),
+                create=True,
             ),
             patch("builtins.print") as print_mock,
         ):
@@ -151,6 +153,52 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
             any(self._is_missing_reprog_diag(message) for message in messages)
         )
         fake_dev.close.assert_not_called()
+
+    def test_try_connect_rearms_extra_diverts_on_reconnect(self):
+        listener = hid_gesture.HidGestureListener(
+            extra_diverts={
+                0x00C4: {"on_down": Mock(), "on_up": Mock()},
+            }
+        )
+        info = {
+            "product_id": 0xB023,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "Bluetooth Low Energy",
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 3",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_devs = [_FakeHidDevice(), _FakeHidDevice()]
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x10
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras") as divert_extras_mock,
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_devs.pop(0)),
+                create=True,
+            ),
+        ):
+            self.assertTrue(listener._try_connect())
+            listener._dev = None
+            self.assertTrue(listener._try_connect())
+
+        self.assertEqual(divert_extras_mock.call_count, 2)
+        self.assertIn(0x00C4, listener._extra_diverts)
+        self.assertFalse(listener._extra_diverts[0x00C4]["held"])
 
 
 if __name__ == "__main__":
