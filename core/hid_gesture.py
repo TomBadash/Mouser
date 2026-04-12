@@ -1223,6 +1223,11 @@ class HidGestureListener:
     HAPTIC_LEVEL_HIGH   = 3
     HAPTIC_WAVEFORM_DEFAULT = 0
 
+    # Maps UI levels (0-3) to the device's 0-100 intensity scale.
+    # Derived from Solaar's HapticLevel implementation (feature 0x19B0):
+    # Off=0, Low=25, Medium=50, High=75, Maximum=100.
+    HAPTIC_DEVICE_LEVELS = {0: 25, 1: 50, 2: 75, 3: 100}
+
     @property
     def haptic_supported(self):
         return self._haptic_idx is not None
@@ -1284,29 +1289,45 @@ class HidGestureListener:
                 resp = self._request(self._haptic_idx, 1, [])
                 if resp:
                     _, _, _, _, p = resp
+                    # Byte 0: enable flag (bit 0 = enabled/disabled).
+                    # Byte 1: device-scale level (0-100).
+                    enabled = bool(p[0] & 0x01) if p else False
+                    device_level = p[1] if len(p) > 1 else 0
+                    # Reverse-map device level to UI level (closest match).
+                    ui_level = min(
+                        self.HAPTIC_DEVICE_LEVELS,
+                        key=lambda k: abs(self.HAPTIC_DEVICE_LEVELS[k] - device_level),
+                    )
                     self._haptic_result = {
                         "raw": list(p),
-                        "level": p[0] if p else 0,
+                        "enabled": enabled,
+                        "device_level": device_level,
+                        "level": ui_level,
                     }
-                    print(f"[HidGesture] Haptic state: [{_hex_bytes(p)}]")
+                    print(f"[HidGesture] Haptic state: [{_hex_bytes(p)}] "
+                          f"enabled={enabled} device_level={device_level} "
+                          f"ui_level={ui_level}")
                 else:
                     self._haptic_result = None
                     print("[HidGesture] Haptic state read FAILED")
             elif isinstance(cmd, tuple) and cmd[0] == "set_level":
                 level = cmd[1]
-                # Function 2: setState.  Byte 0 = level.
-                # Remaining bytes are unknown; zero-padded for safety.
-                resp = self._request(self._haptic_idx, 2, [level, 0x00, 0x00])
+                # Function 2: setState.
+                # Byte 0: enable flag (0x01 = on).
+                # Byte 1: intensity on the 0-100 device scale.
+                device_level = self.HAPTIC_DEVICE_LEVELS.get(level, 50)
+                resp = self._request(self._haptic_idx, 2, [0x01, device_level])
                 self._haptic_result = resp is not None
-                print(f"[HidGesture] Haptic set level={level}: "
+                print(f"[HidGesture] Haptic set level={level} "
+                      f"(device={device_level}): "
                       f"{'OK' if self._haptic_result else 'FAILED'}")
                 if resp:
                     _, _, _, _, p = resp
                     print(f"[HidGesture] Haptic set response: [{_hex_bytes(p)}]")
             elif isinstance(cmd, tuple) and cmd[0] == "play":
                 waveform = cmd[1]
-                # Function 3: playWaveform.  Byte 0 = waveform ID.
-                resp = self._request(self._haptic_idx, 3, [waveform, 0x00, 0x00])
+                # Function 4: playWaveform.  Byte 0 = waveform ID.
+                resp = self._request(self._haptic_idx, 4, [waveform])
                 self._haptic_result = resp is not None
                 print(f"[HidGesture] Haptic play waveform={waveform}: "
                       f"{'OK' if self._haptic_result else 'FAILED'}")

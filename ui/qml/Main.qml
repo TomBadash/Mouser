@@ -7,8 +7,8 @@ import "Theme.js" as Theme
 ApplicationWindow {
     id: root
     visible: !launchHidden
-    width: 1060
-    height: 700
+    width: 1500
+    height: 800
     minimumWidth: 920
     minimumHeight: 620
     title: backend.mouseConnected
