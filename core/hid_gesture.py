@@ -1273,6 +1273,16 @@ class HidGestureListener:
         self._pending_haptic = None
         return False
 
+    def queue_haptic_waveform(self, waveform_id=0):
+        """Set the pending haptic command without blocking.
+
+        Safe to call from the listener thread itself (e.g. from inside an
+        event callback).  The listener loop will pick it up at the top of
+        the next iteration, before the next _rx() call, so the pulse fires
+        with minimal latency.  Does not wait for a result."""
+        if self._haptic_idx is not None and self._dev is not None:
+            self._pending_haptic = ("play", int(waveform_id))
+
     def _apply_pending_haptic(self):
         """Process queued haptic commands on the listener thread."""
         cmd = self._pending_haptic

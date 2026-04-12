@@ -715,14 +715,16 @@ class Engine:
         return False
 
     def _play_haptic_async(self, waveform_id=0):
-        """Fire-and-forget haptic pulse.  Safe to call from HID event callbacks
-        because the blocking device I/O runs on a dedicated thread."""
+        """Queue a haptic pulse with minimal latency.
+
+        Calls queue_haptic_waveform() which sets _pending_haptic directly on
+        the HidGestureListener.  Because HID++ event callbacks are dispatched
+        synchronously on the listener thread, this flag is set before _on_report
+        returns, so the listener loop picks it up at the very next iteration
+        (before the next _rx() call) rather than waiting for an incoming event."""
         hg = self.hook._hid_gesture
         if hg and hg.haptic_supported:
-            threading.Thread(
-                target=lambda: hg.play_haptic_waveform(waveform_id),
-                daemon=True, name="HapticFeedback",
-            ).start()
+            hg.queue_haptic_waveform(waveform_id)
 
     def reload_mappings(self):
         """
