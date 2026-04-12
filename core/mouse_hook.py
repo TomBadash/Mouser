@@ -990,6 +990,7 @@ elif sys.platform == "darwin":
     _BTN_BACK = 3
     _BTN_FORWARD = 4
     _SCROLL_INVERT_MARKER = 0x4D4F5553
+    _INJECTED_EVENT_MARKER = 0x4D4F5554
     _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
     _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -1379,6 +1380,16 @@ elif sys.platform == "darwin":
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
 
+                # Ignore events we injected ourselves.  The key_simulator marks
+                # synthetic events by setting kCGEventSourceUserData to _INJECTED_EVENT_MARKER.
+                try:
+                    if Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGEventSourceUserData
+                    ) == _INJECTED_EVENT_MARKER:
+                        return cg_event
+                except Exception:
+                    # If the field isn't available or the call fails, continue.
+                    pass
                 mouse_event = None
                 should_block = False
 
