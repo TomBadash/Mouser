@@ -173,6 +173,11 @@ class Engine:
                             "action_id": action_id,
                             "action_label": self._action_label(action_id),
                         })
+                        # Haptic confirmation when a gesture resolves to an action.
+                        self._play_haptic_async(7)  # COMPLETED
+                    elif event.event_type == "actions_ring_down":
+                        # Haptic detent feedback for each ring step.
+                        self._play_haptic_async(0)  # SHARP_STATE_CHANGE
                     if action_id == "toggle_smart_shift":
                         self._toggle_smart_shift()
                     elif action_id == "switch_scroll_mode":
@@ -260,6 +265,7 @@ class Engine:
             def _write():
                 ok = hg.set_smart_shift(mode, new_enabled, threshold)
                 print(f"[Engine] toggle_smart_shift device write -> {'OK' if ok else 'FAILED'}")
+                hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
             threading.Thread(target=_write, daemon=True, name="ToggleSmartShift").start()
 
     def _switch_scroll_mode(self):
@@ -286,6 +292,7 @@ class Engine:
             def _write():
                 ok = hg.set_smart_shift(new_mode, False, threshold)
                 print(f"[Engine] switch_scroll_mode device write -> {'OK' if ok else 'FAILED'}")
+                hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
             threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
 
     _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
@@ -320,6 +327,7 @@ class Engine:
         if hg:
             def _write():
                 hg.set_dpi(new_dpi)
+                hg.play_haptic_waveform(3)  # DAMP_COLLISION — per-step click
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
@@ -705,6 +713,16 @@ class Engine:
         if hg:
             return hg.play_haptic_waveform(waveform_id)
         return False
+
+    def _play_haptic_async(self, waveform_id=0):
+        """Fire-and-forget haptic pulse.  Safe to call from HID event callbacks
+        because the blocking device I/O runs on a dedicated thread."""
+        hg = self.hook._hid_gesture
+        if hg and hg.haptic_supported:
+            threading.Thread(
+                target=lambda: hg.play_haptic_waveform(waveform_id),
+                daemon=True, name="HapticFeedback",
+            ).start()
 
     def reload_mappings(self):
         """
