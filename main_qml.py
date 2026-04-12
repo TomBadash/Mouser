@@ -182,8 +182,6 @@ def _render_svg_pixmap(path: str, color: QColor, size: int) -> QPixmap:
 
 
 def _tray_icon() -> QIcon:
-    if sys.platform != "darwin":
-        return _app_icon()
 
     tray_svg = os.path.join(ROOT, "images", "icons", "mouse-simple.svg")
     icon = QIcon()
