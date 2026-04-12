@@ -147,8 +147,6 @@ if sys.platform == "darwin":
 
 def _default_backend_preference(platform_name=None):
     platform_name = sys.platform if platform_name is None else platform_name
-    if platform_name == "darwin":
-        return "iokit"
     return "auto"
 
 
@@ -1583,7 +1581,7 @@ class HidGestureListener:
                             gesture_cids=self._gesture_candidates,
                         )
                         return True
-                    break        # right device but divert failed
+                    continue     # divert failed — try next receiver slot
             if not reprog_found:
                 print(
                     "[HidGesture] Opened candidate but REPROG_V4 was not found "
