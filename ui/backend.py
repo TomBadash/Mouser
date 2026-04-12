@@ -83,6 +83,7 @@ class Backend(QObject):
         self._device_dpi_min = DEFAULT_DPI_MIN
         self._device_dpi_max = DEFAULT_DPI_MAX
         self._connected_device_source = ""
+        self._connected_device_transport = ""
         self._battery_level = -1
         self._hid_features_ready = False
         self._debug_lines = []
@@ -355,6 +356,10 @@ class Backend(QObject):
     @Property(str, notify=deviceInfoChanged)
     def connectedDeviceKey(self):
         return self._connected_device_key
+
+    @Property(str, notify=deviceInfoChanged)
+    def connectionType(self):
+        return self._connected_device_transport
 
     @Property(int, notify=deviceInfoChanged)
     def deviceDpiMin(self):
@@ -1012,6 +1017,7 @@ class Backend(QObject):
         device_key = getattr(device, "key", "") or ""
         display_name = getattr(device, "display_name", "") or "Logitech mouse"
         source = getattr(device, "source", "") or ""
+        transport = getattr(device, "transport", "") or ""
         dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
         dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
         info_changed = False
@@ -1023,6 +1029,9 @@ class Backend(QObject):
             info_changed = True
         if source != self._connected_device_source:
             self._connected_device_source = source
+            info_changed = True
+        if transport != self._connected_device_transport:
+            self._connected_device_transport = transport
             info_changed = True
         if dpi_min != self._device_dpi_min:
             self._device_dpi_min = dpi_min

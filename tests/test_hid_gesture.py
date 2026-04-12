@@ -6,8 +6,8 @@ from core import hid_gesture
 
 
 class HidBackendPreferenceTests(unittest.TestCase):
-    def test_default_backend_uses_iokit_on_macos(self):
-        self.assertEqual(hid_gesture._default_backend_preference("darwin"), "iokit")
+    def test_default_backend_uses_auto_on_macos(self):
+        self.assertEqual(hid_gesture._default_backend_preference("darwin"), "auto")
 
     def test_default_backend_uses_auto_elsewhere(self):
         self.assertEqual(hid_gesture._default_backend_preference("win32"), "auto")
@@ -246,6 +246,162 @@ class HidRequestTransportFailureTests(unittest.TestCase):
             self.assertIsNone(listener._request(0x0E, 0, [], timeout_ms=0))
 
         self.assertEqual(listener._consecutive_request_timeouts, 1)
+
+
+class HidBoltReceiverTests(unittest.TestCase):
+    """Tests for Logi Bolt receiver support."""
+
+    def test_divert_failure_continues_to_next_receiver_slot(self):
+        """When divert fails on one slot (e.g. keyboard), the loop
+        continues and connects to the mouse on a later slot."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC548,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "USB Receiver",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+        divert_call_count = [0]
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        def fake_divert():
+            divert_call_count[0] += 1
+            # First call fails (keyboard), second succeeds (mouse)
+            return divert_call_count[0] >= 2
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", side_effect=fake_divert),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+            self.assertEqual(divert_call_count[0], 2)
+
+    def test_candidates_sorted_direct_devices_before_receivers(self):
+        """Bluetooth devices should be tried before USB receivers."""
+        listener = hid_gesture.HidGestureListener()
+        infos = [
+            {"product_string": "USB Receiver", "product_id": 0xC548,
+             "usage_page": 0xFF00, "usage": 1, "source": "hidapi"},
+            {"product_string": "MX Master 3S", "product_id": 0xB034,
+             "usage_page": 0xFF43, "usage": 1, "source": "hidapi"},
+            {"product_string": "USB Receiver", "product_id": 0xC548,
+             "usage_page": 0xFF00, "usage": 2, "source": "hidapi"},
+        ]
+
+        with patch.object(listener, "_vendor_hid_infos", return_value=infos):
+            # _try_connect sorts infos in place before iterating
+            with (
+                patch.object(listener, "_find_feature", return_value=None),
+                patch("builtins.print"),
+            ):
+                listener._try_connect()
+
+        # After sorting, direct device should be first
+        self.assertEqual(infos[0]["product_string"], "MX Master 3S")
+
+    def test_transport_label_bluetooth_for_direct_connection(self):
+        """devIdx 0xFF should produce 'Bluetooth' transport."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB034,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 3S",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        # devIdx 0xFF (first tried) = Bluetooth
+        self.assertEqual(listener.connected_device.transport, "Bluetooth")
+
+    def test_transport_label_logi_bolt_for_receiver_slot(self):
+        """devIdx 1-6 should produce 'Logi Bolt' transport."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC548,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "USB Receiver",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+        # Simulate: 0xFF times out, slot 1 has the mouse
+        call_count = [0]
+
+        def fake_find_feature(feature_id):
+            if feature_id != hid_gesture.FEAT_REPROG_V4:
+                return None
+            call_count[0] += 1
+            # First call is devIdx=0xFF → not found, second is devIdx=1 → found
+            return 0x09 if call_count[0] >= 2 else None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        # devIdx 1 = receiver slot = Logi Bolt
+        self.assertEqual(listener.connected_device.transport, "Logi Bolt")
 
 
 class HidReconnectInvariantTests(unittest.TestCase):

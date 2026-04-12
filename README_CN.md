@@ -34,8 +34,9 @@
 - **单实例**：重复启动会将已运行窗口置前
 
 ### 🔌 智能连接
+- **蓝牙和 Logi Bolt**：同时支持蓝牙和 Logi Bolt USB 接收器；连接方式显示在 UI 中
 - **自动重连**：检测鼠标断电/重连，无需重启即可恢复完整功能
-- **实时连接状态**：UI 中显示“Connected / Not Connected”
+- **实时连接状态**：UI 中显示”Connected / Not Connected”
 - **设备感知 UI**：MX Master 提供可点击热区的交互示意图；其他型号使用通用回退卡片
 
 ### 🌐 多语言 UI
@@ -396,7 +397,7 @@ mouser/
 │   ├── accessibility.py     # macOS Accessibility trust checks
 │   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
 │   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
-│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth)
+│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
 │   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
 │   ├── device_layouts.py    # Device-family layout registry for QML overlays
 │   ├── key_simulator.py     # Platform-specific action simulator
@@ -452,7 +453,7 @@ mouser/
 
 - **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
-- **Bluetooth recommended** — HID++ gesture button divert works best over Bluetooth; USB receiver has partial support
+- **Bluetooth and Logi Bolt supported** — HID++ gesture button divert works over both Bluetooth and Logi Bolt USB receivers
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
 - **Admin not required** — but some games or elevated windows may not receive injected keystrokes

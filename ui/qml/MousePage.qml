@@ -884,7 +884,10 @@ Item {
                                     }
                                     Text {
                                         text: backend.mouseConnected
-                                              ? s["mouse.connected"] : s["mouse.not_connected"]
+                                              ? (s["mouse.connected"]
+                                                 + (backend.connectionType !== ""
+                                                    ? " · " + backend.connectionType : ""))
+                                              : s["mouse.not_connected"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         color: backend.mouseConnected
                                                ? theme.accent : "#e05555"
