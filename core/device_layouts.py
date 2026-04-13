@@ -163,16 +163,6 @@ MX_ANYWHERE_2S_LAYOUT = {
     "note": "",
     "hotspots": [
         {
-            "buttonKey": "middle",
-            "label": "Middle button",
-            "summaryType": "mapping",
-            "normX": 0.33,
-            "normY": 0.46,
-            "labelSide": "left",
-            "labelOffX": -200,
-            "labelOffY": 90,
-        },
-        {
             "buttonKey": "gesture_up",
             "label": "Back button",
             "summaryType": "mapping",
