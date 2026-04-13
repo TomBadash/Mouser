@@ -43,6 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
+        self.assertFalse(migrated["settings"]["hi_res_scroll"])
         self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertNotIn("start_with_windows", migrated["settings"])
         self.assertEqual(
@@ -138,6 +139,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["version"], 8)
         self.assertTrue(migrated["settings"]["start_at_login"])
+        self.assertFalse(migrated["settings"]["hi_res_scroll"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",

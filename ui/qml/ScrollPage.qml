@@ -555,6 +555,84 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            Item { width: 1; height: 16; visible: backend.hiResScrollSupported }
+
+            Rectangle {
+                visible: backend.hiResScrollSupported
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: hiResScrollContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: hiResScrollContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: "High Sensitivity Scroll"
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: "Enable high-resolution scrolling for finer, smoother wheel movement."
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: "High Sensitivity Scroll"
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: scrollPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: hiResScrollSwitch
+                                checked: backend.hiResScroll
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: "High Sensitivity Scroll"
+                                onToggled: backend.setHiResScroll(checked)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── Language ──────────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
@@ -934,6 +1012,8 @@ Item {
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            if (backend.hiResScrollSupported)
+                hiResScrollSwitch.checked = backend.hiResScroll
         }
     }
 }

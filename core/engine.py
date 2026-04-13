@@ -478,6 +478,7 @@ class Engine:
 
         saved_ss_state = self._saved_smart_shift_state()
         saved_ss = saved_ss_state["mode"]
+        saved_hrs = saved_hrs = self.cfg.get("settings", {}).get("hi_res_scroll")
         ss_enabled = saved_ss_state["enabled"]
         ss_threshold = saved_ss_state["threshold"]
 
@@ -512,6 +513,13 @@ class Engine:
             else:
                 replay_ok = False
                 retry_dpi = True
+        
+        if saved_hrs is not None:
+            if not hasattr(hg, "set_hi_res_scroll"):
+                replay_ok = False
+            else:
+                hg.set_hi_res_scroll(saved_hrs)
+
 
         if saved_ss and getattr(hg, "smart_shift_supported", False):
             if not hasattr(hg, "set_smart_shift"):
@@ -707,6 +715,22 @@ class Engine:
             return hg.set_dpi(dpi)
         print("[Engine] No HID++ connection — DPI not applied")
         return False
+
+    def set_hi_res_scroll(self, enabled):
+        """Send Hi-Res Scroll state change to the mouse via HID++."""
+        enabled = bool(enabled)
+        self.cfg.setdefault("settings", {})["hi_res_scroll"] = enabled
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.set_hi_res_scroll(enabled)
+        print("[Engine] No HID++ connection — Hi-Res Scroll not applied")
+        return False
+
+    @property
+    def hi_res_scroll_supported(self):
+        hg = self.hook._hid_gesture
+        return hg.hi_res_scroll_supported if hg else False
 
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
         """Send Smart Shift settings to device.

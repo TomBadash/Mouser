@@ -96,6 +96,7 @@ DEFAULT_CONFIG = {
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
         "smart_shift_mode": "ratchet",
+        "hi_res_scroll": False,
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
         "gesture_threshold": 50,
@@ -301,6 +302,8 @@ def _migrate(cfg):
         cfg["version"] = 6
 
     if version < 7:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("hi_res_scroll", False)
         # v6 defaulted mode_shift to "none"; remap to "toggle_smart_shift" so the
         # physical SmartShift button behind the scroll wheel works out of the box.
         # Users who explicitly want no action can set it back to "none" in the UI.
