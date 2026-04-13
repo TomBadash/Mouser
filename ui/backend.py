@@ -879,16 +879,17 @@ class Backend(QObject):
     def _handleSmartShiftRead(self):
         """Runs on Qt main thread — updates config and notifies QML."""
         state = self._pending_smart_shift_state
-        if isinstance(state, dict):
-            settings = self._cfg.setdefault("settings", {})
-            settings["smart_shift_mode"] = state.get("mode", "ratchet")
-            settings["smart_shift_enabled"] = state.get("enabled", False)
-            # Only accept the device-reported threshold when SmartShift is
-            # enabled (device returns the real value 1-50).  When disabled the
-            # device returns 0xFF which the read code maps to a hardcoded 25,
-            # overwriting whatever the user chose in the UI.
-            if state.get("enabled", False):
-                settings["smart_shift_threshold"] = state.get("threshold", 25)
+        if not isinstance(state, dict):
+            return
+        settings = self._cfg.setdefault("settings", {})
+        settings["smart_shift_mode"] = state.get("mode", "ratchet")
+        settings["smart_shift_enabled"] = state.get("enabled", False)
+        # Only accept the device-reported threshold when SmartShift is
+        # enabled (device returns the real value 1-50).  When disabled the
+        # device returns 0xFF which the read code maps to a hardcoded 25,
+        # overwriting whatever the user chose in the UI.
+        if state.get("enabled", False):
+            settings["smart_shift_threshold"] = state.get("threshold", 25)
         self.smartShiftChanged.emit()
 
     def _onEngineStatusMessage(self, message):

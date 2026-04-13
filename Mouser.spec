@@ -257,8 +257,8 @@ if sys.platform == 'darwin':
         icon='images/AppIcon.icns',
         bundle_identifier='com.mouser.app',
         info_plist={
-            'CFBundleShortVersionString': '3.5.0',
-            'CFBundleVersion': '3.5.0',
+            'CFBundleShortVersionString': '3.5.2',
+            'CFBundleVersion': '3.5.2',
             'LSUIElement': True, # Runs in background (menu bar app)
             'NSHighResolutionCapable': True,
         },

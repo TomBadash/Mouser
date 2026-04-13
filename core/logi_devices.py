@@ -264,6 +264,8 @@ def build_connected_device_info(
             dpi_max=spec.dpi_max,
         )
 
+    # Fallback for unrecognized devices (e.g., USB Receiver PID 0xC52B which contains
+    # multiple devices). Default to MX Master 3S layout, the most compatible option.
     display_name = product_name or (
         f"Logitech PID 0x{pid:04X}" if pid is not None else "Logitech mouse"
     )
@@ -275,9 +277,9 @@ def build_connected_device_info(
         product_name=product_name or display_name,
         transport=transport,
         source=source,
-        ui_layout="generic_mouse",
-        image_asset="icons/mouse-simple.svg",
-        supported_buttons=GENERIC_BUTTONS,
+        ui_layout="mx_master_3s",
+        image_asset="mouse.png",
+        supported_buttons=MX_MASTER_BUTTONS,
         gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
     )
 

@@ -204,6 +204,25 @@ class BackendDeviceLayoutTests(unittest.TestCase):
             ["Failed to replay HID++ settings after reconnect"],
         )
 
+    def test_non_dict_smart_shift_payload_does_not_emit_change_signal(self):
+        backend = self._make_backend()
+        notifications = []
+        backend.smartShiftChanged.connect(lambda: notifications.append(True))
+
+        backend._pending_smart_shift_state = "freespin"
+        backend._handleSmartShiftRead()
+
+        self.assertEqual(notifications, [])
+
+    def test_non_dict_smart_shift_payload_does_not_mutate_config(self):
+        backend = self._make_backend()
+        original = copy.deepcopy(backend._cfg["settings"])
+
+        backend._pending_smart_shift_state = "freespin"
+        backend._handleSmartShiftRead()
+
+        self.assertEqual(backend._cfg["settings"], original)
+
     def test_linux_reports_gesture_direction_support(self):
         backend = self._make_backend()
 

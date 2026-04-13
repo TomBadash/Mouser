@@ -23,9 +23,56 @@ class _FakeEvdevDevice:
         return self._capabilities
 
 
+class _CapturingListener:
+    def __init__(self, on_down=None, on_up=None, on_move=None,
+                 on_connect=None, on_disconnect=None, extra_diverts=None):
+        self.on_down = on_down
+        self.on_up = on_up
+        self.on_move = on_move
+        self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
+        self.extra_diverts = extra_diverts or {}
+        self.connected_device = None
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeLinuxEcodes:
+    EV_REL = 0x02
+    EV_KEY = 0x01
+    REL_X = 0x00
+    REL_Y = 0x01
+    BTN_LEFT = 0x110
+    BTN_RIGHT = 0x111
+    BTN_MIDDLE = 0x112
+    BTN_SIDE = 0x113
+    BTN_EXTRA = 0x114
+
+
+class _FakeLinuxUInput:
+    @staticmethod
+    def from_device(*_args, **_kwargs):
+        return Mock()
+
+
 class LinuxMouseHookReconnectTests(unittest.TestCase):
     def _reload_for_linux(self):
-        with patch.object(sys, "platform", "linux"):
+        fake_evdev = SimpleNamespace(
+            ecodes=_FakeLinuxEcodes,
+            UInput=_FakeLinuxUInput,
+            InputDevice=Mock(name="InputDevice"),
+        )
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"evdev": fake_evdev}),
+        ):
             importlib.reload(mouse_hook)
         self.addCleanup(importlib.reload, mouse_hook)
         return mouse_hook
@@ -245,6 +292,63 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertEqual(len(setup_calls), 2)
         self.assertEqual(seen_rescan_state, [False])
         self.assertEqual(len(cleanup_calls), 1)
+
+    def test_gesture_click_callback_fires_again_after_reconnect(self):
+        module = self._reload_for_linux()
+        seen = []
+
+        with (
+            patch.object(module, "HidGestureListener", _CapturingListener),
+            patch.object(module, "_EVDEV_OK", False),
+        ):
+            hook = module.MouseHook()
+            hook.register(module.MouseEvent.GESTURE_CLICK, lambda event: seen.append(event.event_type))
+            hook.start()
+            listener = hook._hid_gesture
+
+            listener.on_down()
+            listener.on_up()
+            hook._on_hid_disconnect()
+            hook._on_hid_connect()
+            listener.on_down()
+            listener.on_up()
+
+        self.assertEqual(
+            seen,
+            [module.MouseEvent.GESTURE_CLICK, module.MouseEvent.GESTURE_CLICK],
+        )
+
+    def test_mode_shift_callbacks_fire_again_after_reconnect(self):
+        module = self._reload_for_linux()
+        seen = []
+
+        with (
+            patch.object(module, "HidGestureListener", _CapturingListener),
+            patch.object(module, "_EVDEV_OK", False),
+        ):
+            hook = module.MouseHook()
+            hook.divert_mode_shift = True
+            hook.register(module.MouseEvent.MODE_SHIFT_DOWN, lambda event: seen.append(event.event_type))
+            hook.register(module.MouseEvent.MODE_SHIFT_UP, lambda event: seen.append(event.event_type))
+            hook.start()
+            listener = hook._hid_gesture
+
+            listener.extra_diverts[0x00C4]["on_down"]()
+            listener.extra_diverts[0x00C4]["on_up"]()
+            hook._on_hid_disconnect()
+            hook._on_hid_connect()
+            listener.extra_diverts[0x00C4]["on_down"]()
+            listener.extra_diverts[0x00C4]["on_up"]()
+
+        self.assertEqual(
+            seen,
+            [
+                module.MouseEvent.MODE_SHIFT_DOWN,
+                module.MouseEvent.MODE_SHIFT_UP,
+                module.MouseEvent.MODE_SHIFT_DOWN,
+                module.MouseEvent.MODE_SHIFT_UP,
+            ],
+        )
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")

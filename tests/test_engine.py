@@ -296,8 +296,38 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         self.assertEqual(len(replay_threads), 1)
         replay_threads[0].run_target()
         engine.hook._hid_gesture.set_dpi.assert_called_once_with(expected_dpi)
-        engine.hook._hid_gesture.set_smart_shift.assert_called_once_with(
+        self.assertEqual(engine.hook._hid_gesture.set_smart_shift.call_count, 2)
+        engine.hook._hid_gesture.set_smart_shift.assert_called_with(
             expected_ss_mode, expected_ss_enabled, expected_ss_threshold
+        )
+
+    def test_live_reconnect_replay_restores_saved_values_through_worker(self):
+        engine = self._make_engine()
+        engine.hook._hid_gesture = self._make_hid(connected_device=None)
+        threads = []
+        seen_dpi = []
+        seen_smart_shift = []
+        engine.set_dpi_read_callback(seen_dpi.append)
+        engine.set_smart_shift_read_callback(seen_smart_shift.append)
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._on_connection_change(True)
+            engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Master 3S")
+            engine._on_connection_change(True)
+
+        replay_threads = self._non_battery_threads(threads)
+        self.assertEqual(len(replay_threads), 1)
+        replay_threads[0].run_target()
+
+        self.assertEqual(seen_dpi, [engine.cfg["settings"]["dpi"]])
+        self.assertGreaterEqual(len(seen_smart_shift), 2)
+        self.assertEqual(
+            seen_smart_shift[-1],
+            {
+                "mode": engine.cfg["settings"]["smart_shift_mode"],
+                "enabled": engine.cfg["settings"]["smart_shift_enabled"],
+                "threshold": engine.cfg["settings"]["smart_shift_threshold"],
+            },
         )
 
     def test_evdev_only_connected_true_does_not_request_replay_worker(self):
@@ -332,6 +362,44 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         self.assertEqual(len(first_replay_threads), 1)
         self.assertEqual(self._non_battery_threads(threads), first_replay_threads)
 
+    def test_hid_disconnect_while_evdev_connected_allows_next_hid_replay(self):
+        engine = self._make_engine()
+        engine.hook.connected_device = SimpleNamespace(name="MX Master 3S", source="evdev")
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=SimpleNamespace(name="MX Master 3S")
+        )
+        threads = []
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._on_connection_change(True)
+            self.assertEqual(len(self._non_battery_threads(threads)), 1)
+            self._non_battery_threads(threads)[0].run_target()
+
+            engine.hook._hid_gesture.connected_device = None
+            engine._on_connection_change(True)
+            self.assertEqual(len(self._non_battery_threads(threads)), 1)
+
+            engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Master 3S")
+            engine._on_connection_change(True)
+
+        self.assertEqual(len(self._non_battery_threads(threads)), 2)
+
+    def test_hid_disconnect_updates_last_hid_ready_without_connection_edge(self):
+        engine = self._make_engine()
+        engine.hook.connected_device = SimpleNamespace(name="MX Master 3S", source="evdev")
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=SimpleNamespace(name="MX Master 3S")
+        )
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory([])):
+            engine._on_connection_change(True)
+        self.assertTrue(engine._last_hid_features_ready)
+
+        engine.hook._hid_gesture.connected_device = None
+        engine._on_connection_change(True)
+
+        self.assertFalse(engine._last_hid_features_ready)
+
     def test_startup_fallback_does_not_queue_replay_after_hid_ready_replay_requested(self):
         engine = self._make_engine()
         engine.hook._hid_gesture = self._make_hid(connected_device=None)
@@ -359,7 +427,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         replay_threads[0].run_target()
 
         self.assertEqual(engine.hook._hid_gesture.set_dpi.call_count, 1)
-        self.assertEqual(engine.hook._hid_gesture.set_smart_shift.call_count, 1)
+        self.assertEqual(engine.hook._hid_gesture.set_smart_shift.call_count, 2)
 
         startup_threads[0].run_target()
 
@@ -368,7 +436,8 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         expected_ss_enabled = engine.cfg["settings"]["smart_shift_enabled"]
         expected_ss_threshold = engine.cfg["settings"]["smart_shift_threshold"]
         engine.hook._hid_gesture.set_dpi.assert_called_once_with(expected_dpi)
-        engine.hook._hid_gesture.set_smart_shift.assert_called_once_with(
+        self.assertEqual(engine.hook._hid_gesture.set_smart_shift.call_count, 2)
+        engine.hook._hid_gesture.set_smart_shift.assert_called_with(
             expected_ss_mode, expected_ss_enabled, expected_ss_threshold
         )
 
@@ -400,6 +469,24 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             ),
             status_messages,
         )
+
+    def test_battery_poll_skips_smart_shift_reads_while_replay_is_inflight(self):
+        engine = self._make_engine()
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.return_value = True
+        engine._replay_inflight = True
+        engine.hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(name="MX Master 3S"),
+            smart_shift_supported=True,
+            read_battery=Mock(return_value=None),
+            read_smart_shift=Mock(return_value={"mode": "ratchet", "enabled": False, "threshold": 25}),
+        )
+
+        engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.read_battery.assert_called_once_with()
+        engine.hook._hid_gesture.read_smart_shift.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.display_name, "Mystery Logitech Mouse")
         self.assertEqual(info.key, "mystery_logitech_mouse")
         self.assertEqual(info.gesture_cids, (0x00F1,))
-        self.assertEqual(info.ui_layout, "generic_mouse")
+        self.assertEqual(info.ui_layout, "mx_master_3s")
 
     def test_clamp_dpi_uses_known_device_bounds(self):
         info = build_connected_device_info(product_id=0xB019)

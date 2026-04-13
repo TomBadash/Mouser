@@ -456,7 +456,15 @@ class Engine:
         summary = ", ".join(f"{key}={mappings.get(key, 'none')}" for key in interesting)
         self._emit_debug(f"{prefix}: {summary}")
 
-    def _replay_saved_settings_once(self):
+    def _saved_smart_shift_state(self):
+        settings = self.cfg.get("settings", {})
+        return {
+            "mode": settings.get("smart_shift_mode", "ratchet"),
+            "enabled": settings.get("smart_shift_enabled", False),
+            "threshold": settings.get("smart_shift_threshold", 25),
+        }
+
+    def _run_saved_settings_replay(self):
         hg = self.hook._hid_gesture
         if hg is None:
             return False
@@ -464,7 +472,34 @@ class Engine:
             return False
 
         replay_ok = True
+        retry_dpi = False
+        retry_smart_shift = False
         saved_dpi = self.cfg.get("settings", {}).get("dpi")
+
+        saved_ss_state = self._saved_smart_shift_state()
+        saved_ss = saved_ss_state["mode"]
+        ss_enabled = saved_ss_state["enabled"]
+        ss_threshold = saved_ss_state["threshold"]
+
+        # Phase A: apply Smart Shift immediately so the physical wheel mode
+        # converges before the settled replay.
+        if saved_ss and getattr(hg, "smart_shift_supported", False):
+            if not hasattr(hg, "set_smart_shift"):
+                replay_ok = False
+            else:
+                if not hg.set_smart_shift(saved_ss, ss_enabled, ss_threshold):
+                    replay_ok = False
+                if self._smart_shift_read_cb:
+                    try:
+                        self._smart_shift_read_cb(saved_ss_state)
+                    except Exception:
+                        pass
+
+        time.sleep(3)
+        hg = self.hook._hid_gesture
+        if hg is None or getattr(hg, "connected_device", None) is None:
+            return False
+
         if saved_dpi is not None:
             if not hasattr(hg, "set_dpi"):
                 replay_ok = False
@@ -476,37 +511,63 @@ class Engine:
                         pass
             else:
                 replay_ok = False
+                retry_dpi = True
 
-        saved_ss = self.cfg.get("settings", {}).get("smart_shift_mode")
         if saved_ss and getattr(hg, "smart_shift_supported", False):
-            ss_enabled = self.cfg.get("settings", {}).get("smart_shift_enabled", False)
-            ss_threshold = self.cfg.get("settings", {}).get("smart_shift_threshold", 25)
             if not hasattr(hg, "set_smart_shift"):
                 replay_ok = False
             elif hg.set_smart_shift(saved_ss, ss_enabled, ss_threshold):
                 if self._smart_shift_read_cb:
                     try:
-                        self._smart_shift_read_cb(saved_ss)
+                        self._smart_shift_read_cb(saved_ss_state)
                     except Exception:
                         pass
             else:
                 replay_ok = False
+                retry_smart_shift = True
+
+        if retry_dpi or retry_smart_shift:
+            time.sleep(5)
+            hg = self.hook._hid_gesture
+            if hg is None or getattr(hg, "connected_device", None) is None:
+                return False
+            if retry_dpi:
+                if not hasattr(hg, "set_dpi") or not hg.set_dpi(saved_dpi):
+                    replay_ok = False
+                elif self._dpi_read_cb:
+                    try:
+                        self._dpi_read_cb(saved_dpi)
+                    except Exception:
+                        pass
+            if retry_smart_shift and getattr(hg, "smart_shift_supported", False):
+                if not hasattr(hg, "set_smart_shift") or not hg.set_smart_shift(
+                    saved_ss, ss_enabled, ss_threshold
+                ):
+                    replay_ok = False
+                elif self._smart_shift_read_cb:
+                    try:
+                        self._smart_shift_read_cb(saved_ss_state)
+                    except Exception:
+                        pass
+
         return replay_ok
 
     def _replay_saved_settings_worker(self):
         while True:
             with self._replay_lock:
                 self._replay_pending_rerun = False
-            replay_ok = self._replay_saved_settings_once()
+            replay_ok = self._run_saved_settings_replay()
+            should_emit_failure = False
             with self._replay_lock:
                 if self._replay_pending_rerun:
                     continue
                 self._replay_inflight = False
-                if not replay_ok:
-                    self._emit_status(
-                        "Mouse reconnected, but saved device settings could not be restored yet."
-                    )
-                return
+                should_emit_failure = not replay_ok
+            if should_emit_failure:
+                self._emit_status(
+                    "Mouse reconnected, but saved device settings could not be restored yet."
+                )
+            return
 
     def _request_saved_settings_replay(self, *, startup_fallback=False):
         with self._replay_lock:
@@ -576,7 +637,11 @@ class Engine:
                         except Exception:
                             pass
 
-                if now - _last_ss >= _ss_poll_interval and hg.smart_shift_supported:
+                if (
+                    not self._replay_inflight
+                    and now - _last_ss >= _ss_poll_interval
+                    and hg.smart_shift_supported
+                ):
                     _last_ss = now
                     ss_mode = hg.read_smart_shift()
                     if stop_event.is_set():
@@ -682,84 +747,6 @@ class Engine:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
-    def _apply_device_settings(self, source="startup"):
-        """Push persisted DPI and SmartShift settings to the device.
-
-        Called at startup and on every reconnect (e.g. after waking from sleep).
-
-        SmartShift is written immediately (before any delay) so the scroll wheel
-        is in the correct mode as soon as possible — avoiding the window where the
-        device is in its firmware-default SmartShift state (typically enabled with a
-        low threshold).  The UI is also updated immediately with the saved state.
-
-        DPI and a second SmartShift write are sent after a 3 s settling delay.
-        The second write is important for enhanced SmartShift (0x2111) devices:
-        immediately after wake the feature probe can transiently fall back to basic
-        (0x2110) whose function IDs differ, so the first write may fail.  If both
-        writes fail, a final retry happens after another 5 s.
-        """
-        hg = self.hook._hid_gesture
-        if not hg:
-            return
-
-        s = self.cfg.get("settings", {})
-        ss_mode = s.get("smart_shift_mode", "ratchet")
-        ss_enabled = s.get("smart_shift_enabled", False)
-        ss_threshold = s.get("smart_shift_threshold", 25)
-
-        # ── immediate SmartShift write ────────────────────────────────────────
-        # Runs before the settling delay so the physical scroll wheel snaps to
-        # the saved mode within ~1 s of connect/wake (beats the first battery-
-        # poll SmartShift read at T+1 s).  May fail on enhanced-feature devices
-        # right after wake; the settled write below handles that case.
-        if hg.smart_shift_supported:
-            hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
-            if self._smart_shift_read_cb:
-                try:
-                    self._smart_shift_read_cb({
-                        "mode": ss_mode,
-                        "enabled": ss_enabled,
-                        "threshold": ss_threshold,
-                    })
-                except Exception:
-                    pass
-
-        time.sleep(3)  # let HID++ settle before sending DPI and settled SS write
-        hg = self.hook._hid_gesture
-        if not hg:
-            return
-
-        saved_dpi = self.cfg.get("settings", {}).get("dpi")
-        if saved_dpi:
-            hg.set_dpi(saved_dpi)
-            if self._dpi_read_cb:
-                try:
-                    self._dpi_read_cb(saved_dpi)
-                except Exception:
-                    pass
-
-        if hg.smart_shift_supported:
-            ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
-            if not ok:
-                print(f"[Engine] SmartShift apply failed ({source}) — retrying in 5s")
-                time.sleep(5)
-                hg = self.hook._hid_gesture
-                if hg and hg.smart_shift_supported:
-                    ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
-                    print(f"[Engine] SmartShift retry ({source}) -> {'OK' if ok else 'FAILED'}")
-            # Re-push saved state to UI after the settled write in case the
-            # battery-poll loop updated it with stale device state between the
-            # immediate write and now.
-            if self._smart_shift_read_cb:
-                try:
-                    self._smart_shift_read_cb({
-                        "mode": ss_mode,
-                        "enabled": ss_enabled,
-                        "threshold": ss_threshold,
-                    })
-                except Exception:
-                    pass
-
     def start(self):
         self.hook.start()
         self._app_detector.start()
@@ -777,7 +764,7 @@ class Engine:
         self._dpi_read_cb = cb
 
     def set_smart_shift_read_callback(self, cb):
-        """Register a callback ``cb(mode)`` invoked when Smart Shift is read."""
+        """Register a callback ``cb(state)`` invoked when Smart Shift is read."""
         self._smart_shift_read_cb = cb
 
     def stop(self):
