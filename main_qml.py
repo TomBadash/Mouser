@@ -52,6 +52,7 @@ from core.config import load_config, save_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
+from core.version import APP_BUILD_MODE, APP_COMMIT_DISPLAY, APP_VERSION
 from ui.backend import Backend
 from ui.locale_manager import LocaleManager
 _t4 = _time.perf_counter()
@@ -363,6 +364,12 @@ def _check_accessibility(locale_mgr: "LocaleManager") -> bool:
         return True
 
 
+def _runtime_launch_path() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable)
+    return os.path.abspath(__file__)
+
+
 def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
@@ -379,11 +386,16 @@ def main():
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(argv)
     app.setApplicationName("Mouser")
+    app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Mouser")
     app.setWindowIcon(_app_icon())
     app.setQuitOnLastWindowClosed(False)
     _configure_macos_app_mode()
     ui_state = UiState(app)
+
+    print(f"[Mouser] Version: {APP_VERSION} ({APP_BUILD_MODE})")
+    print(f"[Mouser] Commit: {APP_COMMIT_DISPLAY}")
+    print(f"[Mouser] Launch path: {_runtime_launch_path()}")
 
     # ── Locale Manager ─────────────────────────────────────────
     initial_lang = cfg_settings.get("language", "en")
@@ -428,6 +440,11 @@ def main():
     qml_engine.rootContext().setContextProperty("uiState", ui_state)
     qml_engine.rootContext().setContextProperty("lm", locale_mgr)
     qml_engine.rootContext().setContextProperty("launchHidden", launch_hidden)
+    qml_engine.rootContext().setContextProperty("appVersion", APP_VERSION)
+    qml_engine.rootContext().setContextProperty("appBuildMode", APP_BUILD_MODE)
+    qml_engine.rootContext().setContextProperty("appCommit", APP_COMMIT_DISPLAY)
+    qml_engine.rootContext().setContextProperty(
+        "appLaunchPath", _runtime_launch_path().replace("\\", "/"))
     qml_engine.rootContext().setContextProperty(
         "applicationDirPath", ROOT.replace("\\", "/"))
 

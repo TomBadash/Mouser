@@ -15,11 +15,37 @@ body:
       label: Mouser version
       description: >
         Which version of Mouser are you using? Check the release you downloaded
-        from the [releases page](https://github.com/TomBadash/MouseControl/releases),
-        or look at the zip/dmg filename (e.g. "v3.5.0").
-      placeholder: "e.g. v3.5.0"
+        from the [releases page](https://github.com/TomBadash/Mouser/releases),
+        the version shown inside the app, or the exact asset filename you ran.
+        If you are running from source or a self-built package, say that here too.
+      placeholder: "e.g. v3.5.3, source checkout, or self-built from main"
     validations:
       required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How are you running Mouser?
+      options:
+        - Official GitHub release asset
+        - Run from source (`python main_qml.py`)
+        - Self-built app / executable
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: build-details
+    attributes:
+      label: Build / asset details
+      description: >
+        Include the exact zip/dmg/exe filename, architecture, and commit / branch
+        if you built it yourself. This is critical when a source checkout works
+        but a packaged build does not.
+      placeholder: >
+        e.g. Mouser-macOS-intel.zip, Windows zip from v3.5.3, or main @ abc1234
+    validations:
+      required: false
 
   - type: dropdown
     id: os
@@ -123,8 +149,12 @@ body:
       label: Log file contents
       description: >
         Logs help a lot when diagnosing issues. Paste the relevant portion of
-        your log file (the last ~100 lines around the time of the bug are
-        usually enough).
+        your log file, including the startup lines if possible. The startup
+        lines identify the Mouser version, commit, and whether it was launched
+        from a packaged app or a source checkout.
+
+
+        The last ~100 lines around the time of the bug are usually enough.
 
 
         **Log file locations:**

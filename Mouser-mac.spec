@@ -10,10 +10,13 @@ environment supports it:
 """
 
 import os
+import json
+import subprocess
 
 ROOT = os.path.abspath(".")
 COMMITTED_ICON = os.path.join(ROOT, "images", "AppIcon.icns")
 GENERATED_ICON = os.path.join(ROOT, "build", "macos", "Mouser.icns")
+BUILD_INFO_PATH = os.path.join(ROOT, "build", "mouser_build_info.json")
 TARGET_ARCH = os.environ.get("PYINSTALLER_TARGET_ARCH", "").strip() or None
 if TARGET_ARCH not in (None, "arm64", "x86_64", "universal2"):
     raise SystemExit(
@@ -27,6 +30,68 @@ else:
     ICON_PATH = None
 BUNDLE_ID = "io.github.tombadash.mouser"
 
+
+def _load_app_version() -> str:
+    namespace = {}
+    version_path = os.path.join(ROOT, "core", "version.py")
+    with open(version_path, encoding="utf-8") as version_file:
+        exec(version_file.read(), namespace)
+    return namespace["APP_VERSION"]
+
+
+def _run_git(args):
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _git_dirty():
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _write_build_info(version: str) -> str:
+    commit = os.environ.get("MOUSER_GIT_COMMIT", "").strip() or _run_git(["rev-parse", "HEAD"])
+    dirty_env = os.environ.get("MOUSER_GIT_DIRTY")
+    if dirty_env:
+        dirty = dirty_env.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        dirty = _git_dirty()
+
+    os.makedirs(os.path.dirname(BUILD_INFO_PATH), exist_ok=True)
+    with open(BUILD_INFO_PATH, "w", encoding="utf-8") as build_info_file:
+        json.dump(
+            {
+                "version": version,
+                "commit": commit,
+                "dirty": dirty,
+            },
+            build_info_file,
+        )
+    return BUILD_INFO_PATH
+
+
+APP_VERSION = _load_app_version()
+BUILD_INFO_DATA = _write_build_info(APP_VERSION)
+
 a = Analysis(
     ["main_qml.py"],
     pathex=[ROOT],
@@ -34,6 +99,7 @@ a = Analysis(
     datas=[
         (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
         (os.path.join(ROOT, "images"), "images"),
+        (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[
         "hid",
@@ -242,8 +308,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleDisplayName": "Mouser",
         "CFBundleName": "Mouser",
-        "CFBundleShortVersionString": "3.5.3",
-        "CFBundleVersion": "3.5.3",
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
         "LSMinimumSystemVersion": "12.0",
         "LSUIElement": True,
         "NSHighResolutionCapable": True,

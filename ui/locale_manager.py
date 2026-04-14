@@ -11,6 +11,7 @@ _TRANSLATIONS = {
         # Navigation sidebar
         "nav.mouse_profiles": "Mouse & Profiles",
         "nav.point_scroll": "Point & Scroll",
+        "nav.about": "About",
 
         # Mouse page — profile list
         "mouse.profiles": "Profiles",
@@ -167,6 +168,15 @@ _TRANSLATIONS = {
         ),
         "accessibility.info": "System Settings -> Privacy & Security -> Accessibility",
 
+        # About dialog
+        "about.title": "About Mouser",
+        "about.subtitle": "Runtime and build details for support and debugging.",
+        "about.version": "Version",
+        "about.build_mode": "Build mode",
+        "about.commit": "Commit",
+        "about.launch_path": "Launch path",
+        "about.close": "Close",
+
         # Language names
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
@@ -177,6 +187,7 @@ _TRANSLATIONS = {
     "zh_CN": {
         "nav.mouse_profiles": "\u9f20\u6807\u4e0e\u914d\u7f6e\u6587\u4ef6",
         "nav.point_scroll": "\u6307\u9488\u4e0e\u6eda\u8f6e",
+        "nav.about": "\u5173\u4e8e",
 
         "mouse.profiles": "\u914d\u7f6e\u6587\u4ef6",
         "mouse.all_applications": "\u6240\u6709\u5e94\u7528\u7a0b\u5e8f",
@@ -319,6 +330,14 @@ _TRANSLATIONS = {
         ),
         "accessibility.info": "\u7cfb\u7edf\u8bbe\u7f6e -> \u9690\u79c1\u4e0e\u5b89\u5168\u6027 -> \u8f85\u52a9\u529f\u80fd",
 
+        "about.title": "\u5173\u4e8e Mouser",
+        "about.subtitle": "\u7528\u4e8e\u652f\u6301\u548c\u8c03\u8bd5\u7684\u8fd0\u884c\u65f6\u4e0e\u6784\u5efa\u4fe1\u606f\u3002",
+        "about.version": "\u7248\u672c",
+        "about.build_mode": "\u6784\u5efa\u6a21\u5f0f",
+        "about.commit": "\u63d0\u4ea4",
+        "about.launch_path": "\u542f\u52a8\u8def\u5f84",
+        "about.close": "\u5173\u95ed",
+
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
         "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
@@ -328,6 +347,7 @@ _TRANSLATIONS = {
     "zh_TW": {
         "nav.mouse_profiles": "\u6ed1\u9f20\u8207\u8a2d\u5b9a\u6a94",
         "nav.point_scroll": "\u6307\u6a19\u8207\u6372\u8ef8",
+        "nav.about": "\u95dc\u65bc",
 
         "mouse.profiles": "\u8a2d\u5b9a\u6a94",
         "mouse.all_applications": "\u6240\u6709\u61c9\u7528\u7a0b\u5f0f",
@@ -469,6 +489,14 @@ _TRANSLATIONS = {
             "\u8acb\u6388\u4e88\u6b0a\u9650\uff0c\u7136\u5f8c\u91cd\u65b0\u555f\u52d5 Mouser\u3002"
         ),
         "accessibility.info": "\u7cfb\u7d71\u8a2d\u5b9a -> \u96b1\u79c1\u6b0a\u8207\u5b89\u5168\u6027 -> \u8f14\u52a9\u4f7f\u7528",
+
+        "about.title": "\u95dc\u65bc Mouser",
+        "about.subtitle": "\u63d0\u4f9b\u652f\u63f4\u8207\u9664\u932f\u7528\u7684\u57f7\u884c\u6642\u8207\u5efa\u7f6e\u8cc7\u8a0a\u3002",
+        "about.version": "\u7248\u672c",
+        "about.build_mode": "\u5efa\u7f6e\u6a21\u5f0f",
+        "about.commit": "\u63d0\u4ea4",
+        "about.launch_path": "\u555f\u52d5\u8def\u5f91",
+        "about.close": "\u95dc\u9589",
 
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",

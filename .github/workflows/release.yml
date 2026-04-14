@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  MOUSER_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+  MOUSER_GIT_COMMIT: ${{ github.sha }}
+  MOUSER_GIT_DIRTY: "false"
+
 jobs:
   build-windows:
     runs-on: windows-latest
