@@ -426,7 +426,7 @@ def main():
 
     _t7 = _time.perf_counter()
     # ── QML Backend ────────────────────────────────────────────
-    backend = Backend(engine)
+    backend = Backend(engine, root_dir=ROOT)
     ui_state.appearanceMode = backend.appearanceMode
     backend.settingsChanged.connect(
         lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
@@ -445,8 +445,6 @@ def main():
     qml_engine.rootContext().setContextProperty("appCommit", APP_COMMIT_DISPLAY)
     qml_engine.rootContext().setContextProperty(
         "appLaunchPath", _runtime_launch_path().replace("\\", "/"))
-    qml_engine.rootContext().setContextProperty(
-        "applicationDirPath", ROOT.replace("\\", "/"))
 
     qml_path = os.path.join(ROOT, "ui", "qml", "Main.qml")
     qml_engine.load(QUrl.fromLocalFile(qml_path))
