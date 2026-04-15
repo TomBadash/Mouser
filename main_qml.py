@@ -447,6 +447,16 @@ def main():
         root_window.requestActivate()
         _activate_macos_window()
 
+    def toggle_main_window():
+        if root_window.isVisible() and root_window.isActive():
+            root_window.hide()
+        else:
+            root_window.show()
+            root_window.raise_()
+            root_window.requestActivate()
+            _activate_macos_window()
+        
+
     def _on_second_instance_activate():
         _drain_local_activate_socket(single_server.nextPendingConnection())
         show_main_window()
