@@ -51,21 +51,22 @@ def export_config(*, stdout=None) -> int:
 
 
 def _read_config_json(path: str, ft: str=None) -> dict[str, Any]:
+    ft = ft or (Path(path).suffix.lower().lstrip(".") if path != "-" else "json")
+    if ft not in ("json", "yaml"):
+        raise ValueError(f"Unsupported config file type: {ft}")
+
     if path == "-":
         raw = sys.stdin
+        if ft == "json":
+            processed = json.load(raw)
+        elif ft == "yaml":
+            processed = yaml.safe_load(raw)
     else:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = f
-
-    ft = ft or (Path(path).suffix.lower().lstrip(".") if path != "-" else "json")
-
-    # load path into json
-    if ft == "json":
-        processed = json.load(raw)
-    elif ft == "yaml":
-        processed = yaml.safe_load(raw)
-    else:
-        raise ValueError(f"Unsupported config file type: {ft}")
+        with open(path, "r", encoding="utf-8") as raw:
+            if ft == "json":
+                processed = json.load(raw)
+            elif ft == "yaml":
+                processed = yaml.safe_load(raw)
 
     return normalize_config(processed)
 
@@ -130,6 +131,7 @@ def load_config_and_start(
     filetype: str | None = None,
 ) -> int:
     cfg = _read_config_json(path, ft=filetype)
+    cfg = assemble_full_config(cfg)
     save_config(cfg)
     return start_background_service()
 
@@ -187,6 +189,28 @@ def stop_background_service() -> int:
     else:
         _launchctl_run(["launchctl", "bootout", domain, CLI_SERVICE_LABEL])
     return 0
+
+
+def assemble_full_config(config: dict[str, Any]):
+    print(json.dumps(config, indent=4))
+    try:
+        active_profile = config["active_profile"]
+        if active_profile not in config["profiles"]:
+            raise ValueError(f"Active profile '{active_profile}' not found in profiles")
+        if config["profiles"][active_profile]["apps"] != []:
+            raise ValueError("Active profile must have an empty `apps` list")
+    except KeyError:
+        raise ValueError("Config must specify an `active_profile`")
+
+    default_mappings = config["profiles"][active_profile]["mappings"]
+    for profile_name, profile in config["profiles"].items():
+        if profile_name == active_profile:
+            continue
+        for mapping in default_mappings:
+            if mapping not in profile["mappings"]:
+                profile["mappings"][mapping] = default_mappings[mapping]
+
+    return config
 
 
 def build_parser() -> argparse.ArgumentParser:
