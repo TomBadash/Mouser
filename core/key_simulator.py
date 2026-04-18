@@ -29,10 +29,37 @@ def valid_custom_key_names():
         return []
 
 
+def normalize_captured_shortcut_parts(modifier_names, key_name="", platform_name=None):
+    """Normalize captured modifier/key names into stored shortcut syntax."""
+    platform_name = platform_name or sys.platform
+
+    def _normalize(name):
+        lowered = (name or "").strip().lower()
+        if not lowered:
+            return ""
+        if platform_name == "darwin":
+            if lowered == "ctrl":
+                return "super"
+            if lowered == "super":
+                return "ctrl"
+        return lowered
+
+    parts = []
+    for name in modifier_names:
+        normalized = _normalize(name)
+        if normalized and normalized not in parts:
+            parts.append(normalized)
+
+    normalized_key = _normalize(key_name)
+    if normalized_key and normalized_key not in parts:
+        parts.append(normalized_key)
+    return "+".join(parts)
+
+
 def _pretty_custom_key_name(name):
     normalized = name.strip().lower()
     if normalized in {"super", "cmd", "command", "meta", "win", "windows"}:
-        return "Cmd" if sys.platform == "darwin" else "Win"
+        return "Super"
     if normalized in {"alt", "option", "opt"}:
         return "Opt" if sys.platform == "darwin" else "Alt"
     if normalized == "ctrl":

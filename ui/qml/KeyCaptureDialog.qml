@@ -104,7 +104,7 @@ Rectangle {
             lowered = "super"
         }
         if (lowered === "super")
-            return Qt.platform.os === "osx" ? "Cmd" : "Win"
+            return "Super"
         if (lowered === "alt")
             return Qt.platform.os === "osx" ? "Opt" : "Alt"
         if (lowered === "ctrl")
@@ -116,57 +116,9 @@ Rectangle {
         return lowered.charAt(0).toUpperCase() + lowered.slice(1)
     }
 
-    function _eventKeyName(event) {
-        if (!event) return ""
-        var key = event.key
-        if (key === Qt.Key_Shift) return "shift"
-        if (key === Qt.Key_Control) return "ctrl"
-        if (key === Qt.Key_Alt) return "alt"
-        if (key === Qt.Key_Meta) return "super"
-        if (key === Qt.Key_Escape) return "esc"
-        if (key === Qt.Key_Tab) return "tab"
-        if (key === Qt.Key_Space) return "space"
-        if (key === Qt.Key_Return || key === Qt.Key_Enter) return "enter"
-        if (key === Qt.Key_Backspace) return "backspace"
-        if (key === Qt.Key_Delete) return "delete"
-        if (key === Qt.Key_Left) return "left"
-        if (key === Qt.Key_Right) return "right"
-        if (key === Qt.Key_Up) return "up"
-        if (key === Qt.Key_Down) return "down"
-        if (key === Qt.Key_Home) return "home"
-        if (key === Qt.Key_End) return "end"
-        if (key === Qt.Key_PageUp) return "pageup"
-        if (key === Qt.Key_PageDown) return "pagedown"
-
-        for (var n = 1; n <= 12; n++) {
-            if (key === Qt["Key_F" + n])
-                return "f" + n
-        }
-
-        if (key >= Qt.Key_A && key <= Qt.Key_Z)
-            return String.fromCharCode(97 + (key - Qt.Key_A))
-        if (key >= Qt.Key_0 && key <= Qt.Key_9)
-            return String.fromCharCode(48 + (key - Qt.Key_0))
-
-        if (event.text && event.text.length === 1) {
-            var ch = event.text.toLowerCase()
-            if (ch >= "a" && ch <= "z") return ch
-            if (ch >= "0" && ch <= "9") return ch
-        }
-        return ""
-    }
-
     function _comboFromEvent(event) {
-        var parts = []
-        if (event.modifiers & Qt.ControlModifier) parts.push("ctrl")
-        if (event.modifiers & Qt.ShiftModifier) parts.push("shift")
-        if (event.modifiers & Qt.AltModifier) parts.push("alt")
-        if (event.modifiers & Qt.MetaModifier) parts.push("super")
-
-        var keyName = _canonicalKeyName(_eventKeyName(event))
-        if (keyName && parts.indexOf(keyName) < 0)
-            parts.push(keyName)
-        return parts.join("+")
+        if (!event) return ""
+        return backend.shortcutComboFromQtEvent(event.key, event.modifiers, event.text)
     }
 
     function _acceptKey(event) {
@@ -218,7 +170,7 @@ Rectangle {
                 inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
                 Material.accent: dialog.theme.accent
                 Keys.priority: Keys.BeforeItem
-                Keys.onPressed: dialog._acceptKey(event)
+                Keys.onPressed: function(event) { dialog._acceptKey(event) }
                 Keys.onEscapePressed: { dialog.cancelled(); dialog.close() }
                 Keys.onReturnPressed: {
                     if (dialog._valid) {

@@ -58,6 +58,70 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
             [module.KEY_LEFTCTRL, module.KEY_LEFTMETA, module.KEY_RIGHT],
         )
 
+
+class CustomShortcutCaptureTests(unittest.TestCase):
+    def test_custom_action_label_uses_super_as_canonical_name(self):
+        self.assertEqual(
+            key_simulator.custom_action_label("custom:cmd+w"),
+            "Super + W",
+        )
+        self.assertEqual(
+            key_simulator.custom_action_label("custom:super+w"),
+            "Super + W",
+        )
+
+    def test_macos_swaps_qt_control_and_meta_semantics(self):
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["ctrl"],
+                "w",
+                platform_name="darwin",
+            ),
+            "super+w",
+        )
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["super"],
+                "w",
+                platform_name="darwin",
+            ),
+            "ctrl+w",
+        )
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["ctrl"],
+                "ctrl",
+                platform_name="darwin",
+            ),
+            "super",
+        )
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["super"],
+                "super",
+                platform_name="darwin",
+            ),
+            "ctrl",
+        )
+
+    def test_non_macos_keeps_qt_control_and_meta_semantics(self):
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["ctrl"],
+                "w",
+                platform_name="linux",
+            ),
+            "ctrl+w",
+        )
+        self.assertEqual(
+            key_simulator.normalize_captured_shortcut_parts(
+                ["super"],
+                "w",
+                platform_name="linux",
+            ),
+            "super+w",
+        )
+
 class MouseButtonActionTests(unittest.TestCase):
     """Tests for the mouse-button-to-mouse-button remapping feature."""
 

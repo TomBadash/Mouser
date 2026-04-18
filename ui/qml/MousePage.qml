@@ -430,27 +430,7 @@ Item {
 
     function customLabel(actionId) {
         if (!actionId.startsWith("custom:")) return ""
-        var parts = actionId.substring(7).split("+")
-        return parts.map(function(p) {
-            var lowered = (p || "").trim().toLowerCase()
-            if (lowered === "control") lowered = "ctrl"
-            if (lowered === "option" || lowered === "opt") lowered = "alt"
-            if (lowered === "cmd" || lowered === "command" || lowered === "meta"
-                || lowered === "win" || lowered === "windows") {
-                lowered = "super"
-            }
-            if (lowered === "super")
-                return Qt.platform.os === "osx" ? "Cmd" : "Win"
-            if (lowered === "alt")
-                return Qt.platform.os === "osx" ? "Opt" : "Alt"
-            if (lowered === "ctrl")
-                return "Ctrl"
-            if (lowered === "shift")
-                return "Shift"
-            if (lowered.length === 1)
-                return lowered.toUpperCase()
-            return lowered.charAt(0).toUpperCase() + lowered.slice(1)
-        }).join(" + ")
+        return backend.actionLabelFor(actionId)
     }
 
     function isCustomAction(actionId) {

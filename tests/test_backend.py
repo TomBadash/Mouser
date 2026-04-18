@@ -7,11 +7,12 @@ from unittest.mock import patch
 from core.config import DEFAULT_CONFIG
 
 try:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, Qt
     from ui.backend import Backend
 except ModuleNotFoundError:
     Backend = None
     QCoreApplication = None
+    Qt = None
 
 
 def _ensure_qapp():
@@ -252,6 +253,61 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(apps[0]["path"], "/usr/bin/code")
         self.assertEqual(len(notifications), 1)
+
+    def test_shortcut_capture_keeps_ctrl_and_super_distinct_on_macos(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "darwin"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "super+w",
+            )
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.MetaModifier,
+                    "w",
+                ),
+                "ctrl+w",
+            )
+
+    def test_shortcut_capture_preserves_default_qt_modifier_names_off_macos(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "linux"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "ctrl+w",
+            )
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.MetaModifier,
+                    "w",
+                ),
+                "super+w",
+            )
+
+    def test_shortcut_capture_accepts_qt_enum_objects(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "darwin"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "super+w",
+            )
 
     def test_add_profile_stores_catalog_id_for_linux_app(self):
         backend = self._make_backend()

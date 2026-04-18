@@ -25,7 +25,12 @@ from core.logi_devices import (
     clamp_dpi,
     get_buttons_for_layout,
 )
-from core.key_simulator import ACTIONS, custom_action_label, valid_custom_key_names
+from core.key_simulator import (
+    ACTIONS,
+    custom_action_label,
+    normalize_captured_shortcut_parts,
+    valid_custom_key_names,
+)
 from core.startup import (
     apply_login_startup,
     supports_login_startup,
@@ -37,6 +42,93 @@ def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
+
+
+def _qt_shortcut_modifier_name(name):
+    """Return the raw Qt semantic name for a modifier."""
+    return (name or "").strip().lower()
+
+
+def _qt_enum_int(value):
+    """Coerce Qt enum and flag values from QML into plain integers."""
+    if hasattr(value, "value"):
+        return int(value.value)
+    return int(value)
+
+
+def _qt_shortcut_key_name(key, text=""):
+    """Translate a Qt key value into a raw Qt semantic shortcut name."""
+    key = _qt_enum_int(key)
+    text = text or ""
+
+    if key == _qt_enum_int(Qt.Key_Shift):
+        return "shift"
+    if key == _qt_enum_int(Qt.Key_Control):
+        return "ctrl"
+    if key == _qt_enum_int(Qt.Key_Alt):
+        return "alt"
+    if key == _qt_enum_int(Qt.Key_Meta):
+        return "super"
+    if key == _qt_enum_int(Qt.Key_Escape):
+        return "esc"
+    if key == _qt_enum_int(Qt.Key_Tab):
+        return "tab"
+    if key == _qt_enum_int(Qt.Key_Space):
+        return "space"
+    if key in (_qt_enum_int(Qt.Key_Return), _qt_enum_int(Qt.Key_Enter)):
+        return "enter"
+    if key == _qt_enum_int(Qt.Key_Backspace):
+        return "backspace"
+    if key == _qt_enum_int(Qt.Key_Delete):
+        return "delete"
+    if key == _qt_enum_int(Qt.Key_Left):
+        return "left"
+    if key == _qt_enum_int(Qt.Key_Right):
+        return "right"
+    if key == _qt_enum_int(Qt.Key_Up):
+        return "up"
+    if key == _qt_enum_int(Qt.Key_Down):
+        return "down"
+    if key == _qt_enum_int(Qt.Key_Home):
+        return "home"
+    if key == _qt_enum_int(Qt.Key_End):
+        return "end"
+    if key == _qt_enum_int(Qt.Key_PageUp):
+        return "pageup"
+    if key == _qt_enum_int(Qt.Key_PageDown):
+        return "pagedown"
+
+    for n in range(1, 13):
+        if key == _qt_enum_int(getattr(Qt, f"Key_F{n}")):
+            return f"f{n}"
+
+    if _qt_enum_int(Qt.Key_A) <= key <= _qt_enum_int(Qt.Key_Z):
+        return chr(ord("a") + (key - _qt_enum_int(Qt.Key_A)))
+    if _qt_enum_int(Qt.Key_0) <= key <= _qt_enum_int(Qt.Key_9):
+        return chr(ord("0") + (key - _qt_enum_int(Qt.Key_0)))
+
+    if len(text) == 1:
+        lowered = text.lower()
+        if "a" <= lowered <= "z" or "0" <= lowered <= "9":
+            return lowered
+    return ""
+
+
+def _qt_shortcut_combo(key, modifiers, text=""):
+    """Build the stored custom-shortcut string from Qt event parts."""
+    modifiers = _qt_enum_int(modifiers)
+    parts = []
+    if modifiers & _qt_enum_int(Qt.ControlModifier):
+        parts.append(_qt_shortcut_modifier_name("ctrl"))
+    if modifiers & _qt_enum_int(Qt.ShiftModifier):
+        parts.append("shift")
+    if modifiers & _qt_enum_int(Qt.AltModifier):
+        parts.append("alt")
+    if modifiers & _qt_enum_int(Qt.MetaModifier):
+        parts.append(_qt_shortcut_modifier_name("super"))
+
+    key_name = _qt_shortcut_key_name(key, text)
+    return normalize_captured_shortcut_parts(parts, key_name)
 
 
 class Backend(QObject):
@@ -793,6 +885,10 @@ class Backend(QObject):
     @Slot(str, result=str)
     def actionLabelFor(self, actionId):
         return _action_label(actionId)
+
+    @Slot(int, int, str, result=str)
+    def shortcutComboFromQtEvent(self, key, modifiers, text):
+        return _qt_shortcut_combo(key, modifiers, text)
 
     @Slot(result=str)
     def dumpDeviceInfo(self):
