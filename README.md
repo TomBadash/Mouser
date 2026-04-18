@@ -175,6 +175,19 @@ source .venv/bin/activate      # macOS / Linux
 pip install -r requirements.txt
 ```
 
+### Local user install
+
+If you want a repeatable build-and-install flow that stays under your user
+account, run:
+
+```bash
+./install_local.sh
+```
+
+That creates the build in `~/.local/share/Mouser`, installs a `mouser`
+launcher in `~/.local/bin`, and validates the installed command before
+finishing.
+
 ### Dependencies
 
 | Package | Purpose |
@@ -367,6 +380,7 @@ mouser/
 ├── Mouser.bat               # Quick-launch batch file
 ├── Mouser-mac.spec          # Native macOS app-bundle spec
 ├── Mouser-linux.spec        # Linux PyInstaller spec
+├── install_local.sh         # Deterministic user-local build + install script
 ├── build_macos_app.sh       # macOS bundle build + icon/signing flow
 ├── .github/workflows/
 │   ├── ci.yml               # CI checks (compile, tests, QML lint)

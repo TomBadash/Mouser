@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Material
 import "Theme.js" as Theme
 
-/*  Modal dialog for entering a custom keyboard shortcut as text.
+/*  Modal dialog for capturing a custom keyboard shortcut.
     Emits captured(comboString) with e.g. "ctrl+shift+f5".  */
 
 Rectangle {
@@ -71,7 +71,7 @@ Rectangle {
             }
             seen[name] = true
             if (modifiers.indexOf(name) < 0) hasNonModifier = true
-            labels.push(name.charAt(0).toUpperCase() + name.slice(1))
+            labels.push(dialog._displayKeyName(name))
         }
         if (!hasNonModifier) {
             _valid = false
@@ -80,6 +80,106 @@ Rectangle {
         }
         _valid = true
         _preview = "\u2714 " + labels.join(" + ")
+    }
+
+    function _canonicalKeyName(name) {
+        var lowered = (name || "").trim().toLowerCase()
+        if (!lowered) return ""
+        if (lowered === "control") return "ctrl"
+        if (lowered === "option" || lowered === "opt") return "alt"
+        if (lowered === "cmd" || lowered === "command" || lowered === "meta"
+            || lowered === "win" || lowered === "windows") {
+            return "super"
+        }
+        return lowered
+    }
+
+    function _displayKeyName(name) {
+        var lowered = (name || "").trim().toLowerCase()
+        if (!lowered) return ""
+        if (lowered === "control") lowered = "ctrl"
+        if (lowered === "option" || lowered === "opt") lowered = "alt"
+        if (lowered === "cmd" || lowered === "command" || lowered === "meta"
+            || lowered === "win" || lowered === "windows") {
+            lowered = "super"
+        }
+        if (lowered === "super")
+            return Qt.platform.os === "osx" ? "Cmd" : "Win"
+        if (lowered === "alt")
+            return Qt.platform.os === "osx" ? "Opt" : "Alt"
+        if (lowered === "ctrl")
+            return "Ctrl"
+        if (lowered === "shift")
+            return "Shift"
+        if (lowered.length === 1)
+            return lowered.toUpperCase()
+        return lowered.charAt(0).toUpperCase() + lowered.slice(1)
+    }
+
+    function _eventKeyName(event) {
+        if (!event) return ""
+        var key = event.key
+        if (key === Qt.Key_Shift) return "shift"
+        if (key === Qt.Key_Control) return "ctrl"
+        if (key === Qt.Key_Alt) return "alt"
+        if (key === Qt.Key_Meta) return "super"
+        if (key === Qt.Key_Escape) return "esc"
+        if (key === Qt.Key_Tab) return "tab"
+        if (key === Qt.Key_Space) return "space"
+        if (key === Qt.Key_Return || key === Qt.Key_Enter) return "enter"
+        if (key === Qt.Key_Backspace) return "backspace"
+        if (key === Qt.Key_Delete) return "delete"
+        if (key === Qt.Key_Left) return "left"
+        if (key === Qt.Key_Right) return "right"
+        if (key === Qt.Key_Up) return "up"
+        if (key === Qt.Key_Down) return "down"
+        if (key === Qt.Key_Home) return "home"
+        if (key === Qt.Key_End) return "end"
+        if (key === Qt.Key_PageUp) return "pageup"
+        if (key === Qt.Key_PageDown) return "pagedown"
+
+        for (var n = 1; n <= 12; n++) {
+            if (key === Qt["Key_F" + n])
+                return "f" + n
+        }
+
+        if (key >= Qt.Key_A && key <= Qt.Key_Z)
+            return String.fromCharCode(97 + (key - Qt.Key_A))
+        if (key >= Qt.Key_0 && key <= Qt.Key_9)
+            return String.fromCharCode(48 + (key - Qt.Key_0))
+
+        if (event.text && event.text.length === 1) {
+            var ch = event.text.toLowerCase()
+            if (ch >= "a" && ch <= "z") return ch
+            if (ch >= "0" && ch <= "9") return ch
+        }
+        return ""
+    }
+
+    function _comboFromEvent(event) {
+        var parts = []
+        if (event.modifiers & Qt.ControlModifier) parts.push("ctrl")
+        if (event.modifiers & Qt.ShiftModifier) parts.push("shift")
+        if (event.modifiers & Qt.AltModifier) parts.push("alt")
+        if (event.modifiers & Qt.MetaModifier) parts.push("super")
+
+        var keyName = _canonicalKeyName(_eventKeyName(event))
+        if (keyName && parts.indexOf(keyName) < 0)
+            parts.push(keyName)
+        return parts.join("+")
+    }
+
+    function _acceptKey(event) {
+        if (!event || event.isAutoRepeat)
+            return
+        var combo = _comboFromEvent(event)
+        if (!combo)
+            return
+        if (combo === "enter")
+            return
+        shortcutField.text = combo
+        _validate(combo)
+        event.accepted = true
     }
 
     // Block clicks from reaching elements underneath
@@ -113,13 +213,17 @@ Rectangle {
                 width: parent.width
                 placeholderText: s["key_capture.placeholder"]
                 font { family: uiState.fontFamily; pixelSize: 13 }
+                readOnly: true
+                selectByMouse: false
+                inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
                 Material.accent: dialog.theme.accent
-                onTextChanged: dialog._validate(text)
+                Keys.priority: Keys.BeforeItem
+                Keys.onPressed: dialog._acceptKey(event)
                 Keys.onEscapePressed: { dialog.cancelled(); dialog.close() }
                 Keys.onReturnPressed: {
                     if (dialog._valid) {
-                        var normalized = text.split("+").map(
-                            function(p) { return p.trim().toLowerCase() }
+                        var normalized = shortcutField.text.split("+").map(
+                            function(p) { return dialog._canonicalKeyName(p) }
                         ).join("+")
                         dialog.captured(normalized)
                         dialog.close()

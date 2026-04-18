@@ -18,7 +18,7 @@ def custom_action_label(action_id):
     if not action_id.startswith("custom:"):
         return action_id
     parts = action_id[7:].split("+")
-    return " + ".join(p.capitalize() for p in parts)
+    return " + ".join(_pretty_custom_key_name(p) for p in parts)
 
 
 def valid_custom_key_names():
@@ -27,6 +27,19 @@ def valid_custom_key_names():
         return sorted(_KEY_NAME_TO_CODE.keys())
     except NameError:
         return []
+
+
+def _pretty_custom_key_name(name):
+    normalized = name.strip().lower()
+    if normalized in {"super", "cmd", "command", "meta", "win", "windows"}:
+        return "Cmd" if sys.platform == "darwin" else "Win"
+    if normalized in {"alt", "option", "opt"}:
+        return "Opt" if sys.platform == "darwin" else "Alt"
+    if normalized == "ctrl":
+        return "Ctrl"
+    if normalized == "shift":
+        return "Shift"
+    return normalized.capitalize()
 
 
 def _parse_custom_combo(action_id, key_name_to_code):
@@ -503,8 +516,12 @@ if sys.platform == "win32":
     }
 
     _KEY_NAME_TO_CODE = {
-        "ctrl": VK_CONTROL, "shift": VK_SHIFT, "alt": VK_MENU,
-        "super": VK_LWIN, "tab": VK_TAB, "space": VK_SPACE,
+        "ctrl": VK_CONTROL, "control": VK_CONTROL,
+        "shift": VK_SHIFT,
+        "alt": VK_MENU, "option": VK_MENU, "opt": VK_MENU,
+        "super": VK_LWIN, "cmd": VK_LWIN, "command": VK_LWIN,
+        "meta": VK_LWIN, "win": VK_LWIN, "windows": VK_LWIN,
+        "tab": VK_TAB, "space": VK_SPACE,
         "enter": VK_RETURN, "esc": VK_ESCAPE, "backspace": VK_BACK,
         "delete": VK_DELETE, "left": VK_LEFT, "right": VK_RIGHT,
         "up": VK_UP, "down": VK_DOWN,
@@ -632,6 +649,14 @@ elif sys.platform == "darwin":
 
     # Mouse button simulation
     # CGEvent mouse button constants
+    _MAC_MOUSE_ACTIONS = frozenset({
+        "mouse_left_click",
+        "mouse_right_click",
+        "mouse_middle_click",
+        "mouse_back_click",
+        "mouse_forward_click",
+    })
+
     _MAC_MOUSE_MAP = {
         "mouse_left_click": {
             "down_type": Quartz.kCGEventLeftMouseDown if _QUARTZ_OK else 1,
@@ -677,7 +702,7 @@ elif sys.platform == "darwin":
         _inject_mac_mouse(action_id, False)
 
     def is_mouse_button_action(action_id):
-        return action_id in _MAC_MOUSE_MAP
+        return action_id in _MAC_MOUSE_ACTIONS
 
     # Modifier flag bits for CGEvent
     _MOD_FLAGS = {
@@ -1064,8 +1089,12 @@ elif sys.platform == "darwin":
     }
 
     _KEY_NAME_TO_CODE = {
-        "ctrl": kVK_Control, "shift": kVK_Shift, "alt": kVK_Option,
-        "super": kVK_Command, "tab": kVK_Tab, "space": kVK_Space,
+        "ctrl": kVK_Control, "control": kVK_Control,
+        "shift": kVK_Shift,
+        "alt": kVK_Option, "option": kVK_Option, "opt": kVK_Option,
+        "super": kVK_Command, "cmd": kVK_Command, "command": kVK_Command,
+        "meta": kVK_Command, "win": kVK_Command, "windows": kVK_Command,
+        "tab": kVK_Tab, "space": kVK_Space,
         "enter": kVK_Return, "esc": kVK_Escape, "backspace": kVK_Delete,
         "delete": kVK_ForwardDelete, "left": kVK_LeftArrow,
         "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
