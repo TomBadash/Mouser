@@ -11,10 +11,13 @@ Requires:  pip install hidapi
 Falls back gracefully if the package or device are unavailable.
 """
 
+import os
+import select
 import sys
 import queue
 import threading
 import time
+from pathlib import Path
 
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
@@ -63,6 +66,45 @@ class _HidDeviceCompat:
 
     def close(self):
         self._dev.close()
+
+
+class _LinuxHidrawDevice:
+    """Minimal hidraw transport used when hidapi can't open a Linux node."""
+
+    def __init__(self, path):
+        if isinstance(path, memoryview):
+            path = bytes(path)
+        if isinstance(path, bytes):
+            path = path.decode("utf-8", errors="replace")
+        self._path = path
+        self._fd = None
+
+    def open(self):
+        self._fd = os.open(self._path, os.O_RDWR | os.O_NONBLOCK)
+
+    def set_nonblocking(self, enabled):
+        # The fd stays non-blocking; read() below implements timeout semantics.
+        return None
+
+    def write(self, data):
+        return os.write(self._fd, bytes(data))
+
+    def read(self, size, timeout_ms=0):
+        if self._fd is None:
+            return None
+        timeout = None if timeout_ms is None else max(timeout_ms, 0) / 1000.0
+        readable, _, _ = select.select([self._fd], [], [], timeout)
+        if not readable:
+            return None
+        try:
+            return os.read(self._fd, size)
+        except BlockingIOError:
+            return None
+
+    def close(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
 
 _MAC_NATIVE_OK = False
 if sys.platform == "darwin":
@@ -658,10 +700,17 @@ class HidGestureListener:
         if HIDAPI_OK and _BACKEND_PREFERENCE in ("auto", "hidapi"):
             try:
                 for info in _hid.enumerate(LOGI_VID, 0):
-                    if info.get("usage_page", 0) >= 0xFF00:
+                    usage_page = int(info.get("usage_page", 0) or 0)
+                    # Linux hidapi often reports usage_page=0 even for usable
+                    # Logitech receiver interfaces, so do not filter those out.
+                    if sys.platform == "linux" or usage_page >= 0xFF00:
                         add_info(dict(info, source="hidapi-enumerate"))
             except Exception as exc:
                 print(f"[HidGesture] hidapi enumerate error: {exc}")
+
+        if sys.platform == "linux":
+            for info in HidGestureListener._linux_hidraw_infos():
+                add_info(info)
 
         if (
             sys.platform == "darwin"
@@ -671,7 +720,87 @@ class HidGestureListener:
             for info in _MacNativeHidDevice.enumerate_infos():
                 add_info(info)
 
+        out.sort(key=HidGestureListener._candidate_sort_key, reverse=True)
         return out
+
+    @staticmethod
+    def _linux_hidraw_infos():
+        """Discover Logitech hidraw nodes that hidapi may miss on Linux."""
+        out = []
+        transport_by_bus = {
+            0x0003: "USB",
+            0x0005: "Bluetooth Low Energy",
+        }
+        for hidraw_dir in sorted(Path("/sys/class/hidraw").glob("hidraw*")):
+            uevent_path = hidraw_dir / "device" / "uevent"
+            try:
+                lines = uevent_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            props = {}
+            for line in lines:
+                key, _, value = line.partition("=")
+                if key:
+                    props[key] = value
+            try:
+                bus_hex, vid_hex, pid_hex = props["HID_ID"].split(":")
+                bus = int(bus_hex, 16)
+                vendor_id = int(vid_hex, 16)
+                product_id = int(pid_hex, 16)
+            except (KeyError, ValueError):
+                continue
+            if vendor_id != LOGI_VID:
+                continue
+            devnode = f"/dev/{hidraw_dir.name}"
+            if not os.path.exists(devnode):
+                continue
+            out.append({
+                "path": devnode.encode("utf-8"),
+                "vendor_id": vendor_id,
+                "product_id": product_id,
+                "usage_page": 0,
+                "usage": 0,
+                "transport": transport_by_bus.get(bus, ""),
+                "product_string": props.get("HID_NAME", ""),
+                "serial_number": props.get("HID_UNIQ", ""),
+                "source": "linux-hidraw-enumerate",
+            })
+        return out
+
+    @staticmethod
+    def _candidate_sort_key(info):
+        pid = int(info.get("product_id", 0) or 0)
+        product = info.get("product_string") or ""
+        transport = (info.get("transport") or "").lower()
+        source = info.get("source") or ""
+        path = info.get("path") or b""
+        if isinstance(path, bytes):
+            path = path.decode("utf-8", errors="replace")
+        spec = resolve_device(product_id=pid, product_name=product)
+        product_lower = product.lower()
+        return (
+            int(spec is not None),
+            int("bluetooth" in transport),
+            int("receiver" not in product_lower),
+            int(source == "linux-hidraw-enumerate"),
+            int(path.startswith("/dev/hidraw")),
+            pid,
+            product_lower,
+        )
+
+    @staticmethod
+    def _open_linux_hidraw(info):
+        path = info.get("path") or b""
+        if isinstance(path, bytes):
+            path_str = path.decode("utf-8", errors="replace")
+        else:
+            path_str = str(path)
+        if not path_str.startswith("/dev/hidraw"):
+            return None
+        dev = _LinuxHidrawDevice(path_str)
+        dev.open()
+        dev.set_nonblocking(False)
+        return dev
 
     # ── low-level HID++ I/O ───────────────────────────────────────
 
@@ -1279,11 +1408,19 @@ class HidGestureListener:
                     else:
                         if not HIDAPI_OK:
                             continue
-                        if _HID_API_STYLE == "hidapi":
+                        if sys.platform == "linux":
+                            try:
+                                d = self._open_linux_hidraw(open_info)
+                            except Exception:
+                                d = None
+                        else:
+                            d = None
+                        if d is None and _HID_API_STYLE == "hidapi":
                             d = _hid.device()
                             d.open_path(open_info["path"])
                         else:
-                            d = _HidDeviceCompat(open_info["path"])
+                            if d is None:
+                                d = _HidDeviceCompat(open_info["path"])
                         d.set_nonblocking(False)
                     self._dev = d
                     print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport}")

@@ -1573,6 +1573,7 @@ elif sys.platform == "linux":
         import select as _select_mod
         import evdev as _evdev_mod
         from evdev import ecodes as _ecodes, UInput as _UInput, InputDevice as _InputDevice
+        from core.logi_devices import resolve_device as _resolve_logi_device
         _EVDEV_OK = True
     except ImportError:
         _EVDEV_OK = False
@@ -1950,8 +1951,7 @@ elif sys.platform == "linux":
 
         def _find_mouse_device(self):
             """Find the best mouse evdev device (prefer Logitech)."""
-            logi_mice = []
-            other_mice = []
+            candidates = []
             for path in _evdev_mod.list_devices():
                 try:
                     dev = _InputDevice(path)
@@ -1978,16 +1978,28 @@ elif sys.platform == "linux":
                 except Exception:
                     dev.close()
                     continue
-                if dev.info.vendor == _LOGI_VENDOR:
-                    logi_mice.append((dev, has_side))
-                else:
-                    other_mice.append((dev, has_side))
+                candidates.append((dev, has_side))
 
-            ordered = sorted(
-                logi_mice, key=lambda x: -x[1]
-            ) + sorted(
-                other_mice, key=lambda x: -x[1]
-            )
+            def _event_num(dev):
+                try:
+                    return int(str(dev.path).rsplit("event", 1)[1])
+                except (IndexError, ValueError):
+                    return -1
+
+            def _sort_key(item):
+                dev, has_side = item
+                spec = _resolve_logi_device(
+                    product_id=getattr(dev.info, "product", None),
+                    product_name=dev.name,
+                )
+                return (
+                    int(dev.info.vendor == _LOGI_VENDOR),
+                    int(spec is not None),
+                    int(has_side),
+                    _event_num(dev),
+                )
+
+            ordered = sorted(candidates, key=_sort_key, reverse=True)
             if ordered:
                 chosen = ordered[0][0]
                 for dev, _ in ordered[1:]:

@@ -1,7 +1,8 @@
-"""Cross-platform login startup: Windows HKCU Run and macOS LaunchAgent."""
+"""Cross-platform login startup: Windows HKCU Run, macOS LaunchAgent, Linux autostart."""
 
 import os
 import plistlib
+import shlex
 import subprocess
 import sys
 
@@ -13,9 +14,12 @@ RUN_VALUE_NAME = "Mouser"
 MACOS_LAUNCH_AGENT_LABEL = "io.github.tombadash.mouser"
 MACOS_PLIST_NAME = f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
 
+# Linux
+LINUX_AUTOSTART_NAME = "io.github.tombadash.mouser.desktop"
+
 
 def supports_login_startup():
-    return sys.platform in ("win32", "darwin")
+    return sys.platform in ("win32", "darwin", "linux")
 
 
 def _quote_arg(s: str) -> str:
@@ -32,7 +36,7 @@ def build_run_command() -> str:
     exe_q = _quote_arg(exe)
     if getattr(sys, "frozen", False):
         return exe_q
-    script = os.path.abspath(sys.argv[0])
+    script = _entry_script_path()
     return f"{exe_q} {_quote_arg(script)}"
 
 
@@ -41,7 +45,51 @@ def _program_arguments():
     exe = os.path.abspath(sys.executable)
     if getattr(sys, "frozen", False):
         return [exe]
-    return [exe, os.path.abspath(sys.argv[0])]
+    return [exe, _entry_script_path()]
+
+
+def _entry_script_path() -> str:
+    raw_argv0 = (sys.argv[0] or "").strip()
+    argv0 = os.path.abspath(raw_argv0)
+    if raw_argv0 and os.path.basename(raw_argv0) not in {"-", "-c"}:
+        return argv0
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main_qml.py"))
+
+
+def _linux_autostart_dir() -> str:
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(config_home, "autostart")
+
+
+def _linux_desktop_path() -> str:
+    return os.path.join(_linux_autostart_dir(), LINUX_AUTOSTART_NAME)
+
+
+def _linux_exec_line() -> str:
+    return " ".join(shlex.quote(arg) for arg in _program_arguments())
+
+
+def _linux_desktop_entry() -> str:
+    icon_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "images", "logo_icon.png")
+    )
+    working_dir = os.path.dirname(os.path.abspath(sys.argv[0])) or os.getcwd()
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Version=1.0",
+        "Name=Mouser",
+        "Comment=Logitech mouse remapper",
+        f"Exec={_linux_exec_line()}",
+        f"Path={working_dir}",
+        f"Icon={icon_path}",
+        "Terminal=false",
+        "StartupNotify=false",
+        "Categories=Utility;",
+        "X-GNOME-Autostart-enabled=true",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _get_winreg():
@@ -126,6 +174,21 @@ def _apply_macos(enabled: bool) -> None:
             )
 
 
+def _apply_linux(enabled: bool) -> None:
+    if sys.platform != "linux":
+        return
+    desktop_path = _linux_desktop_path()
+    if enabled:
+        os.makedirs(os.path.dirname(desktop_path), exist_ok=True)
+        with open(desktop_path, "w", encoding="utf-8") as f:
+            f.write(_linux_desktop_entry())
+        return
+    try:
+        os.remove(desktop_path)
+    except FileNotFoundError:
+        pass
+
+
 def apply_login_startup(enabled: bool) -> None:
     if not supports_login_startup():
         return
@@ -133,6 +196,8 @@ def apply_login_startup(enabled: bool) -> None:
         _apply_windows(enabled)
     elif sys.platform == "darwin":
         _apply_macos(enabled)
+    elif sys.platform == "linux":
+        _apply_linux(enabled)
 
 
 def sync_from_config(enabled: bool) -> None:

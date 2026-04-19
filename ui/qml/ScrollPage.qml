@@ -461,7 +461,7 @@ Item {
                     }
 
                     Text {
-                        text: "Start Mouser at login on Windows and macOS, and choose whether the settings window opens on launch or Mouser stays in the system tray."
+                        text: "Start Mouser at login and choose whether the settings window opens on launch or Mouser stays in the system tray."
                         font {
                             family: uiState.fontFamily
                             pixelSize: 12

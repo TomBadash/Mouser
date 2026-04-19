@@ -117,7 +117,10 @@ class Backend(QObject):
                 engine.set_debug_enabled(self.debugMode)
             self._mouse_connected = bool(getattr(engine, "device_connected", False))
         if supports_login_startup():
-            sync_login_startup_from_config(self.startAtLogin)
+            try:
+                sync_login_startup_from_config(self.startAtLogin)
+            except Exception as exc:
+                print(f"[Backend] Failed to sync login startup: {exc}")
         else:
             self._cfg.setdefault("settings", {})["start_at_login"] = False
         self._apply_device_layout(
@@ -465,7 +468,7 @@ class Backend(QObject):
         enabled = bool(value)
         if not supports_login_startup():
             self.statusMessage.emit(
-                "Start at login is only available on Windows and macOS"
+                "Start at login is not available on this platform"
             )
             return
         if self.startAtLogin == enabled:

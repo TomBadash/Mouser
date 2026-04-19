@@ -230,6 +230,78 @@ class ApplyLoginStartupMacTests(unittest.TestCase):
         )
 
 
+class ApplyLoginStartupLinuxTests(unittest.TestCase):
+    def test_supports_login_startup_on_linux(self):
+        with patch.object(sys, "platform", "linux"):
+            self.assertTrue(st.supports_login_startup())
+
+    def test_linux_exec_line_uses_program_arguments(self):
+        with patch.object(
+            st,
+            "_program_arguments",
+            return_value=["/opt/Mouser App/python", "/tmp/Mouser/main_qml.py"],
+        ):
+            exec_line = st._linux_exec_line()
+        self.assertEqual(exec_line, "'/opt/Mouser App/python' /tmp/Mouser/main_qml.py")
+
+    def test_linux_desktop_entry_contains_exec_path_and_icon(self):
+        with (
+            patch.object(sys, "argv", ["/tmp/Mouser/main_qml.py"]),
+            patch.object(
+                st,
+                "_program_arguments",
+                return_value=["/tmp/Mouser/.venv/bin/python", "/tmp/Mouser/main_qml.py"],
+            ),
+        ):
+            entry = st._linux_desktop_entry()
+
+        self.assertIn("Exec=/tmp/Mouser/.venv/bin/python /tmp/Mouser/main_qml.py", entry)
+        self.assertIn("Name=Mouser", entry)
+        self.assertIn("X-GNOME-Autostart-enabled=true", entry)
+
+    def test_linux_enable_writes_desktop_entry(self):
+        desktop_path = "/tmp/autostart/io.github.tombadash.mouser.desktop"
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.object(st, "supports_login_startup", return_value=True),
+            patch.object(st, "_linux_desktop_path", return_value=desktop_path),
+            patch.object(st, "_linux_desktop_entry", return_value="[Desktop Entry]\n"),
+            patch("os.makedirs") as m_makedirs,
+            patch("builtins.open", mock_open()) as m_open,
+        ):
+            st.apply_login_startup(True)
+
+        m_makedirs.assert_called_once_with("/tmp/autostart", exist_ok=True)
+        m_open.assert_called_once_with(desktop_path, "w", encoding="utf-8")
+
+    def test_linux_disable_removes_desktop_entry(self):
+        desktop_path = "/tmp/autostart/io.github.tombadash.mouser.desktop"
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.object(st, "supports_login_startup", return_value=True),
+            patch.object(st, "_linux_desktop_path", return_value=desktop_path),
+            patch("os.remove") as m_remove,
+        ):
+            st.apply_login_startup(False)
+
+        m_remove.assert_called_once_with(desktop_path)
+
+    def test_linux_disable_ignores_missing_desktop_entry(self):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.object(st, "supports_login_startup", return_value=True),
+            patch.object(
+                st,
+                "_linux_desktop_path",
+                return_value="/tmp/autostart/io.github.tombadash.mouser.desktop",
+            ),
+            patch("os.remove", side_effect=FileNotFoundError()),
+        ):
+            st.apply_login_startup(False)
+
+
 class SyncFromConfigTests(unittest.TestCase):
     def test_delegates_to_apply(self):
         with patch.object(st, "apply_login_startup") as mock_apply:

@@ -28,7 +28,7 @@ No telemetry. No cloud. No Logitech account required.
 
 ### 🖥️ Cross-Platform
 - **Windows, macOS, and Linux** — native hooks on each platform (WH_MOUSE_LL, CGEventTap, evdev/uinput)
-- **Start at login** — Windows registry and macOS LaunchAgent, with an independent "Start minimized" tray-only option
+- **Start at login** — Windows registry, macOS LaunchAgent, and Linux XDG autostart, with an independent "Start minimized" tray-only option
 - **Single instance guard** — launching a second copy brings the existing window to the front
 
 ### 🔌 Smart Connectivity
@@ -175,6 +175,60 @@ pip install -r requirements.txt
 | `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
 | `evdev` | Linux mouse grab and virtual device forwarding (uinput) |
 
+### Fedora / GNOME Setup
+
+Fedora needs two extra pieces beyond `pip install -r requirements.txt`:
+
+1. Device permissions for `hidraw` and `uinput`
+2. A fresh login session after adding your user to the `input` group
+
+Install the Fedora system package used to build `evdev`:
+
+```bash
+sudo dnf install -y python3-devel xdotool
+```
+
+Create the udev rule that grants Mouser access to Logitech `hidraw` devices
+and `/dev/uinput`, then add your user to the `input` group:
+
+```bash
+sudo tee /etc/udev/rules.d/99-mouser-fedora-input.rules >/dev/null <<'EOF'
+KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="hidraw", KERNELS=="*046D:*", MODE="0660", GROUP="input"
+EOF
+
+sudo usermod -aG input "$USER"
+sudo modprobe uinput
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+> **Important:** launching Mouser from a terminal after `newgrp input` is not
+> enough for the desktop launcher or autostart entry. You must fully log out
+> and back in (or reboot) so your GNOME session, app launcher, and autostarted
+> processes all inherit the new `input` group membership.
+
+After logging back in, verify the device access before troubleshooting Mouser:
+
+```bash
+id
+
+python - <<'PY'
+import os
+for path in ('/dev/hidraw8', '/dev/uinput'):
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except Exception as exc:
+        print(path, 'FAIL', repr(exc))
+    else:
+        print(path, 'OK')
+        os.close(fd)
+PY
+```
+
+If both devices report `OK`, Mouser should be able to connect to supported
+Logitech mice from both the terminal and the app menu.
+
 ### Running
 
 ```bash
@@ -205,6 +259,33 @@ python main_qml.py --hid-backend=auto
 Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`;
 `hidapi` and `auto` remain available as manual overrides for debugging. Other
 platforms continue to default to `auto`.
+
+### Linux App Launcher
+
+Linux autostart writes an entry under `~/.config/autostart`, which does **not**
+make Mouser show up in the desktop app grid. To add a regular launcher entry on
+GNOME/KDE, create a `.desktop` file in `~/.local/share/applications`:
+
+```bash
+mkdir -p ~/.local/share/applications
+
+cat > ~/.local/share/applications/io.github.tombadash.mouser.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Mouser
+Comment=Logitech mouse remapper
+Exec=/path/to/mouser/.venv/bin/python /path/to/mouser/main_qml.py
+Path=/path/to/mouser
+Icon=/path/to/mouser/images/logo_icon.png
+Terminal=false
+StartupNotify=false
+Categories=Utility;Settings;
+EOF
+```
+
+Replace `/path/to/mouser` with your checkout path. After that, Mouser appears
+in the app menu and can be pinned like a normal desktop app.
 
 ### Creating a Desktop Shortcut
 
@@ -373,7 +454,7 @@ mouser/
 │   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
 │   ├── device_layouts.py    # Device-family layout registry for QML overlays
 │   ├── key_simulator.py     # Platform-specific action simulator
-│   ├── startup.py           # Cross-platform login startup (Windows registry + macOS LaunchAgent)
+│   ├── startup.py           # Cross-platform login startup (Windows registry + macOS LaunchAgent + Linux autostart)
 │   ├── config.py            # Config manager (JSON load/save/migrate)
 │   └── app_detector.py      # Foreground app polling
 │
@@ -415,7 +496,7 @@ The app has two pages accessible from a slim sidebar:
 - **DPI slider:** 200–8000 with quick presets (400, 800, 1000, 1600, 2400, 4000, 6000, 8000). Reads the current DPI from the device on startup.
 - **Scroll inversion:** Independent toggles for vertical and horizontal scroll direction.
 - **Smart Shift:** Toggle Logitech Smart Shift (ratchet-to-free-spin scroll mode switching) on or off.
-- **Startup controls:** **Start at login** (Windows and macOS) and **Start minimized** (all platforms) to launch directly into the system tray.
+- **Startup controls:** **Start at login** (Windows, macOS, and Linux) and **Start minimized** (all platforms) to launch directly into the system tray.
 
 ---
 
@@ -436,7 +517,7 @@ The app has two pages accessible from a slim sidebar:
 - [ ] **True per-device config** — separate mappings and layout state cleanly when multiple Logitech mice are used on the same machine
 - [ ] **Dynamic button inventory** — build button lists from discovered `REPROG_CONTROLS_V4` controls instead of relying on the current fixed mapping set
 - [x] **Custom key combos** — user-defined arbitrary key sequences (e.g., Ctrl+Shift+P)
-- [x] **Windows login item support** — cross-platform login startup via Windows registry and macOS LaunchAgent
+- [x] **Desktop login item support** — cross-platform login startup via Windows registry, macOS LaunchAgent, and Linux autostart
 - [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches
 - [ ] **Gesture swipe tuning** — improve swipe reliability and defaults across more Logitech devices
 - [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
@@ -484,7 +565,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 - **[@andrew-sz](https://github.com/andrew-sz)** — macOS port: CGEventTap mouse hooking, Quartz key simulation, NSWorkspace app detection, and NSEvent media key support
 - **[@thisislvca](https://github.com/thisislvca)** — significant expansion of the project including macOS compatibility improvements, multi-device support, new UI features, and active involvement in triaging and resolving open issues
-- **[@awkure](https://github.com/awkure)** — cross-platform login startup (Windows registry + macOS LaunchAgent), single-instance guard, start minimized option, and MX Master 4 detection
+- **[@awkure](https://github.com/awkure)** — cross-platform login startup (Windows registry + macOS LaunchAgent, later extended to Linux autostart), single-instance guard, start minimized option, and MX Master 4 detection
 - **[@hieshima](https://github.com/hieshima)** — Linux support (evdev + HID++ + uinput), mode shift button mapping, Smart Shift toggle, and custom keyboard shortcut support
 - **[@pavelzaichyk](https://github.com/pavelzaichyk)** — Next Tab and Previous Tab browser actions
 

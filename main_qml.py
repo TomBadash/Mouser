@@ -387,8 +387,9 @@ def main():
     _configure_macos_app_mode()
     ui_state = UiState(app)
 
-    # macOS: allow Ctrl+C in terminal to quit the app
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # Allow Ctrl+C to terminate cleanly when launched from a terminal.
+    if sys.platform != "win32":
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     if sys.platform == "darwin":
         # SIGUSR1 thread dump (useful for debugging on macOS)
