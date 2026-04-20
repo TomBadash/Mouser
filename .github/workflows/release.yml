@@ -252,23 +252,26 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
-          python3 - <<PY
-          import json, sys
-          data = {
-              "version": "${VERSION}",
-              "date":    "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-              "downloads": {
-                  "windows-x64":  "${BASE_URL}/Mouser-Windows.zip",
-                  "macos-arm64":  "${BASE_URL}/Mouser-macOS.zip",
-                  "macos-x86_64": "${BASE_URL}/Mouser-macOS-intel.zip",
-                  "linux-deb":    "${BASE_URL}/Mouser-Linux.deb",
-                  "linux-zip":    "${BASE_URL}/Mouser-Linux.zip",
-              },
-          }
-          with open("latest.json", "w") as f:
-              json.dump(data, f, indent=2)
-          print(json.dumps(data, indent=2))
-          PY
+          # Build JSON with jq to avoid shell-variable injection in Python
+          jq -n \
+            --arg version  "$VERSION" \
+            --arg date     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win      "${BASE_URL}/Mouser-Windows.zip" \
+            --arg mac_arm  "${BASE_URL}/Mouser-macOS.zip" \
+            --arg mac_x64  "${BASE_URL}/Mouser-macOS-intel.zip" \
+            --arg linux_deb "${BASE_URL}/Mouser-Linux.deb" \
+            --arg linux_zip "${BASE_URL}/Mouser-Linux.zip" \
+            '{
+              version:   $version,
+              date:      $date,
+              downloads: {
+                "windows-x64":  $win,
+                "macos-arm64":  $mac_arm,
+                "macos-x86_64": $mac_x64,
+                "linux-deb":    $linux_deb,
+                "linux-zip":    $linux_zip
+              }
+            }' | tee latest.json
 
       # Generate release notes from merged PRs (with contributors) and any
       # conventional commits that are not part of a merged PR.

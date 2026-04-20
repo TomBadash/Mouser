@@ -46,10 +46,10 @@ from core.updater import (
 )
 
 # Delay (ms) before the startup auto-update check so the UI is fully ready.
-_AUTO_UPDATE_CHECK_DELAY_MS = 5000
+_AUTO_UPDATE_CHECK_DELAY_MS    = 5_000
 # How often to repeat the auto-update check (24 hours).
 _AUTO_UPDATE_CHECK_INTERVAL_S  = 86_400
-_AUTO_UPDATE_CHECK_INTERVAL_MS = 86_400 * 1_000
+_AUTO_UPDATE_CHECK_INTERVAL_MS = _AUTO_UPDATE_CHECK_INTERVAL_S * 1_000
 
 
 def _action_label(action_id):
