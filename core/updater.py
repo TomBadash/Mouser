@@ -88,23 +88,6 @@ def _fetch_latest_info() -> dict:
     except Exception:
         pass
 
-    # Fallback: parse GitHub Releases API
-    data = json.loads(_get(GITHUB_API_LATEST))
-    version = data.get("tag_name", "").lstrip("v")
-    assets: dict[str, str] = {
-        a["name"]: a["browser_download_url"] for a in data.get("assets", [])
-    }
-    return {
-        "version": version,
-        "date": data.get("published_at", ""),
-        "downloads": {
-            "windows-x64":  assets.get("Mouser-Windows.zip", ""),
-            "macos-arm64":  assets.get("Mouser-macOS.zip", ""),
-            "macos-x86_64": assets.get("Mouser-macOS-intel.zip", ""),
-            "linux-deb":    assets.get("Mouser-Linux.deb", ""),
-            "linux-zip":    assets.get("Mouser-Linux.zip", ""),
-        },
-    }
 
 
 # ── public status constants ─────────────────────────────────────────────────
@@ -234,7 +217,6 @@ class Updater:
         if not key:
             self._emit_finished(STATUS_ERROR, f"Unsupported platform: {sys.platform}")
             return
-
         url = (self._latest_info or {}).get("downloads", {}).get(key, "")
         if not url:
             self._emit_finished(STATUS_ERROR, f"No download URL for {key}")
@@ -327,8 +309,7 @@ class Updater:
 
     def _install_macos(self, zip_path: str) -> None:
         """Extract .app from zip and replace the running bundle in-place."""
-        import zipfile
-
+        import subprocess
         # Maximum directory levels to walk up when searching for the .app bundle.
         _MAX_APP_SEARCH_DEPTH = 8
 
@@ -351,8 +332,8 @@ class Updater:
 
         extract_dir = Path(tempfile.mkdtemp(prefix="mouser_macos_new_"))
         try:
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(str(extract_dir))
+            
+            subprocess.run(["unzip", zip_path, "-d", extract_dir], check=True)   
 
             new_app: Optional[Path] = None
             for entry in extract_dir.iterdir():

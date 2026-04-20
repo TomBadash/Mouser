@@ -133,7 +133,7 @@ jobs:
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/${REPO}/releases/download/${{ github.ref_name }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/latest"
           cat > latest.json << EOF
           {
             "version": "${VERSION}",
