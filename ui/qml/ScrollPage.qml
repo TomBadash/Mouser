@@ -1009,9 +1009,9 @@ Item {
                         width: parent.width
                         spacing: 10
 
-                        // Check for Update button
+                        // Check for Update button — styled like other setting buttons
                         Rectangle {
-                            width: checkUpdateText.implicitWidth + 28
+                            width: Math.max(140, checkUpdateText.implicitWidth + 32)
                             height: 38
                             radius: 10
                             visible: backend.updateStatus !== "downloading" && backend.updateStatus !== "installing"
@@ -1023,25 +1023,12 @@ Item {
 
                             Behavior on color { ColorAnimation { duration: 120 } }
 
-                            Row {
+                            Text {
+                                id: checkUpdateText
                                 anchors.centerIn: parent
-                                spacing: 6
-
-                                AppIcon {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 14
-                                    height: 14
-                                    name: "download"
-                                    iconColor: scrollPage.theme.textPrimary
-                                }
-
-                                Text {
-                                    id: checkUpdateText
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: s["update.check_now"] || "Check for Update"
-                                    font { family: uiState.fontFamily; pixelSize: 12 }
-                                    color: scrollPage.theme.textPrimary
-                                }
+                                text: s["update.check_now"] || "Check for Update"
+                                font { family: uiState.fontFamily; pixelSize: 13 }
+                                color: scrollPage.theme.textPrimary
                             }
 
                             MouseArea {
@@ -1055,7 +1042,7 @@ Item {
 
                         // Download & Install button (shown only when update available)
                         Rectangle {
-                            width: dlText.implicitWidth + 28
+                            width: Math.max(140, dlText.implicitWidth + 32)
                             height: 38
                             radius: 10
                             visible: backend.updateStatus === "available"
@@ -1069,7 +1056,7 @@ Item {
                                 id: dlText
                                 anchors.centerIn: parent
                                 text: s["update.download_install"] || "Download & Install"
-                                font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
                                 color: scrollPage.theme.bgSidebar
                             }
 
@@ -1084,7 +1071,7 @@ Item {
 
                         // Restart button (shown after install)
                         Rectangle {
-                            width: restartText.implicitWidth + 28
+                            width: Math.max(140, restartText.implicitWidth + 32)
                             height: 38
                             radius: 10
                             visible: backend.updateStatus === "installed"
@@ -1098,7 +1085,7 @@ Item {
                                 id: restartText
                                 anchors.centerIn: parent
                                 text: s["update.restart"] || "Restart Now"
-                                font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
                                 color: scrollPage.theme.bgSidebar
                             }
 
@@ -1107,7 +1094,7 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: Qt.quit()
+                                onClicked: backend.restartApp()
                             }
                         }
                     }

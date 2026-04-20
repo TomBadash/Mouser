@@ -46,7 +46,10 @@ from core.updater import (
 )
 
 # Delay (ms) before the startup auto-update check so the UI is fully ready.
-_AUTO_UPDATE_CHECK_DELAY_MS = 5000
+_AUTO_UPDATE_CHECK_DELAY_MS    = 5_000
+# How often to repeat the auto-update check (24 hours).
+_AUTO_UPDATE_CHECK_INTERVAL_S  = 86_400
+_AUTO_UPDATE_CHECK_INTERVAL_MS = _AUTO_UPDATE_CHECK_INTERVAL_S * 1_000
 
 
 def _action_label(action_id):
@@ -132,6 +135,11 @@ class Backend(QObject):
             on_progress=self._onUpdaterProgress,
             on_finished=self._onUpdaterFinished,
         )
+        # Daily repeating timer for auto-update checks.
+        # Only started when auto_update is enabled.
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.setInterval(_AUTO_UPDATE_CHECK_INTERVAL_MS)
+        self._update_check_timer.timeout.connect(self._periodicUpdateCheck)
 
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
@@ -181,9 +189,14 @@ class Backend(QObject):
         else:
             self._cfg.setdefault("settings", {})["start_at_login"] = False
         self._sync_connected_device_info()
-        # Schedule auto-update check on startup (delayed so the UI is ready first)
+        # Schedule auto-update check on startup (delayed so the UI is fully ready).
+        # Only fire if auto_update is enabled AND the last check was >24 h ago.
         if self._cfg.get("settings", {}).get("auto_update", True):
-            QTimer.singleShot(_AUTO_UPDATE_CHECK_DELAY_MS, self._updater.check)
+            last_check = self._cfg.get("settings", {}).get("last_update_check", 0)
+            elapsed = time.time() - last_check
+            if elapsed >= _AUTO_UPDATE_CHECK_INTERVAL_S:
+                QTimer.singleShot(_AUTO_UPDATE_CHECK_DELAY_MS, self._updater.check)
+            self._update_check_timer.start()
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -729,6 +742,10 @@ class Backend(QObject):
         enabled = bool(value)
         self._cfg.setdefault("settings", {})["auto_update"] = enabled
         save_config(self._cfg)
+        if enabled:
+            self._update_check_timer.start()
+        else:
+            self._update_check_timer.stop()
         self.settingsChanged.emit()
 
     @Slot()
@@ -748,6 +765,34 @@ class Backend(QObject):
             self._update_download_progress = 0.0
             self.updateStatusChanged.emit()
             self._updater.download_and_install()
+
+    @Slot()
+    def restartApp(self):
+        """Restart the application (used after a successful update install)."""
+        from PySide6.QtGui import QGuiApplication
+        if sys.platform == "darwin":
+            # Locate the .app bundle and reopen it, then quit this process.
+            import subprocess as _sp
+            from pathlib import Path as _Path
+            candidate = _Path(sys.executable)
+            bundle = None
+            for _ in range(8):
+                if candidate.suffix == ".app":
+                    bundle = candidate
+                    break
+                candidate = candidate.parent
+            if bundle and bundle.exists():
+                _sp.Popen(["open", "-n", str(bundle)])
+        QGuiApplication.quit()
+
+    @Slot()
+    def _periodicUpdateCheck(self):
+        """Called every 24 h by the daily timer to silently check for updates."""
+        if not self._updater.is_busy():
+            self._update_status = STATUS_CHECKING
+            self._update_download_progress = 0.0
+            self.updateStatusChanged.emit()
+            self._updater.check()
 
     # Updater background callbacks → marshal to Qt main thread
 
@@ -769,6 +814,14 @@ class Backend(QObject):
         self._update_detail = detail
         if status == STATUS_AVAILABLE:
             self._update_latest_version = detail
+        # Persist the last-check time after any completed check operation
+        # (not during download/install which are follow-on operations).
+        if status not in (
+            STATUS_DOWNLOADING, STATUS_INSTALLING,
+            STATUS_INSTALLED, STATUS_NEEDS_MANUAL,
+        ):
+            self._cfg.setdefault("settings", {})["last_update_check"] = time.time()
+            save_config(self._cfg)
         self.updateStatusChanged.emit()
 
     @Slot(bool)

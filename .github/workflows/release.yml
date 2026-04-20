@@ -4,19 +4,119 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type (ignored when triggered by a tag push)'
+        required: true
+        type: choice
+        options: [none, patch, minor, major]
+        default: patch
+      release_on_github:
+        description: 'Create / update GitHub release (false = build artifacts only)'
+        required: true
+        type: boolean
+        default: true
+
+# One release pipeline per tag to prevent duplicate runs.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  MOUSER_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-  MOUSER_GIT_COMMIT: ${{ github.sha }}
-  MOUSER_GIT_DIRTY: "false"
-
 jobs:
+  # ── Determine version ────────────────────────────────────────────────────────
+  # Skip tag-push events that this workflow itself creates (loop prevention).
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.actor != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    outputs:
+      version:        ${{ steps.ver.outputs.version }}
+      tag:            ${{ steps.ver.outputs.tag }}
+      should_release: ${{ steps.ver.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Use a PAT or the default token — PAT required only if branch protection
+          # prevents github-actions[bot] from pushing to the default branch.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute version (and bump if requested)
+        id: ver
+        shell: bash
+        run: |
+          # ── Read current version from version.py ──────────────────────────
+          CURRENT=$(python3 - <<'PY'
+          with open("core/version.py") as f:
+              for line in f:
+                  if "_DEFAULT_APP_VERSION" in line and "=" in line:
+                      v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                      print(v)
+                      break
+          PY
+          )
+          echo "Current version in version.py: ${CURRENT}"
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # ── Tag-push path: use the tag (strip leading 'v') ───────────────
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            SHOULD_RELEASE="true"
+          else
+            # ── workflow_dispatch path ────────────────────────────────────────
+            BUMP="${{ inputs.bump }}"
+            SHOULD_RELEASE="${{ inputs.release_on_github }}"
+
+            if [[ "$BUMP" != "none" ]]; then
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+              case "$BUMP" in
+                major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+                minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+                patch) PATCH=$((PATCH+1)) ;;
+              esac
+              VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+              # Update version.py in-place
+              sed -i "s/_DEFAULT_APP_VERSION = \"${CURRENT}\"/_DEFAULT_APP_VERSION = \"${VERSION}\"/" core/version.py
+              echo "Bumped version.py: ${CURRENT} → ${VERSION}"
+
+              git config user.name  "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add core/version.py
+              git commit -m "chore: bump version to ${VERSION} [skip ci]"
+              git push origin HEAD
+            else
+              VERSION="$CURRENT"
+            fi
+
+            TAG="v${VERSION}"
+
+            # Push the tag so release-drafter can resolve the correct commit range
+            # and so the release step can reference it. The resulting push:tags event
+            # is skipped above because actor == github-actions[bot].
+            if [[ "$SHOULD_RELEASE" == "true" ]]; then
+              git tag "$TAG" || true   # no-op if it already exists
+              git push origin "$TAG" || true
+            fi
+          fi
+
+          echo "version=${VERSION}"        >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"               >> "$GITHUB_OUTPUT"
+          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
+
+  # ── Platform builds (all depend on prepare) ──────────────────────────────────
   build-windows:
+    needs: prepare
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MOUSER_VERSION:    ${{ needs.prepare.outputs.version }}
+      MOUSER_GIT_COMMIT: ${{ github.sha }}
+      MOUSER_GIT_DIRTY:  "false"
     steps:
       - uses: actions/checkout@v6
 
@@ -39,6 +139,7 @@ jobs:
           path: Mouser-Windows.zip
 
   build-macos:
+    needs: prepare
     name: build-macos (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -57,6 +158,11 @@ jobs:
             artifact_name: Mouser-macOS-intel
             archive_name: Mouser-macOS-intel.zip
     runs-on: ${{ matrix.runner }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MOUSER_VERSION:    ${{ needs.prepare.outputs.version }}
+      MOUSER_GIT_COMMIT: ${{ github.sha }}
+      MOUSER_GIT_DIRTY:  "false"
     steps:
       - uses: actions/checkout@v6
 
@@ -84,7 +190,13 @@ jobs:
           path: ${{ matrix.archive_name }}
 
   build-linux:
+    needs: prepare
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MOUSER_VERSION:    ${{ needs.prepare.outputs.version }}
+      MOUSER_GIT_COMMIT: ${{ github.sha }}
+      MOUSER_GIT_DIRTY:  "false"
     steps:
       - uses: actions/checkout@v6
 
@@ -119,61 +231,95 @@ jobs:
           name: Mouser-Linux-deb
           path: dist/Mouser-Linux.deb
 
+  # ── Create GitHub release (conditional) ──────────────────────────────────────
   release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-windows, build-macos, build-linux]
+    if: needs.prepare.outputs.should_release == 'true'
+    needs: [prepare, build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
 
       - name: Generate latest.json
+        shell: bash
         run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="${{ needs.prepare.outputs.tag }}"
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${REPO}/releases/download/latest"
-          cat > latest.json << EOF
-          {
-            "version": "${VERSION}",
-            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "downloads": {
-              "windows-x64":  "${BASE_URL}/Mouser-Windows.zip",
-              "macos-arm64":  "${BASE_URL}/Mouser-macOS.zip",
-              "macos-x86_64": "${BASE_URL}/Mouser-macOS-intel.zip",
-              "linux-deb":    "${BASE_URL}/Mouser-Linux.deb",
-              "linux-zip":    "${BASE_URL}/Mouser-Linux.zip"
-            }
-          }
-          EOF
-          echo "==> Generated latest.json:"
-          cat latest.json
+          # Build JSON with jq to avoid shell-variable injection in Python
+          jq -n \
+            --arg version  "$VERSION" \
+            --arg date     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win      "${BASE_URL}/Mouser-Windows.zip" \
+            --arg mac_arm  "${BASE_URL}/Mouser-macOS.zip" \
+            --arg mac_x64  "${BASE_URL}/Mouser-macOS-intel.zip" \
+            --arg linux_deb "${BASE_URL}/Mouser-Linux.deb" \
+            --arg linux_zip "${BASE_URL}/Mouser-Linux.zip" \
+            '{
+              version:   $version,
+              date:      $date,
+              downloads: {
+                "windows-x64":  $win,
+                "macos-arm64":  $mac_arm,
+                "macos-x86_64": $mac_x64,
+                "linux-deb":    $linux_deb,
+                "linux-zip":    $linux_zip
+              }
+            }' | tee latest.json
+
+      # Generate release notes from merged PRs (with contributors) and any
+      # conventional commits that are not part of a merged PR.
+      - name: Generate changelog
+        id: changelog
+        uses: release-drafter/release-drafter@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-name: release-drafter.yml
+          tag:  ${{ needs.prepare.outputs.tag }}
+          name: "Mouser ${{ needs.prepare.outputs.tag }}"
+          # publish=false: only draft so we can read the body; we publish via gh below
+          publish: false
+          disable-autolabeler: true
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            # Release already exists — just upload the assets
-            gh release upload "${{ github.ref_name }}" \
-              --repo "${{ github.repository }}" \
-              --clobber \
-              Mouser-Windows/Mouser-Windows.zip \
-              Mouser-macOS/Mouser-macOS.zip \
-              Mouser-macOS-intel/Mouser-macOS-intel.zip \
-              Mouser-Linux/Mouser-Linux.zip \
-              Mouser-Linux-deb/Mouser-Linux.deb \
-              latest.json
+          TAG="${{ needs.prepare.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          NOTES_FILE="$(mktemp)"
+          cat > "$NOTES_FILE" <<'NOTES'
+          ${{ steps.changelog.outputs.body }}
+          NOTES
+
+          ASSETS=(
+            "Mouser-Windows/Mouser-Windows.zip"
+            "Mouser-macOS/Mouser-macOS.zip"
+            "Mouser-macOS-intel/Mouser-macOS-intel.zip"
+            "Mouser-Linux/Mouser-Linux.zip"
+            "Mouser-Linux-deb/Mouser-Linux.deb"
+            "latest.json"
+          )
+
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber "${ASSETS[@]}"
+            gh release edit   "$TAG" --repo "$REPO" \
+              --title "Mouser ${TAG}" \
+              --notes-file "$NOTES_FILE" \
+              --draft=false
           else
-            gh release create "${{ github.ref_name }}" \
-              --repo "${{ github.repository }}" \
-              --title "Mouser ${{ github.ref_name }}" \
-              --generate-notes \
-              Mouser-Windows/Mouser-Windows.zip \
-              Mouser-macOS/Mouser-macOS.zip \
-              Mouser-macOS-intel/Mouser-macOS-intel.zip \
-              Mouser-Linux/Mouser-Linux.zip \
-              Mouser-Linux-deb/Mouser-Linux.deb \
-              latest.json
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "Mouser ${TAG}" \
+              --notes-file "$NOTES_FILE" \
+              "${ASSETS[@]}"
           fi
+
