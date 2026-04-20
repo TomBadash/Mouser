@@ -57,6 +57,97 @@ class _FakeHidDevice:
         self.close = Mock()
 
 
+class HidEnumerationFallbackTests(unittest.TestCase):
+    @staticmethod
+    def _printed_messages(print_mock):
+        return [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+
+    def test_try_connect_accepts_known_device_without_usage_metadata(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB034,
+            "usage_page": 0x0000,
+            "usage": 0x0000,
+            "transport": "Bluetooth Low Energy",
+            "product_string": "MX Master 3S",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x10
+            return None
+
+        with (
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(
+                    enumerate=lambda vid, pid: [info],
+                    device=lambda: fake_dev,
+                ),
+                create=True,
+            ),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch("builtins.print") as print_mock,
+        ):
+            self.assertTrue(listener._try_connect())
+
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(
+            any(
+                "Accepting known Logitech device without vendor usage metadata"
+                in message
+                for message in messages
+            )
+        )
+        self.assertEqual(listener.connected_device.display_name, "MX Master 3S")
+
+    def test_vendor_hid_infos_logs_when_logitech_interfaces_are_filtered_out(self):
+        info = {
+            "product_id": 0x1234,
+            "usage_page": 0x0000,
+            "usage": 0x0000,
+            "transport": "Bluetooth Low Energy",
+            "product_string": "Unknown Logitech",
+            "path": b"/dev/hidraw-test",
+        }
+
+        with (
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(enumerate=lambda vid, pid: [info]),
+                create=True,
+            ),
+            patch("builtins.print") as print_mock,
+        ):
+            infos = hid_gesture.HidGestureListener._vendor_hid_infos()
+
+        self.assertEqual(infos, [])
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(
+            any(
+                "hidapi found Logitech interfaces, but none matched vendor "
+                "usage metadata or known-device fallback"
+                in message
+                for message in messages
+            )
+        )
+
+
 class HidDiscoveryDiagnosticsTests(unittest.TestCase):
     def _make_listener(self):
         listener = hid_gesture.HidGestureListener()

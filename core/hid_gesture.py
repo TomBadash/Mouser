@@ -722,9 +722,32 @@ class HidGestureListener:
 
         if HIDAPI_OK and _BACKEND_PREFERENCE in ("auto", "hidapi"):
             try:
-                for info in _hid.enumerate(LOGI_VID, 0):
-                    if info.get("usage_page", 0) >= 0xFF00:
+                raw_infos = list(_hid.enumerate(LOGI_VID, 0))
+                hidapi_candidates = 0
+                fallback_candidates = 0
+                for info in raw_infos:
+                    pid = int(info.get("product_id", 0) or 0)
+                    usage_page = int(info.get("usage_page", 0) or 0)
+                    usage = int(info.get("usage", 0) or 0)
+                    product = info.get("product_string")
+                    if usage_page >= 0xFF00:
                         add_info(dict(info, source="hidapi-enumerate"))
+                        hidapi_candidates += 1
+                        continue
+                    if resolve_device(product_id=pid, product_name=product):
+                        print(
+                            "[HidGesture] Accepting known Logitech device "
+                            "without vendor usage metadata for fallback probe "
+                            f"PID=0x{pid:04X} UP=0x{usage_page:04X} "
+                            f"usage=0x{usage:04X} product={product or '?'}"
+                        )
+                        add_info(dict(info, source="hidapi-enumerate-fallback"))
+                        fallback_candidates += 1
+                if raw_infos and not (hidapi_candidates or fallback_candidates):
+                    print(
+                        "[HidGesture] hidapi found Logitech interfaces, but none "
+                        "matched vendor usage metadata or known-device fallback"
+                    )
             except Exception as exc:
                 print(f"[HidGesture] hidapi enumerate error: {exc}")
 
