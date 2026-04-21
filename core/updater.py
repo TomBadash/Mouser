@@ -205,7 +205,13 @@ class Updater:
             return
 
         self._latest_info = info
-        if _version_tuple(latest) > _version_tuple(APP_VERSION):
+        key = _platform_key()
+        if not key:
+            self._emit_finished(STATUS_ERROR, f"Unsupported platform: {sys.platform}")
+            return
+        # test for url to ensure this update contains a package for this platform
+        url = (self._latest_info or {}).get("downloads", {}).get(key, "")
+        if _version_tuple(latest) > _version_tuple(APP_VERSION) and url:
             self._emit_finished(STATUS_AVAILABLE, latest)
         else:
             self._emit_finished(STATUS_UP_TO_DATE, latest)

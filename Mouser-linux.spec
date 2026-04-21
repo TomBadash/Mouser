@@ -1,114 +1,143 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec for building a portable Linux distribution.
-
-Run:
-    python3 -m PyInstaller Mouser-linux.spec --noconfirm
-
-Output: dist/Mouser/  (directory with Mouser executable + dependencies)
-"""
 
 import os
 import json
 import subprocess
+import sysconfig
+import shutil
+from PySide6 import QtCore
 
 ROOT = os.path.abspath(".")
+DIST_DIR = os.path.join(ROOT, "dist", "Mouser")
 BUILD_INFO_PATH = os.path.join(ROOT, "build", "mouser_build_info.json")
 
 
-def _load_app_version() -> str:
+# =========================
+# BUILD INFO
+# =========================
+
+def _load_app_version():
     version_path = os.path.join(ROOT, "core", "version.py")
-    namespace = {"__file__": version_path}
-    with open(version_path, encoding="utf-8") as version_file:
-        exec(version_file.read(), namespace)
-    return namespace["APP_VERSION"]
+    ns = {"__file__": version_path}
+    with open(version_path, encoding="utf-8") as f:
+        exec(f.read(), ns)
+    return ns["APP_VERSION"]
 
 
-def _run_git(args):
-    try:
-        return subprocess.check_output(
-            ["git", *args],
-            cwd=ROOT,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=0.5,
-        ).strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def _git_dirty():
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=0.5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and bool(result.stdout.strip())
-
-
-def _write_build_info(version: str) -> str:
-    commit = os.environ.get("MOUSER_GIT_COMMIT", "").strip() or _run_git(["rev-parse", "HEAD"])
-    dirty_env = os.environ.get("MOUSER_GIT_DIRTY")
-    if dirty_env:
-        dirty = dirty_env.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        dirty = _git_dirty()
-
+def _write_build_info(v):
     os.makedirs(os.path.dirname(BUILD_INFO_PATH), exist_ok=True)
-    with open(BUILD_INFO_PATH, "w", encoding="utf-8") as build_info_file:
-        json.dump(
-            {
-                "version": version,
-                "commit": commit,
-                "dirty": dirty,
-            },
-            build_info_file,
-        )
+    with open(BUILD_INFO_PATH, "w", encoding="utf-8") as f:
+        json.dump({"version": v}, f)
     return BUILD_INFO_PATH
 
 
 APP_VERSION = _load_app_version()
 BUILD_INFO_DATA = _write_build_info(APP_VERSION)
 
+
+# =========================
+# PYTHON LIB
+# =========================
+
+libpython_path = os.path.join(
+    sysconfig.get_config_var("LIBDIR"),
+    sysconfig.get_config_var("INSTSONAME"),
+)
+
+
+# =========================
+# QT PATHS
+# =========================
+
+qt_lib_path = QtCore.QLibraryInfo.path(QtCore.QLibraryInfo.LibrariesPath)
+qt_plugin_path = QtCore.QLibraryInfo.path(QtCore.QLibraryInfo.PluginsPath)
+
+
+# =========================
+# ICU DETECTION (DYNAMIC)
+# =========================
+
+def find_icu_lib(name):
+    for f in os.listdir(qt_lib_path):
+        if f.startswith(name):
+            return os.path.join(qt_lib_path, f)
+    raise RuntimeError(f"Missing ICU lib: {name}")
+
+
+icu_libs = [
+    (find_icu_lib("libicudata"), "."),
+    (find_icu_lib("libicuuc"), "."),
+    (find_icu_lib("libicui18n"), "."),
+]
+
+
+# =========================
+# MINIMAL QT LIBS
+# =========================
+
+qt_binaries = [
+    (os.path.join(qt_lib_path, "libQt6Core.so.6"), "."),
+    (os.path.join(qt_lib_path, "libQt6Gui.so.6"), "."),
+    (os.path.join(qt_lib_path, "libQt6Qml.so.6"), "."),
+    (os.path.join(qt_lib_path, "libQt6Quick.so.6"), "."),
+    (os.path.join(qt_lib_path, "libQt6Network.so.6"), "."),
+
+    *icu_libs,
+
+    (libpython_path, "."),
+]
+
+
+# =========================
+# MINIMAL QT PLUGINS
+# =========================
+
+qt_plugins = [
+    (os.path.join(qt_plugin_path, "platforms"), "platforms"),
+    (os.path.join(qt_plugin_path, "imageformats"), "imageformats"),
+]
+
+
+# =========================
+# ANALYSIS (NO QT AUTO EXPANSION)
+# =========================
+
 a = Analysis(
     ["main_qml.py"],
     pathex=[ROOT],
-    binaries=[],
+
+    binaries=qt_binaries + qt_plugins,
+
     datas=[
-        (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
+        (os.path.join(ROOT, "ui/qml"), "ui/qml"),
         (os.path.join(ROOT, "images"), "images"),
         (BUILD_INFO_DATA, "."),
     ],
+
     hiddenimports=[
-        "hid",
-        "logging.handlers",
-        "evdev",
-        "ui.locale_manager",
-        "PySide6.QtQuick",
-        "PySide6.QtQuickControls2",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
         "PySide6.QtQml",
+        "PySide6.QtQuick",
         "PySide6.QtNetwork",
-        "PySide6.QtOpenGL",
-        "PySide6.QtSvg",
+        "PySide6.QtQuickControls2",
     ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
+
+    # disable PySide6 auto collection
+    hooksconfig={
+        "PySide6": {
+            "exclude_qml": True,
+            "exclude_plugins": True,
+        }
+    },
+
     excludes=[
-        # Trim PySide6 modules the app does not import at runtime.
         "PySide6.QtWebEngine",
         "PySide6.QtWebEngineCore",
         "PySide6.QtWebEngineWidgets",
-        "PySide6.QtWebChannel",
-        "PySide6.QtWebSockets",
+        "PySide6.QtMultimedia",
         "PySide6.Qt3DCore",
+        "PySide6.QtQuick3D",
         "PySide6.Qt3DRender",
         "PySide6.Qt3DInput",
         "PySide6.Qt3DLogic",
@@ -159,120 +188,14 @@ a = Analysis(
         "idlelib",
         "turtledemo",
         "turtle",
-        "sqlite3",
-        "multiprocessing",
     ],
+
     noarchive=False,
 )
 
-# Keep only the Qt runtime pieces Mouser actually uses. The negative-match
-# approach still let large transitive Qt payload through on Linux.
-QT_KEEP = {
-    "Qt6Core",
-    "Qt6Gui",
-    "Qt6Widgets",
-    "Qt6Network",
-    "Qt6OpenGL",
-    "Qt6Qml",
-    "Qt6QmlCore",
-    "Qt6QmlMeta",
-    "Qt6QmlModels",
-    "Qt6QmlNetwork",
-    "Qt6QmlWorkerScript",
-    "Qt6Quick",
-    "Qt6QuickControls2",
-    "Qt6QuickControls2Impl",
-    "Qt6QuickControls2Basic",
-    "Qt6QuickControls2BasicStyleImpl",
-    "Qt6QuickControls2Material",
-    "Qt6QuickControls2MaterialStyleImpl",
-    "Qt6QuickTemplates2",
-    "Qt6QuickLayouts",
-    "Qt6QuickEffects",
-    "Qt6QuickShapes",
-    "Qt6ShaderTools",
-    "Qt6Svg",
-    "pyside6",
-    "pyside6qml",
-    "shiboken6",
-}
-
-KEEP_PLUGIN_DIRS = {
-    "platforms",
-    "imageformats",
-    "styles",
-    "iconengines",
-    "platforminputcontexts",
-    "xcbglintegrations",
-    "platformthemes",
-    "tls",
-    "egldeviceintegrations",
-    "networkinformation",
-    "generic",
-    "wayland-decoration-client",
-    "wayland-graphics-integration-client",
-    "wayland-shell-integration",
-}
-
-KEEP_QML_TOP = {"QtCore", "QtQml", "QtQuick", "QtNetwork"}
-KEEP_QTQUICK = {"Controls", "Layouts", "Templates", "Window"}
-
-
-def normalized_stem(path):
-    base = os.path.basename(path)
-    if ".so" in base:
-        return base.split(".so", 1)[0].removeprefix("lib")
-    stem = os.path.splitext(base)[0]
-    if stem.endswith(".abi3"):
-        stem = stem[:-5]
-    return stem
-
-
-def should_keep(path):
-    normalized = path.replace("\\", "/")
-    lower = normalized.lower()
-
-    if "PySide6" not in normalized and "pyside6" not in lower:
-        return True
-
-    stem = normalized_stem(normalized)
-    if stem in QT_KEEP:
-        return True
-
-    base = os.path.basename(normalized)
-    if base.endswith(".abi3.so"):
-        return True
-
-    plugin_marker = "/plugins/"
-    plugin_index = lower.find(plugin_marker)
-    if plugin_index != -1:
-        plugin_path = normalized[plugin_index + len(plugin_marker) :]
-        plugin_dir = plugin_path.split("/", 1)[0]
-        return plugin_dir in KEEP_PLUGIN_DIRS and base != "libqpdf.so"
-
-    qml_marker = "/qml/"
-    qml_index = lower.find(qml_marker)
-    if qml_index != -1:
-        qml_path = normalized[qml_index + len(qml_marker) :]
-        parts = [part for part in qml_path.split("/") if part]
-        if not parts:
-            return True
-        if parts[0] not in KEEP_QML_TOP:
-            return False
-        if parts[0] == "QtQuick" and len(parts) > 1 and parts[1] not in KEEP_QTQUICK:
-            return False
-        style_parts = {part.lower() for part in parts}
-        if style_parts & {"fusion", "imagine", "universal", "fluentwinui3", "ios", "macos"}:
-            return False
-        return True
-
-    return False
-
-
-a.binaries = [b for b in a.binaries if should_keep(b[0])]
-a.datas = [d for d in a.datas if should_keep(d[0])]
 
 pyz = PYZ(a.pure)
+
 
 exe = EXE(
     pyz,
@@ -280,20 +203,79 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Mouser",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
     console=False,
 )
+
 
 coll = COLLECT(
     exe,
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
     name="Mouser",
 )
+
+
+# =========================
+# PRUNE UNUSED FILES
+# =========================
+
+def prune():
+    if not os.path.exists(DIST_DIR):
+        return
+
+    print("==> Pruning build...")
+
+    for root, dirs, files in os.walk(DIST_DIR, topdown=False):
+
+        for f in files:
+            p = os.path.join(root, f)
+            lower = f.lower()
+
+            # remove Qt junk
+            if any(x in lower for x in [
+                "webengine", "pdf", "multimedia",
+                "3d", "charts"
+            ]):
+                os.remove(p)
+                continue
+
+        for d in dirs:
+            dp = os.path.join(root, d)
+
+            if any(x in d.lower() for x in [
+                "webengine",
+                "translations",
+                "examples",
+            ]):
+                shutil.rmtree(dp, ignore_errors=True)
+
+
+prune()
+
+
+# =========================
+# DEBUG: BIG FILES
+# =========================
+
+def print_big_files():
+    if not os.path.exists(DIST_DIR):
+        return
+
+    files = []
+    for r, _, f in os.walk(DIST_DIR):
+        for x in f:
+            p = os.path.join(r, x)
+            try:
+                files.append((os.path.getsize(p), p))
+            except:
+                pass
+
+    files.sort(reverse=True)
+
+    print("\n== TOP 30 FILES ==")
+    for s, p in files[:30]:
+        print(f"{s/1024/1024:.2f} MB  {p}")
+
+
+print_big_files()
