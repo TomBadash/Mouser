@@ -89,7 +89,6 @@ def _fetch_latest_info() -> dict:
         pass
 
 
-
 # ── public status constants ─────────────────────────────────────────────────
 
 STATUS_IDLE          = "idle"
@@ -355,7 +354,6 @@ class Updater:
 
         extract_dir = Path(tempfile.mkdtemp(prefix="mouser_macos_new_"))
         try:
-            
             subprocess.run(["unzip", zip_path, "-d", extract_dir], check=True)   
 
             new_app: Optional[Path] = None
