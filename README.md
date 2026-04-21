@@ -333,9 +333,11 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
                     └─────────────┘
 ```
 
-### Mouse Hook (`mouse_hook.py`)
+### Mouse Hook (`mouse_hook.py` + `mouse_hook_*.py`)
 
-Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstraction:
+Mouser uses a shared `MouseHook` façade in `core/mouse_hook.py`, with the
+platform implementations split into dedicated modules behind the same
+abstraction:
 
 - **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
 - **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
@@ -411,7 +413,8 @@ mouser/
 ├── core/                    # Backend logic
 │   ├── accessibility.py     # macOS Accessibility trust checks
 │   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
-│   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
+│   ├── mouse_hook.py        # Platform dispatcher shim for MouseHook
+│   ├── mouse_hook_*.py      # Platform-specific MouseHook implementations
 │   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
 │   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
 │   ├── device_layouts.py    # Device-family layout registry for QML overlays
