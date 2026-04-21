@@ -163,10 +163,8 @@ family, with support for additional Logitech models.
 <details>
 <summary>Seperated <i>(full res)</i></summary>
 <div align="center">
-<hr />
 <img src=".github/assets/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
 <img src=".github/assets/Screenshot_settings.png" alt="Mouser — Mouse & Profiles page" />
-<hr />
 </div>
 </details>
 <!-- Screenshots End -->
@@ -558,4 +556,6 @@ If <b>Mouser</b> saves you from installing <b>Logitech Options+</b>, consider su
 <b>Mouser</b> is not affiliated with or endorsed by Logitech. "Logitech", "MX Master", and "Options+" are trademarks of Logitech International S.A.
 </p>
 
-This project is licensed under the [MIT License](LICENSE).
+<p align="center">
+This project is licensed under the <a href="LICENSE">MIT License</a>.
+</p>
