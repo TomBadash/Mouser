@@ -4,21 +4,30 @@
 <a href="README.md">English</a> | <a href="README_CN.md">中文文档</a>
 </p></span>
 </div>
-
 <p align="center">
 <img src=".github/assets/banner_en.png" alt="Mouser logo" />
 </p>
-
 <p>
 A lightweight, open-source alternative to <a href="https://www.logitech.com/en-us/software/logi-options-plus">Logitech Options+</a> for
 remapping Logitech <b>HID++</b> mice. The current best experience is on the <a href="https://www.logitech.com/en-us/shop/c/mice?refine=c_filterseries%3Dmaster-series">MX Master</a>
 family, with support for additional Logitech models.
-
-<div align="center">
-<em>No telemetry data. No cloud integrations. No Logitech account connection required.</em>
-</div>
-
+<div align="center"><em>No telemetry data. No cloud integrations. No Logitech account connection required.</em></div>
 </p>
+
+<div>
+<br/>
+<span><p align="center"><strong>TOC</strong></p></span>
+<span><p align="center">
+<a href="#">Downloads</a> |
+<a href="#">Screenshots</a> |
+<a href="#">Installation</a> |
+<a href="#">Build From Source</a> |
+<a href="#">Device Coverage</a> |
+<a href="#">Contributing</a> |
+<a href="#">Support</a> |
+<a href="#">Acknowledgments</a>
+</p></span>
+</div>
 
 <hr />
 
