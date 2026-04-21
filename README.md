@@ -16,8 +16,11 @@ family, with support for additional Logitech models.
 
 <div>
 <br/>
-<span><p align="center"><strong>TOC</strong></p></span>
-<span><p align="center">
+<span>
+<p align="center">
+<strong>Sections</strong>
+</p>
+<p align="center">
 <a href="#">Downloads</a> |
 <a href="#">Screenshots</a> |
 <a href="#">Installation</a> |
@@ -26,7 +29,8 @@ family, with support for additional Logitech models.
 <a href="#">Contributing</a> |
 <a href="#">Support</a> |
 <a href="#">Acknowledgments</a>
-</p></span>
+</p>
+</span>
 </div>
 
 <hr />
