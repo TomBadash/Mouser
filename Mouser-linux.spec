@@ -11,10 +11,14 @@ Output: dist/Mouser/  (directory with Mouser executable + dependencies)
 import os
 import json
 import subprocess
+import sys
+
+ROOT = os.path.abspath(".")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from build_support import should_keep_linux_qt_asset
 
-ROOT = os.path.abspath(".")
 BUILD_INFO_PATH = os.path.join(ROOT, "build", "mouser_build_info.json")
 
 
