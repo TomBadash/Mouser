@@ -9,11 +9,16 @@
 <img src=".github/assets/banner_en.png" alt="Mouser logo" />
 </p>
 
-A lightweight, open-source alternative to **Logitech Options+** for
-remapping Logitech **HID++** mice. The current best experience is on the **MX Master**
+<p>
+A lightweight, open-source alternative to <a href="https://www.logitech.com/en-us/software/logi-options-plus">Logitech Options+</a> for
+remapping Logitech <b>HID++</b> mice. The current best experience is on the <a href="https://www.logitech.com/en-us/shop/c/mice?refine=c_filterseries%3Dmaster-series">MX Master</a>
 family, with support for additional Logitech models.
 
-No telemetry data. No cloud integrations. No Logitech account connection required.
+<div align="center">
+<em>No telemetry data. No cloud integrations. No Logitech account connection required.</em>
+</div>
+
+</p>
 
 <hr />
 
@@ -155,7 +160,15 @@ No telemetry data. No cloud integrations. No Logitech account connection require
   <img src=".github/assets/screenshots.png" alt="Mouser — Mouse & Profiles page" />
 </p>
 
-<details><summary>Seperated <i>(full res)</i></summary></details>
+<details>
+<summary>Seperated <i>(full res)</i></summary>
+<div align="center">
+<hr />
+<img src=".github/assets/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
+<img src=".github/assets/Screenshot_settings.png" alt="Mouser — Mouse & Profiles page" />
+<hr />
+</div>
+</details>
 <!-- Screenshots End -->
 <hr />
 
