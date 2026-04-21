@@ -1,5 +1,5 @@
 <div>
-<span><img align="left" src="images/logo.png" width=40 /></span>
+<span><img align="left" src="images/logo.png" width=20 /></span>
 <span><p align="right">
 <a href="README_CN.md">English</a> | <a href="README_CN.md">中文文档</a>
 </p></span>
