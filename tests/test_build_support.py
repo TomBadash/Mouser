@@ -26,6 +26,19 @@ class LinuxQtAssetFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(should_keep_linux_qt_asset(path))
 
+    def test_keeps_core_qt_dependency_libraries(self):
+        dependency_paths = [
+            "/tmp/_internal/PySide6/Qt/lib/libQt6DBus.so.6",
+            "/tmp/_internal/PySide6/Qt/lib/libQt6XcbQpa.so.6",
+            "/tmp/_internal/PySide6/Qt/lib/libicui18n.so.73",
+            "/tmp/_internal/PySide6/Qt/lib/libicuuc.so.73",
+            "/tmp/_internal/PySide6/Qt/lib/libicudata.so.73",
+        ]
+
+        for path in dependency_paths:
+            with self.subTest(path=path):
+                self.assertTrue(should_keep_linux_qt_asset(path))
+
     def test_drops_unneeded_qt_webengine_binary(self):
         path = "/tmp/_internal/PySide6/Qt/lib/libQt6WebEngineCore.so.6"
         self.assertFalse(should_keep_linux_qt_asset(path))
