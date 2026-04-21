@@ -1,7 +1,7 @@
 <div>
 <span><img align="left" src="images/logo.png" width=20 /></span>
 <span><p align="right">
-<a href="README_CN.md">English</a> | <a href="README_CN.md">中文文档</a>
+<a href="README.md">English</a> | <a href="README_CN.md">中文文档</a>
 </p></span>
 </div>
 
@@ -40,117 +40,6 @@ family, with support for additional Logitech models.
 </p>
 
 <hr />
-
-<p align="center">
-<img src=".github/assets/features_banner_en.png" alt="Features Banner" />
-</p>
-
-<table align="center">
-<tr>
-<th>Button Remapping</th>
-</tr>
-<tr>
-<td><i>Remap any programmable button</i></td>
-<td>middle click, gesture button, back, forward, mode shift, and horizontal scroll</td>
-</tr>
-<tr>
-<td><i>Per-application profiles</i></td>
-<td>automatically switch mappings when you switch apps (e.g., Chrome vs. VS Code)</td>
-</tr>
-<tr>
-<td><i>Custom keyboard shortcuts</i></td>
-<td>define arbitrary key combinations (e.g., Ctrl+Shift+P) as button actions</td>
-</tr>
-<tr>
-<td><i>30+ built-in actions</i></td>
-<td>navigation, browser, editing, media, and desktop shortcuts that adapt per platform</td>
-</tr>
-<tr>
-<th>Device Control</th>
-</tr>
-<tr>
-<td><i>DPI / pointer speed</i></td>
-<td>slider from 200–8000 DPI with quick presets, synced live via HID++</td>
-</tr>
-<tr>
-<td><i>Smart Shift toggle</i></td>
-<td>enable or disable Logitech's ratchet-to-free-spin scroll mode switching</td>
-</tr>
-<tr>
-<td><i>Scroll direction inversion</i></td>
-<td>independent toggles for vertical and horizontal scroll</td>
-</tr>
-<tr>
-<td><i>Gesture button + swipe actions</i></td>
-<td>tap for one action, swipe up/down/left/right for others</td>
-</tr>
-<tr>
-<th>Cross-Platform</th>
-</tr>
-<tr>
-<td><i>Windows, macOS, and Linux</i></td>
-<td>native hooks on each platform (WH_MOUSE_LL, CGEventTap, evdev/uinput)</td>
-</tr>
-<tr>
-<td><i>Start at login</i></td>
-<td>Windows registry and macOS LaunchAgent, with an independent "Start minimized" tray-only option</td>
-</tr>
-<tr>
-<td><i>Single instance guard</i></td>
-<td>launching a second copy brings the existing window to the front</td>
-</tr>
-<tr>
-<th>Smart Connectivity</th>
-</tr>
-<tr>
-<td><i>Bluetooth and Logi Bolt</i></td>
-<td>works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI</td>
-</tr>
-<tr>
-<td><i>Auto-reconnection</i></td>
-<td>detects power-off/on and restores full functionality without restarting</td>
-</tr>
-<tr>
-<td><i>Live connection status</i></td>
-<td>real-time "Connected" / "Not Connected" badge in the UI</td>
-</tr>
-<tr>
-<td><i>Device-aware UI</i></td>
-<td>interactive MX Master diagram with clickable hotspots; generic fallback for other models</td>
-</tr>
-<tr>
-<th>Multi-Language UI</th>
-</tr>
-<tr>
-<td><i>English</i> / <i>Simplified Chinese</i> / <i>Traditional Chinese</i></td>
-<td>switch instantly in-app, no restart required</td>
-</tr>
-<tr>
-<td></td>
-<td>Language preference is automatically saved to <code>config.json</code> and restored on next launch</td>
-</tr>
-<tr>
-<td></td>
-<td>Covers all major UI surfaces: navigation, mouse page, settings page, dialogs, system tray/menu bar, and permission prompts</td>
-</tr>
-<tr>
-<th>Privacy First</th>
-</tr>
-<tr>
-<td><i>Fully local</i></td>
-<td>config is a JSON file, all processing happens on your machine</td>
-</tr>
-<tr>
-<td><i>System tray / menu bar</i></td>
-<td>runs quietly in the background with quick access from the tray</td>
-</tr>
-<tr>
-<td><i>Zero telemetry, zero cloud, zero account required</i></td>
-<td></td>
-</tr>
-</table>
-
-<hr />
 <!-- Screenshots -->
 <p align="center">
 <img src=".github/assets/screenshots_banner_en.png" alt="Screenshots Banner" />
@@ -168,122 +57,6 @@ family, with support for additional Logitech models.
 </div>
 </details>
 <!-- Screenshots End -->
-<hr />
-
-<p align="center">
-<img src=".github/assets/device-coverage_banner_en.png" alt="Device Coverage Banner" />
-</p>
-
-<table align="center">
-<tr>
-<th>Family / Model</th>
-<th>Detection + HID++ Probing</th>
-<th>UI Support</th>
-</tr>
-<tr>
-<td>MX Master 4 / 3S / 3 / 2S / MX Master</td>
-<td>Yes</td>
-<td>Dedicated interactive <code>mx_master</code> layout</td>
-</tr>
-<tr>
-<td>MX Anywhere 3S / 3 / 2S</td>
-<td>Yes</td>
-<td>Generic fallback card, experimental manual override</td>
-</tr>
-<tr>
-<td>MX Vertical</td>
-<td>Yes</td>
-<td>Generic fallback card</td>
-</tr>
-<tr>
-<td>Unknown Logitech HID++ mice</td>
-<td>Best effort by PID/name</td>
-<td>Generic fallback card</td>
-</tr>
-</table>
-
-> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
-
-<hr />
-
-<p align="center">
-<img src=".github/assets/default-mappings_banner_en.png" alt="Default Mappings Banner" />
-</p>
-
-<table align="center">
-<tr>
-<th>Button</th>
-<th>Default Action</th>
-</tr>
-<tr>
-<td>Back button</td>
-<td>Alt + Tab (Switch Windows)</td>
-</tr>
-<tr>
-<td>Forward button</td>
-<td>Alt + Tab (Switch Windows)</td>
-</tr>
-<tr>
-<td>Middle click</td>
-<td>Pass-through</td>
-</tr>
-<tr>
-<td>Gesture button</td>
-<td>Pass-through</td>
-</tr>
-<tr>
-<td>Mode shift (scroll click)</td>
-<td>Pass-through</td>
-</tr>
-<tr>
-<td>Horizontal scroll left</td>
-<td>Browser Back</td>
-</tr>
-<tr>
-<td>Horizontal scroll right</td>
-<td>Browser Forward</td>
-</tr>
-</table>
-
-<hr />
-
-<p align="center">
-<img src=".github/assets/actions_banner_en.png" alt="Available Actions Banner" />
-</p>
-
-Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task View`, while macOS exposes `Mission Control`, `Show Desktop`, `App Expose`, and `Launchpad`.
-
-<table align="center">
-<tr>
-<th>Category</th>
-<th>Actions</th>
-</tr>
-<tr>
-<td><b>Navigation</b></td>
-<td>Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS)</td>
-</tr>
-<tr>
-<td><b>Browser</b></td>
-<td>Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab)</td>
-</tr>
-<tr>
-<td><b>Editing</b></td>
-<td>Copy, Paste, Cut, Undo, Select All, Save, Find</td>
-</tr>
-<tr>
-<td><b>Media</b></td>
-<td>Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track</td>
-</tr>
-<tr>
-<td><b>Custom</b></td>
-<td>User-defined keyboard shortcuts (any key combination)</td>
-</tr>
-<tr>
-<td><b>Other</b></td>
-<td>Do Nothing (pass-through)</td>
-</tr>
-</table>
-
 <hr />
 
 <div>
@@ -497,6 +270,233 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 > **Automated releases:** Pushing a `v*` tag triggers the [release workflow](.github/workflows/release.yml), which builds all three platforms in CI and publishes them as GitHub Release assets.
 
 </div>
+
+<hr />
+
+<p align="center">
+<img src=".github/assets/device-coverage_banner_en.png" alt="Device Coverage Banner" />
+</p>
+
+<table align="center">
+<tr>
+<th>Family / Model</th>
+<th>Detection + HID++ Probing</th>
+<th>UI Support</th>
+</tr>
+<tr>
+<td>MX Master 4 / 3S / 3 / 2S / MX Master</td>
+<td>Yes</td>
+<td>Dedicated interactive <code>mx_master</code> layout</td>
+</tr>
+<tr>
+<td>MX Anywhere 3S / 3 / 2S</td>
+<td>Yes</td>
+<td>Generic fallback card, experimental manual override</td>
+</tr>
+<tr>
+<td>MX Vertical</td>
+<td>Yes</td>
+<td>Generic fallback card</td>
+</tr>
+<tr>
+<td>Unknown Logitech HID++ mice</td>
+<td>Best effort by PID/name</td>
+<td>Generic fallback card</td>
+</tr>
+</table>
+
+> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
+
+<hr />
+
+<p align="center">
+<img src=".github/assets/features_banner_en.png" alt="Features Banner" />
+</p>
+
+<table align="center">
+<tr>
+<th>Button Remapping</th>
+</tr>
+<tr>
+<td><i>Remap any programmable button</i></td>
+<td>middle click, gesture button, back, forward, mode shift, and horizontal scroll</td>
+</tr>
+<tr>
+<td><i>Per-application profiles</i></td>
+<td>automatically switch mappings when you switch apps (e.g., Chrome vs. VS Code)</td>
+</tr>
+<tr>
+<td><i>Custom keyboard shortcuts</i></td>
+<td>define arbitrary key combinations (e.g., Ctrl+Shift+P) as button actions</td>
+</tr>
+<tr>
+<td><i>30+ built-in actions</i></td>
+<td>navigation, browser, editing, media, and desktop shortcuts that adapt per platform</td>
+</tr>
+<tr>
+<th>Device Control</th>
+</tr>
+<tr>
+<td><i>DPI / pointer speed</i></td>
+<td>slider from 200–8000 DPI with quick presets, synced live via HID++</td>
+</tr>
+<tr>
+<td><i>Smart Shift toggle</i></td>
+<td>enable or disable Logitech's ratchet-to-free-spin scroll mode switching</td>
+</tr>
+<tr>
+<td><i>Scroll direction inversion</i></td>
+<td>independent toggles for vertical and horizontal scroll</td>
+</tr>
+<tr>
+<td><i>Gesture button + swipe actions</i></td>
+<td>tap for one action, swipe up/down/left/right for others</td>
+</tr>
+<tr>
+<th>Cross-Platform</th>
+</tr>
+<tr>
+<td><i>Windows, macOS, and Linux</i></td>
+<td>native hooks on each platform (WH_MOUSE_LL, CGEventTap, evdev/uinput)</td>
+</tr>
+<tr>
+<td><i>Start at login</i></td>
+<td>Windows registry and macOS LaunchAgent, with an independent "Start minimized" tray-only option</td>
+</tr>
+<tr>
+<td><i>Single instance guard</i></td>
+<td>launching a second copy brings the existing window to the front</td>
+</tr>
+<tr>
+<th>Smart Connectivity</th>
+</tr>
+<tr>
+<td><i>Bluetooth and Logi Bolt</i></td>
+<td>works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI</td>
+</tr>
+<tr>
+<td><i>Auto-reconnection</i></td>
+<td>detects power-off/on and restores full functionality without restarting</td>
+</tr>
+<tr>
+<td><i>Live connection status</i></td>
+<td>real-time "Connected" / "Not Connected" badge in the UI</td>
+</tr>
+<tr>
+<td><i>Device-aware UI</i></td>
+<td>interactive MX Master diagram with clickable hotspots; generic fallback for other models</td>
+</tr>
+<tr>
+<th>Multi-Language UI</th>
+</tr>
+<tr>
+<td><i>English</i> / <i>Simplified Chinese</i> / <i>Traditional Chinese</i></td>
+<td>switch instantly in-app, no restart required</td>
+</tr>
+<tr>
+<td></td>
+<td>Language preference is automatically saved to <code>config.json</code> and restored on next launch</td>
+</tr>
+<tr>
+<td></td>
+<td>Covers all major UI surfaces: navigation, mouse page, settings page, dialogs, system tray/menu bar, and permission prompts</td>
+</tr>
+<tr>
+<th>Privacy First</th>
+</tr>
+<tr>
+<td><i>Fully local</i></td>
+<td>config is a JSON file, all processing happens on your machine</td>
+</tr>
+<tr>
+<td><i>System tray / menu bar</i></td>
+<td>runs quietly in the background with quick access from the tray</td>
+</tr>
+<tr>
+<td><i>Zero telemetry, zero cloud, zero account required</i></td>
+<td></td>
+</tr>
+</table>
+
+<hr />
+
+<p align="center">
+<img src=".github/assets/default-mappings_banner_en.png" alt="Default Mappings Banner" />
+</p>
+
+<table align="center">
+<tr>
+<th>Button</th>
+<th>Default Action</th>
+</tr>
+<tr>
+<td>Back button</td>
+<td>Alt + Tab (Switch Windows)</td>
+</tr>
+<tr>
+<td>Forward button</td>
+<td>Alt + Tab (Switch Windows)</td>
+</tr>
+<tr>
+<td>Middle click</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Gesture button</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Mode shift (scroll click)</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Horizontal scroll left</td>
+<td>Browser Back</td>
+</tr>
+<tr>
+<td>Horizontal scroll right</td>
+<td>Browser Forward</td>
+</tr>
+</table>
+
+<hr />
+
+<p align="center">
+<img src=".github/assets/actions_banner_en.png" alt="Available Actions Banner" />
+</p>
+
+Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task View`, while macOS exposes `Mission Control`, `Show Desktop`, `App Expose`, and `Launchpad`.
+
+<table align="center">
+<tr>
+<th>Category</th>
+<th>Actions</th>
+</tr>
+<tr>
+<td><b>Navigation</b></td>
+<td>Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS)</td>
+</tr>
+<tr>
+<td><b>Browser</b></td>
+<td>Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab)</td>
+</tr>
+<tr>
+<td><b>Editing</b></td>
+<td>Copy, Paste, Cut, Undo, Select All, Save, Find</td>
+</tr>
+<tr>
+<td><b>Media</b></td>
+<td>Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track</td>
+</tr>
+<tr>
+<td><b>Custom</b></td>
+<td>User-defined keyboard shortcuts (any key combination)</td>
+</tr>
+<tr>
+<td><b>Other</b></td>
+<td>Do Nothing (pass-through)</td>
+</tr>
+</table>
 
 <hr />
 
