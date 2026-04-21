@@ -198,7 +198,7 @@ jobs:
       - name: Smoke test Linux bundle startup
         run: |
           set +e
-          QT_QPA_PLATFORM=offscreen timeout 15s ./dist/Mouser/Mouser
+          QT_QPA_PLATFORM=offscreen timeout --kill-after=5s 15s ./dist/Mouser/Mouser
           status=$?
           set -e
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
