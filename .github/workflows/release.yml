@@ -105,13 +105,18 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import pathlib
           import stat
           import subprocess
-          import sys
 
           bundle_root = os.path.join("dist", "Mouser")
           if not os.path.isdir(bundle_root):
               raise SystemExit(f"Missing bundle directory: {bundle_root}")
+
+          bundle_root_path = pathlib.Path(bundle_root).resolve()
+          internal_root = bundle_root_path / "_internal"
+          pyside_root = internal_root / "PySide6"
+          hidapi_root = internal_root / "hidapi.libs"
 
           def is_elf(path: str) -> bool:
               try:
@@ -123,17 +128,42 @@ jobs:
               with open(path, "rb") as fh:
                   return fh.read(4) == b"\x7fELF"
 
+          library_dirs = []
+          for root, _, files in os.walk(bundle_root):
+              if any(".so" in name for name in files):
+                  library_dirs.append(root)
+
+          ld_library_path = ":".join(dict.fromkeys(library_dirs))
+          env = os.environ.copy()
+          if ld_library_path:
+              env["LD_LIBRARY_PATH"] = ld_library_path
+
+          def should_audit(path: pathlib.Path) -> bool:
+              if path == bundle_root_path / "Mouser":
+                  return True
+              try:
+                  relative = path.relative_to(pyside_root)
+                  return "plugins" not in relative.parts and "qml" not in relative.parts
+              except ValueError:
+                  pass
+              try:
+                  path.relative_to(hidapi_root)
+                  return True
+              except ValueError:
+                  return False
+
           missing = []
           for root, _, files in os.walk(bundle_root):
               for name in files:
-                  path = os.path.join(root, name)
-                  if not is_elf(path):
+                  path = pathlib.Path(root, name).resolve()
+                  if not is_elf(str(path)) or not should_audit(path):
                       continue
                   result = subprocess.run(
-                      ["ldd", path],
+                      ["ldd", str(path)],
                       check=False,
                       capture_output=True,
                       text=True,
+                      env=env,
                   )
                   output = result.stdout + result.stderr
                   unresolved = [
