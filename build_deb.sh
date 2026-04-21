@@ -149,7 +149,7 @@ Section: utils
 Priority: optional
 Installed-Size: ${INSTALLED_SIZE_KB}
 Maintainer: Mouser Contributors <noreply@github.com>
-Homepage: https://github.com/farfromrefug/Mouser
+Homepage: https://github.com/TomBadash/Mouser
 Description: Logitech mouse button remapper
  Mouser lets you remap the buttons of your Logitech mouse on Linux,
  macOS and Windows. It supports per-application profiles, DPI control,
