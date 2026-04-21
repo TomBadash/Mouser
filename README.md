@@ -235,17 +235,23 @@ $s.Save()
 Windows portable build:
 
 ```bash
-# 1. Install PyInstaller (inside your venv)
-pip install pyinstaller
-
-# 2. Build using the included spec file
-pyinstaller Mouser.spec --noconfirm
-
-# — or simply run the build script —
+# Preferred: run the build script
+# It installs requirements, verifies `hidapi`, and packages the app
 build.bat
+
+# For packaging/debugging issues, force a clean rebuild
+build.bat --clean
+
+# Manual path: install build/runtime dependencies first
+pip install -r requirements.txt pyinstaller
+
+# Then build using the included spec file
+pyinstaller Mouser.spec --noconfirm
 ```
 
-The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
+The output is in `dist\Mouser\`. Zip that entire folder and distribute it. `build.bat`
+fails early if `hidapi` is not importable, which avoids producing a packaged app that
+cannot detect Logitech devices.
 
 macOS native bundle:
 

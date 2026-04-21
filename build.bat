@@ -24,11 +24,23 @@ if exist ".venv\Scripts\activate.bat" (
     echo [!] No .venv found — using system Python
 )
 
-:: ── 2. Ensure PyInstaller is installed ───────────────────────
-pip show pyinstaller >nul 2>&1
+:: ── 2. Install and verify build dependencies ─────────────────
+echo [*] Installing requirements...
+python -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
-    echo [*] Installing PyInstaller...
-    pip install pyinstaller
+    echo.
+    echo [ERROR] Failed to install requirements.
+    pause
+    exit /b 1
+)
+
+echo [*] Verifying hidapi import...
+python -c "import hid; print('[*] hidapi:', hid.__file__)"
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] hidapi is not importable. The packaged app would not detect Logitech devices.
+    pause
+    exit /b 1
 )
 
 :: ── 3. Clean previous build ──────────────────────────────────

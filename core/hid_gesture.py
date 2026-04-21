@@ -26,11 +26,13 @@ from core.logi_devices import (
 try:
     import hid as _hid
     HIDAPI_OK = True
+    HIDAPI_IMPORT_ERROR = None
     # On macOS, allow non-exclusive HID access so the mouse keeps working
     if sys.platform == "darwin" and hasattr(_hid, "hid_darwin_set_open_exclusive"):
         _hid.hid_darwin_set_open_exclusive(0)
-except ImportError:
+except Exception as exc:
     HIDAPI_OK = False
+    HIDAPI_IMPORT_ERROR = exc
 
 # Support both "pip install hidapi" (hid.device) and "pip install hid" (hid.Device)
 _HID_API_STYLE = None
@@ -617,7 +619,8 @@ class HidGestureListener:
 
     def start(self):
         if not HIDAPI_OK and not _MAC_NATIVE_OK:
-            print("[HidGesture] no HID backend available; install hidapi")
+            details = f": {HIDAPI_IMPORT_ERROR!r}" if HIDAPI_IMPORT_ERROR else ""
+            print(f"[HidGesture] no HID backend available; install hidapi{details}")
             return False
         if not HIDAPI_OK and _MAC_NATIVE_OK:
             print("[HidGesture] hidapi unavailable; using native macOS HID backend only")

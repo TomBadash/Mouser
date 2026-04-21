@@ -244,17 +244,23 @@ $s.Save()
 #### Windows 便携版构建
 
 ```bash
-# 1. 安装 PyInstaller（在 venv 内）
-pip install pyinstaller
-
-# 2. 使用 spec 文件构建
-pyinstaller Mouser.spec --noconfirm
-
-# 或直接运行脚本：
+# 推荐：直接运行构建脚本
+# 它会安装依赖、校验 `hidapi`，然后再打包
 build.bat
+
+# 如果在排查打包问题，建议强制完整重建
+build.bat --clean
+
+# 手动方式：先安装构建和运行依赖
+pip install -r requirements.txt pyinstaller
+
+# 然后使用 spec 文件构建
+pyinstaller Mouser.spec --noconfirm
 ```
 
-输出目录为 `dist\Mouser\`，将整个目录打包 zip 即可分发。
+输出目录为 `dist\Mouser\`，将整个目录打包 zip 即可分发。`build.bat`
+会在打包前先检查 `hidapi` 是否可导入，避免生成一个无法检测 Logitech
+设备的安装包。
 
 #### macOS 原生 App Bundle 构建
 

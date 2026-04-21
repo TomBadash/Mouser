@@ -7,11 +7,12 @@ from unittest.mock import patch
 from core.config import DEFAULT_CONFIG
 
 try:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QUrl
     from ui.backend import Backend
 except ModuleNotFoundError:
     Backend = None
     QCoreApplication = None
+    QUrl = None
 
 
 def _ensure_qapp():
@@ -69,12 +70,12 @@ class _FakeEngine:
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendDeviceLayoutTests(unittest.TestCase):
-    def _make_backend(self, engine=None):
+    def _make_backend(self, engine=None, root_dir=None):
         with (
             patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
             patch("ui.backend.save_config"),
         ):
-            return Backend(engine=engine)
+            return Backend(engine=engine, root_dir=root_dir)
 
     @staticmethod
     def _fake_create_profile(cfg, name, label=None, copy_from="default", apps=None):
@@ -91,6 +92,15 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertFalse(backend.hasInteractiveDeviceLayout)
+
+    def test_device_image_source_uses_encoded_file_url(self):
+        backend = self._make_backend(root_dir="/tmp/Mouser Build")
+
+        expected = QUrl.fromLocalFile(
+            "/tmp/Mouser Build/images/icons/mouse-simple.svg"
+        ).toString()
+
+        self.assertEqual(backend.deviceImageSource, expected)
 
     def test_disconnected_override_request_does_not_persist(self):
         backend = self._make_backend()
