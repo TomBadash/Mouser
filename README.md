@@ -14,6 +14,8 @@ family, with support for additional Logitech models.
 <div align="center"><em>No telemetry data. No cloud integrations. No Logitech account connection required.</em></div>
 </p>
 
+<hr />
+
 <div>
 <br/>
 <span>
