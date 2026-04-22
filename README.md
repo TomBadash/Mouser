@@ -1,7 +1,7 @@
 <div>
 <span><img align="left" src="images/logo.png" width=20 /></span>
 <span><p align="right">
-<a href="README.md">English</a> | <a href=".github/README_CN.md">中文文档</a>
+<a href="README.md">English</a> | <a href="README_CN.md">中文文档</a>
 </p></span>
 </div>
 <p align="center">
