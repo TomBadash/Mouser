@@ -5,18 +5,18 @@
 ### Architecture
 
 ```
-┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │───▶│ Mouse    │───▶│ Engine         │
-│ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐      ┌──────────┐        │ Simulator   │
-│ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │      │ (QObject)│        └─────────────┘
+┌────────────────┐     ┌──────────┐     ┌────────────────┐     ┌───────────────┐
+│ Logitech mouse │ --> │ Mouse    │ --> │ Engine         │ --> │ Key Simulator │
+│ / HID++ device │     │ Hook     │     │ (orchestrator) │     │ (SendInput)   │
+└────────────────┘     └──────────┘     └────────────────┘     └───────────────┘
+                         ^
+                    block/pass
+
+┌─────────────┐      ┌──────────┐
+│ QML UI      │ <--> │ Backend  │
+│ (PySide6)   │      │ (QObject)│
 └─────────────┘      └──────────┘
-                         ▲
+                         ^
                     ┌────┴────────┐
                     │ App         │
                     │ Detector    │
