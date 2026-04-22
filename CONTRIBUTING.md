@@ -6,16 +6,16 @@
 
 ```
 ┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
+│ Logitech mouse │───▶│ Mouse    │───▶│ Engine         │
 │ / HID++ device │     │ Hook     │     │ (orchestrator) │
 └────────────────┘     └──────────┘     └───────┬────────┘
                          ▲                    │
                     block/pass           ┌────▼────────┐
                                          │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
+┌─────────────┐      ┌──────────┐        │ Simulator   │
 │ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
+│ (PySide6)   │      │ (QObject)│        └─────────────┘
+└─────────────┘      └──────────┘
                          ▲
                     ┌────┴────────┐
                     │ App         │
@@ -82,9 +82,7 @@ All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Librar
 
 <hr />
 
-<p align="center">
-<img src=".github/assets/project-structure_banner_en.png" alt="Project Structure Banner" />
-</p>
+### Project Structure
 
 ```
 mouser/
@@ -138,9 +136,7 @@ mouser/
 
 <hr />
 
-<p align="center">
-<img src=".github/assets/ui-overview_banner_en.png" alt="UI Overview Banner" />
-</p>
+### UI Overview
 
 The app has two pages accessible from a slim sidebar:
 
@@ -159,9 +155,7 @@ The app has two pages accessible from a slim sidebar:
 
 <hr />
 
-<p align="center">
-<img src=".github/assets/known-limitations_banner_en.png" alt="Known Limitations Banner" />
-</p>
+### Known Limitations
 
 - **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
@@ -183,9 +177,7 @@ The app has two pages accessible from a slim sidebar:
 
 <hr />
 
-<p align="center">
-<img src=".github/assets/future-work_banner_en.png" alt="Future Work Banner" />
-</p>
+### Future Work
 
 - [ ] **Dedicated overlays for more devices** — add real hotspot maps and artwork for MX Anywhere, MX Vertical, and other Logitech families
 - [ ] **True per-device config** — separate mappings and layout state cleanly when multiple Logitech mice are used on the same machine

@@ -19,21 +19,21 @@ family, with support for additional Logitech models.
 <div>
 <span>
 <p align="center">
-<a href="#">Downloads</a> |
-<a href="#">Screenshots</a> |
-<a href="#">Installation</a> |
-<a href="#">Build From Source</a> |
-<a href="#">Device Coverage</a> |
-<a href="#">Contributing</a> |
-<a href="#">Support</a> |
-<a href="#">Acknowledgments</a>
+<a href="#section-downloads">Downloads</a> |
+<a href="#section-screenshots">Screenshots</a> |
+<a href="#section-installation">Installation</a> |
+<a href="#section-build-from-source">Build From Source</a> |
+<a href="#section-device-coverage">Device Coverage</a> |
+<a href="#section-contributing">Contributing</a> |
+<a href="#section-support">Support</a> |
+<a href="#section-acknowledgments">Acknowledgments</a>
 </p>
 </span>
 </div>
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-downloads">
 <img src=".github/assets/downloads_banner_en.png" alt="Downloads Banner" />
 </p>
 <p align="center">
@@ -52,7 +52,7 @@ family, with support for additional Logitech models.
 
 <hr />
 <!-- Screenshots -->
-<p align="center">
+<p align="center" id="section-screenshots">
 <img src=".github/assets/screenshots_banner_en.png" alt="Screenshots Banner" />
 </p>
 
@@ -71,7 +71,7 @@ family, with support for additional Logitech models.
 <hr />
 
 <div>
-<p align="center">
+<p align="center" id="section-installation">
 <img src=".github/assets/installation_banner_en.png" alt="Installation Banner" />
 </p>
 
@@ -102,7 +102,7 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 
 <hr />
 
-<div id="building-section">
+<div id="section-building-from-source">
 <p align="center">
 <img src=".github/assets/building-from-source_banner_en.png" alt="Building from Source Banner" />
 </p>
@@ -114,7 +114,7 @@ The file `.python-version` specifies _python_ version to use when interacting wi
 - **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux (experimental; X11 plus KDE Wayland app detection)**
 - **Python 3.10+** (tested with 3.14)
 - **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. MX Master-family devices currently have the most complete UI support.
-- **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
+- **Logitech Options+ must NOT be running** (it conflicts with _HID++_ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
 - **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
@@ -284,7 +284,7 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-device-coverage">
 <img src=".github/assets/device-coverage_banner_en.png" alt="Device Coverage Banner" />
 </p>
 
@@ -322,7 +322,7 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 <details>
 <summary>Featuresl, Default Mappings, and Actions</summary>
-<p align="center">
+<p align="center" id="section-features">
 <img src=".github/assets/features_banner_en.png" alt="Features Banner" />
 </p>
 
@@ -433,7 +433,7 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-default-mappings">
 <img src=".github/assets/default-mappings_banner_en.png" alt="Default Mappings Banner" />
 </p>
 
@@ -474,7 +474,7 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-actions">
 <img src=".github/assets/actions_banner_en.png" alt="Available Actions Banner" />
 </p>
 
@@ -514,7 +514,7 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-contributing">
 <img src=".github/assets/contributing_banner_en.png" alt="Contributing Banner" />
 </p>
 
@@ -522,19 +522,19 @@ Contributions are welcome! To get started:
 
 1. Fork the repo and create a feature branch
 2. Set up the dev environment (see [Building Section](#building-section))
-3. Make your changes and test with a supported Logitech HID++ mouse (MX Master family preferred for now)
+3. Make your changes and test with a supported Logitech _HID++_ mouse (MX Master family preferred for now)
 4. Submit a pull request with a clear description
 
 ### Areas where help is needed
 
-- Testing with other Logitech HID++ devices
+- Testing with other Logitech _HID++_ devices
 - Scroll inversion improvements
 - Broader Linux/Wayland validation
 - UI/UX polish and accessibility
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-support">
 <img src=".github/assets/support_banner_en.png" alt="Support Banner" />
 </p>
 
@@ -552,7 +552,7 @@ If <b>Mouser</b> saves you from installing <b>Logitech Options+</b>, consider su
 
 <hr />
 
-<p align="center">
+<p align="center" id="section-acknowledgments">
 <img src=".github/assets/acknowledgments_banner_en.png" alt="Acknowledgments Banner" />
 </p>
 
