@@ -338,8 +338,6 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 <hr />
 
-<details>
-<summary>Features, Default Mappings, and Actions</summary>
 <p align="center" id="section-features">
 <img src=".github/assets/features_banner_en.png" alt="Features Banner" />
 </p>
@@ -528,7 +526,6 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 <td>Do Nothing (pass-through)</td>
 </tr>
 </table>
-</details>
 
 <hr />
 
