@@ -1,5 +1,7 @@
-@echo off
-title Mouser — MX Master 3S
-cd /d "%~dp0"
+@ECHO OFF
+TITLE Mouser — MX Master 3S
+SETLOCAL
+CD /D "%~dp0"
 ".venv\Scripts\python.exe" main_qml.py
-pause
+PAUSE
+ENDLOCAL

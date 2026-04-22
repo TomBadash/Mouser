@@ -1,124 +1,82 @@
-# Mouser — Logitech Mouse Remapper
-
+<div>
+<span><img align="left" src="images/logo.png" width=20 /></span>
+<span><p align="right">
+<a href="README.md">English</a> | <a href="README_CN.md">中文文档</a>
+</p></span>
+</div>
 <p align="center">
-  <img src="images/logo_icon.png" width="128" alt="Mouser logo" />
+<img src=".github/assets/banner_en.png" alt="Mouser logo" />
+</p>
+<p>
+A lightweight, open-source alternative to <a href="https://www.logitech.com/en-us/software/logi-options-plus">Logitech Options+</a> for
+remapping Logitech <b>HID++</b> mice. The current best experience is on the <a href="https://www.logitech.com/en-us/shop/c/mice?refine=c_filterseries%3Dmaster-series">MX Master</a>
+family, with support for additional Logitech models.
+<div align="center"><em>No telemetry data. No cloud integrations. No Logitech account connection required.</em></div>
 </p>
 
-English | [中文文档](README_CN.md)
+<hr />
 
-A lightweight, open-source, fully local alternative to **Logitech Options+** for
-remapping Logitech HID++ mice. The current best experience is on the **MX Master**
-family, with early detection and fallback UI support for additional Logitech models.
-
-No telemetry. No cloud. No Logitech account required.
-
----
-
-## Features
-
-### 🖱️ Button Remapping
-- **Remap any programmable button** — middle click, gesture button, back, forward, mode shift, and horizontal scroll
-- **Per-application profiles** — automatically switch mappings when you switch apps (e.g., Chrome vs. VS Code)
-- **Custom keyboard shortcuts** — define arbitrary key combinations (e.g., Ctrl+Shift+P) as button actions
-- **30+ built-in actions** — navigation, browser, editing, media, and desktop shortcuts that adapt per platform
-
-### ⚙️ Device Control
-- **DPI / pointer speed** — slider from 200–8000 DPI with quick presets, synced live via HID++
-- **Smart Shift toggle** — enable or disable Logitech's ratchet-to-free-spin scroll mode switching
-- **Scroll direction inversion** — independent toggles for vertical and horizontal scroll
-- **Gesture button + swipe actions** — tap for one action, swipe up/down/left/right for others
-
-### 🖥️ Cross-Platform
-- **Windows, macOS, and Linux** — native hooks on each platform (WH_MOUSE_LL, CGEventTap, evdev/uinput)
-- **Start at login** — Windows registry and macOS LaunchAgent, with an independent "Start minimized" tray-only option
-- **Single instance guard** — launching a second copy brings the existing window to the front
-
-### 🔌 Smart Connectivity
-- **Bluetooth and Logi Bolt** — works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI
-- **Auto-reconnection** — detects power-off/on and restores full functionality without restarting
-- **Live connection status** — real-time "Connected" / "Not Connected" badge in the UI
-- **Device-aware UI** — interactive MX Master diagram with clickable hotspots; generic fallback for other models
-
-### 🌐 Multi-Language UI
-- **English / Simplified Chinese / Traditional Chinese** - switch instantly in-app, no restart required
-- Language preference is automatically saved to `config.json` and restored on next launch
-- Covers all major UI surfaces: navigation, mouse page, settings page, dialogs, system tray/menu bar, and permission prompts
-
-### 🛡️ Privacy First
-- **Fully local** — config is a JSON file, all processing happens on your machine
-- **System tray / menu bar** — runs quietly in the background with quick access from the tray
-- **Zero telemetry, zero cloud, zero account required**
-
-## Screenshots
-
+<div>
+<span>
 <p align="center">
-  <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
+<a href="#section-downloads">Downloads</a> |
+<a href="#section-screenshots">Screenshots</a> |
+<a href="#section-installation">Installation</a> |
+<a href="#section-build-from-source">Build From Source</a> |
+<a href="#section-device-coverage">Device Coverage</a> |
+<a href="#section-features">Features</a> |
+<a href="#section-default-mappings">Default Mappings</a> |
+<a href="#section-actions">Actions</a> |
+<a href="#section-contributing">Contributing</a> |
+<a href="#section-support">Support</a> |
+<a href="#section-acknowledgments">Acknowledgments</a>
+</p>
+</span>
+</div>
+
+<hr />
+
+<p align="center" id="section-downloads">
+<img src=".github/assets/downloads_banner_en.png" alt="Downloads Banner" />
+</p>
+<p align="center">
+<a href="https://github.com/TomBadash/Mouser/releases/latest">
+<img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows&displayAssetName=false" alt="Windows Downloads" />
+</a>
+<a href="https://github.com/TomBadash/Mouser/releases/latest">
+<img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-macOS.zip?style=for-the-badge&color=00d4aa&logo=apple&label=macOS%20Apple%20Silicon&displayAssetName=false" alt="macOS Apple Silicon Downloads" />
+</a>
+<a href="https://github.com/TomBadash/Mouser/releases/latest">
+<img src="https://img.shields.io/github/downloads/TomBadash/Mouser/Mouser-Linux.zip?style=for-the-badge&color=00d4aa&logo=linux&label=Linux&displayAssetName=false" alt="Linux Downloads" />
+</a>
+<br />
+<img src="https://img.shields.io/github/downloads/TomBadash/Mouser/total?style=for-the-badge&color=00d4aa&label=Total%20(all%20versions)" alt="Downloads" />
+</p>
+
+<hr />
+<!-- Screenshots -->
+<p align="center" id="section-screenshots">
+<img src=".github/assets/screenshots_banner_en.png" alt="Screenshots Banner" />
 </p>
 
 <p align="center">
-  <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" />
+  <img src=".github/assets/screenshots.png" alt="Mouser — Mouse & Profiles page" />
 </p>
 
-## Current Device Coverage
+<details>
+<summary>Seperated <i>(full res)</i></summary>
+<div align="center">
+<img src=".github/assets/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
+<img src=".github/assets/Screenshot_settings.png" alt="Mouser — Mouse & Profiles page" />
+</div>
+</details>
+<!-- Screenshots End -->
+<hr />
 
-| Family / model | Detection + HID++ probing | UI support |
-|---|---|---|
-| MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive `mx_master` layout |
-| MX Anywhere 3S / 3 / 2S | Yes | Generic fallback card, experimental manual override |
-| MX Vertical | Yes | Generic fallback card |
-| Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
-
-> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
-
-## Default Mappings
-
-| Button | Default Action |
-|---|---|
-| Back button | Alt + Tab (Switch Windows) |
-| Forward button | Alt + Tab (Switch Windows) |
-| Middle click | Pass-through |
-| Gesture button | Pass-through |
-| Mode shift (scroll click) | Pass-through |
-| Horizontal scroll left | Browser Back |
-| Horizontal scroll right | Browser Forward |
-
-## Available Actions
-
-Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task View`, while macOS exposes `Mission Control`, `Show Desktop`, `App Expose`, and `Launchpad`.
-
-| Category | Actions |
-|---|---|
-| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS) |
-| **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab) |
-| **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
-| **Media** | Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track |
-| **Custom** | User-defined keyboard shortcuts (any key combination) |
-| **Other** | Do Nothing (pass-through) |
-
----
-
-## Download & Run
-
-> **No install required.** Just download, extract, and double-click.
-
-<p align="center">
-  <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows&displayAssetName=false" alt="Windows Downloads" />
-  </a>
-  <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-macOS.zip?style=for-the-badge&color=00d4aa&logo=apple&label=macOS%20Apple%20Silicon&displayAssetName=false" alt="macOS Apple Silicon Downloads" />
-  </a>
-  <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-macOS-intel.zip?style=for-the-badge&color=00d4aa&logo=apple&label=macOS%20Intel&displayAssetName=false" alt="macOS Intel Downloads" />
-  </a>
-  <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Linux.zip?style=for-the-badge&color=00d4aa&logo=linux&label=Linux&displayAssetName=false" alt="Linux Downloads" />
-  </a>
-  <br />
-  <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/total?style=for-the-badge&color=00d4aa&label=Total%20Downloads%20(all%20versions)" alt="Downloads" />
+<div>
+<p align="center" id="section-installation">
+<img src=".github/assets/installation_banner_en.png" alt="Installation Banner" />
 </p>
-
-### Steps
 
 1. Go to the [**latest release page**](https://github.com/TomBadash/Mouser/releases/latest)
 2. Download the zip for your platform: **Mouser-Windows.zip**, **Mouser-macOS.zip** (Apple Silicon), **Mouser-macOS-intel.zip** (Intel macOS), or **Mouser-Linux.zip**
@@ -127,7 +85,7 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 
 That's it. The app will open and start remapping your mouse buttons immediately.
 
-For macOS Accessibility permissions and login-item notes, see the [macOS Setup Guide](readme_mac_osx.md).
+For macOS Accessibility permissions and login-item notes, see the [macOS Setup Guide](MAC_OSX.md).
 
 ### What to expect
 
@@ -143,23 +101,33 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 - **Logitech Options+** must not be running (it conflicts with HID++ access and will cause Mouser to malfunction or crash)
 - Config is saved automatically to `%APPDATA%\Mouser` (Windows), `~/Library/Application Support/Mouser` (macOS), or `~/.config/Mouser` (Linux)
 
----
+</div>
 
-## Installation (from source)
+<hr />
+
+<div id="section-building-from-source">
+<p align="center">
+<img src=".github/assets/building-from-source_banner_en.png" alt="Building from Source Banner" />
+</p>
+
+The file `.python-version` specifies _python_ version to use when interacting with the projects source code. This is separate from the version specified in `pyproject.toml`, since the `requires-python=">=3.10"` applies to packages and everything else. This ensures compatibility, while maintaining an up to date development environment.
 
 ### Prerequisites
 
 - **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux (experimental; X11 plus KDE Wayland app detection)**
 - **Python 3.10+** (tested with 3.14)
 - **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. MX Master-family devices currently have the most complete UI support.
-- **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
+- **Logitech Options+ must NOT be running** (it conflicts with _HID++_ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
 - **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
 
-### Steps
+<details>
+<summary>Windows</summary>
 
-```bash
+### Windows
+
+```PowerShell
 # 1. Clone the repository
 git clone https://github.com/TomBadash/Mouser.git
 cd Mouser
@@ -168,27 +136,15 @@ cd Mouser
 python -m venv .venv
 
 # 3. Activate it
-.venv\Scripts\activate        # Windows (PowerShell / CMD)
-source .venv/bin/activate      # macOS / Linux
+.\.venv\Scripts\Activate.bat        # Windows (PowerShell / CMD)
 
 # 4. Install dependencies
 pip install -r requirements.txt
 ```
 
-### Dependencies
+**Running**
 
-| Package | Purpose |
-|---|---|
-| `PySide6` | Qt Quick / QML UI framework |
-| `hidapi` | HID++ communication with the mouse (gesture button, DPI) |
-| `Pillow` | Image processing for icon generation |
-| `pyobjc-framework-Quartz` | macOS CGEventTap / Quartz event support |
-| `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
-| `evdev` | Linux mouse grab and virtual device forwarding (uinput) |
-
-### Running
-
-```bash
+```PowerShell
 # Option A: Run directly
 python main_qml.py
 
@@ -213,13 +169,11 @@ python main_qml.py --hid-backend=hidapi
 python main_qml.py --hid-backend=auto
 ```
 
-Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`;
-`hidapi` and `auto` remain available as manual overrides for debugging. Other
-platforms continue to default to `auto`.
+Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`; `hidapi` and `auto` remain available as manual overrides for debugging. Other platforms continue to default to `auto`.
 
-### Creating a Desktop Shortcut
+**Creating a Desktop Shortcut**
 
-A `Mouser.lnk` shortcut is included. To create one manually:
+A `Mouser.lnk` shortcut is included. To create one manually (**_Replace `C:\path\to\mouser` with your own_**):
 
 ```powershell
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Mouser.lnk")
@@ -230,9 +184,7 @@ $s.IconLocation = "C:\path\to\mouser\images\logo.ico, 0"
 $s.Save()
 ```
 
-### Building Distribution Artifacts
-
-Windows portable build:
+**Building Distribution Artifacts**
 
 ```bash
 # Preferred: run the build script
@@ -249,11 +201,51 @@ pip install -r requirements.txt pyinstaller
 pyinstaller Mouser.spec --noconfirm
 ```
 
-The output is in `dist\Mouser\`. Zip that entire folder and distribute it. `build.bat`
-fails early if `hidapi` is not importable, which avoids producing a packaged app that
-cannot detect Logitech devices.
+The output is in `dist\Mouser\`. Zip that entire folder and distribute it. `build.bat` fails early if `hidapi` is not importable, which avoids producing a packaged app that cannot detect Logitech devices.
 
-macOS native bundle:
+</details>
+
+<details>
+<summary>macOS</summary>
+
+### macOS
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/TomBadash/Mouser.git
+cd Mouser
+
+# 2. Create a virtual environment
+python -m venv .venv
+
+# 3. Activate it
+source .venv/bin/activate
+
+# 4. Install dependencies
+pip install -r requirements.txt
+```
+
+**Running**
+
+```bash
+# Option A: Run directly
+python main_qml.py
+
+# Option B: Start directly in the tray / menu bar
+python main_qml.py --start-hidden
+```
+
+> On macOS, `--start-hidden` is the same tray-first startup path used when you launch Mouser directly in the background. The login item uses your saved startup settings.
+
+Temporary macOS transport override for debugging:
+
+```bash
+python main_qml.py --hid-backend=iokit
+python main_qml.py --hid-backend=hidapi
+python main_qml.py --hid-backend=auto
+```
+
+**Building Distribution Artifacts**
 
 ```bash
 # 1. Install PyInstaller (inside your venv)
@@ -265,7 +257,29 @@ pip install pyinstaller
 
 The output is `dist/Mouser.app`. The script prefers `images/AppIcon.icns` when present, otherwise it generates an `.icns` icon from `images/logo_icon.png`, then ad-hoc signs the bundle with `codesign --sign -`.
 
-Linux portable build:
+</details>
+
+<details>
+<summary>Linux</summary>
+
+### Linux
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/TomBadash/Mouser.git
+cd Mouser
+
+# 2. Create a virtual environment
+python -m venv .venv
+
+# 3. Activate it
+source .venv/bin/activate
+
+# 4. Install dependencies
+pip install -r requirements.txt
+```
+
+**Building Distribution Artifacts**
 
 ```bash
 # 1. Install system dependencies
@@ -282,215 +296,266 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 > **Automated releases:** Pushing a `v*` tag triggers the [release workflow](.github/workflows/release.yml), which builds all three platforms in CI and publishes them as GitHub Release assets.
 
----
+</details>
 
-## How It Works
+</div>
 
-### Architecture
+<hr />
 
-```
-┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
-│ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
-│ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
-                         ▲
-                    ┌────┴────────┐
-                    │ App         │
-                    │ Detector    │
-                    └─────────────┘
-```
+<p align="center" id="section-device-coverage">
+<img src=".github/assets/device-coverage_banner_en.png" alt="Device Coverage Banner" />
+</p>
 
-### Mouse Hook (`mouse_hook.py`)
+<table align="center">
+<tr>
+<th>Family / Model</th>
+<th>Detection + HID++ Probing</th>
+<th>UI Support</th>
+</tr>
+<tr>
+<td>MX Master 4 / 3S / 3 / 2S / MX Master</td>
+<td>Yes</td>
+<td>Dedicated interactive <code>mx_master</code> layout</td>
+</tr>
+<tr>
+<td>MX Anywhere 3S / 3 / 2S</td>
+<td>Yes</td>
+<td>Generic fallback card, experimental manual override</td>
+</tr>
+<tr>
+<td>MX Vertical</td>
+<td>Yes</td>
+<td>Generic fallback card</td>
+</tr>
+<tr>
+<td>Unknown Logitech HID++ mice</td>
+<td>Best effort by PID/name</td>
+<td>Generic fallback card</td>
+</tr>
+</table>
 
-Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstraction:
+> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
 
-- **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
-- **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
-- **Linux** — `evdev` to grab the physical mouse and `uinput` to forward pass-through events via a virtual device
+<hr />
 
-Both paths feed the same internal event model and intercept:
+<p align="center" id="section-features">
+<img src=".github/assets/features_banner_en.png" alt="Features Banner" />
+</p>
 
-- `WM_XBUTTONDOWN/UP` — side buttons (back/forward)
-- `WM_MBUTTONDOWN/UP` — middle click
-- `WM_MOUSEHWHEEL` — horizontal scroll
-- `WM_MOUSEWHEEL` — vertical scroll (for inversion)
+<table align="center">
+<tr>
+<th>Button Remapping</th>
+</tr>
+<tr>
+<td><i>Remap any programmable button</i></td>
+<td>middle click, gesture button, back, forward, mode shift, and horizontal scroll</td>
+</tr>
+<tr>
+<td><i>Per-application profiles</i></td>
+<td>automatically switch mappings when you switch apps (e.g., Chrome vs. VS Code)</td>
+</tr>
+<tr>
+<td><i>Custom keyboard shortcuts</i></td>
+<td>define arbitrary key combinations (e.g., Ctrl+Shift+P) as button actions</td>
+</tr>
+<tr>
+<td><i>30+ built-in actions</i></td>
+<td>navigation, browser, editing, media, and desktop shortcuts that adapt per platform</td>
+</tr>
+<tr>
+<th>Device Control</th>
+</tr>
+<tr>
+<td><i>DPI / pointer speed</i></td>
+<td>slider from 200–8000 DPI with quick presets, synced live via HID++</td>
+</tr>
+<tr>
+<td><i>Smart Shift toggle</i></td>
+<td>enable or disable Logitech's ratchet-to-free-spin scroll mode switching</td>
+</tr>
+<tr>
+<td><i>Scroll direction inversion</i></td>
+<td>independent toggles for vertical and horizontal scroll</td>
+</tr>
+<tr>
+<td><i>Gesture button + swipe actions</i></td>
+<td>tap for one action, swipe up/down/left/right for others</td>
+</tr>
+<tr>
+<th>Cross-Platform</th>
+</tr>
+<tr>
+<td><i>Windows, macOS, and Linux</i></td>
+<td>native hooks on each platform (WH_MOUSE_LL, CGEventTap, evdev/uinput)</td>
+</tr>
+<tr>
+<td><i>Start at login</i></td>
+<td>Windows registry and macOS LaunchAgent, with an independent "Start minimized" tray-only option</td>
+</tr>
+<tr>
+<td><i>Single instance guard</i></td>
+<td>launching a second copy brings the existing window to the front</td>
+</tr>
+<tr>
+<th>Smart Connectivity</th>
+</tr>
+<tr>
+<td><i>Bluetooth and Logi Bolt</i></td>
+<td>works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI</td>
+</tr>
+<tr>
+<td><i>Auto-reconnection</i></td>
+<td>detects power-off/on and restores full functionality without restarting</td>
+</tr>
+<tr>
+<td><i>Live connection status</i></td>
+<td>real-time "Connected" / "Not Connected" badge in the UI</td>
+</tr>
+<tr>
+<td><i>Device-aware UI</i></td>
+<td>interactive MX Master diagram with clickable hotspots; generic fallback for other models</td>
+</tr>
+<tr>
+<th>Multi-Language UI</th>
+</tr>
+<tr>
+<td><i>English</i> / <i>Simplified Chinese</i> / <i>Traditional Chinese</i></td>
+<td>switch instantly in-app, no restart required</td>
+</tr>
+<tr>
+<td></td>
+<td>Language preference is automatically saved to <code>config.json</code> and restored on next launch</td>
+</tr>
+<tr>
+<td></td>
+<td>Covers all major UI surfaces: navigation, mouse page, settings page, dialogs, system tray/menu bar, and permission prompts</td>
+</tr>
+<tr>
+<th>Privacy First</th>
+</tr>
+<tr>
+<td><i>Fully local</i></td>
+<td>config is a JSON file, all processing happens on your machine</td>
+</tr>
+<tr>
+<td><i>System tray / menu bar</i></td>
+<td>runs quietly in the background with quick access from the tray</td>
+</tr>
+<tr>
+<td><i>Zero telemetry, zero cloud, zero account required</i></td>
+<td></td>
+</tr>
+</table>
 
-Intercepted events are either **blocked** (hook returns 1) and replaced with an action, or **passed through** to the application.
+<hr />
 
-### Device Catalog & Layout Registry
+<p align="center" id="section-default-mappings">
+<img src=".github/assets/default-mappings_banner_en.png" alt="Default Mappings Banner" />
+</p>
 
-- `core/logi_devices.py` resolves known product IDs and model aliases into a `ConnectedDeviceInfo` record with display name, DPI range, preferred gesture CIDs, and default UI layout key
-- `core/device_layouts.py` stores image assets, hotspot coordinates, layout notes, and whether a layout is interactive or only a generic fallback
-- `ui/backend.py` combines auto-detected device info with any persisted per-device layout override and exposes the effective layout to QML
+<table align="center">
+<tr>
+<th>Button</th>
+<th>Default Action</th>
+</tr>
+<tr>
+<td>Back button</td>
+<td>Alt + Tab (Switch Windows)</td>
+</tr>
+<tr>
+<td>Forward button</td>
+<td>Alt + Tab (Switch Windows)</td>
+</tr>
+<tr>
+<td>Middle click</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Gesture button</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Mode shift (scroll click)</td>
+<td>Pass-through</td>
+</tr>
+<tr>
+<td>Horizontal scroll left</td>
+<td>Browser Back</td>
+</tr>
+<tr>
+<td>Horizontal scroll right</td>
+<td>Browser Forward</td>
+</tr>
+</table>
 
-### Gesture Button Detection
+<hr />
 
-Logitech gesture/thumb buttons do not always appear as standard mouse events. Mouser uses a layered detector:
+<p align="center" id="section-actions">
+<img src=".github/assets/actions_banner_en.png" alt="Available Actions Banner" />
+</p>
 
-1. **HID++ 2.0** (primary) — Opens the Logitech HID collection, discovers `REPROG_CONTROLS_V4` (feature `0x1B04`), ranks gesture CID candidates from the device registry plus control-capability heuristics, and diverts the best candidate. When supported, Mouser also enables RawXY movement data.
-2. **Raw Input** (Windows fallback) — Registers for raw mouse input and detects extra button bits beyond the standard 5.
-3. **Gesture tap/swipe dispatch** — A clean press/release emits `gesture_click`; once movement crosses the configured threshold, Mouser emits directional swipe actions instead.
+Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task View`, while macOS exposes `Mission Control`, `Show Desktop`, `App Expose`, and `Launchpad`.
 
-### App Detector (`app_detector.py`)
+<table align="center">
+<tr>
+<th>Category</th>
+<th>Actions</th>
+</tr>
+<tr>
+<td><b>Navigation</b></td>
+<td>Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control (macOS), App Expose (macOS), Launchpad (macOS)</td>
+</tr>
+<tr>
+<td><b>Browser</b></td>
+<td>Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab)</td>
+</tr>
+<tr>
+<td><b>Editing</b></td>
+<td>Copy, Paste, Cut, Undo, Select All, Save, Find</td>
+</tr>
+<tr>
+<td><b>Media</b></td>
+<td>Volume Up, Volume Down, Volume Mute, Play/Pause, Next Track, Previous Track</td>
+</tr>
+<tr>
+<td><b>Custom</b></td>
+<td>User-defined keyboard shortcuts (any key combination)</td>
+</tr>
+<tr>
+<td><b>Other</b></td>
+<td>Do Nothing (pass-through)</td>
+</tr>
+</table>
 
-Polls the foreground window every 300ms using `GetForegroundWindow` → `GetWindowThreadProcessId` → process name. Handles UWP apps by resolving `ApplicationFrameHost.exe` to the actual child process.
+<hr />
 
-### Engine (`engine.py`)
-
-The central orchestrator. On app change, it performs a **lightweight profile switch** — clears and re-wires hook callbacks without tearing down the hook thread or HID++ connection. This avoids the latency and instability of a full hook restart. The engine also forwards connected-device identity to the backend so QML can render the right model name and layout state.
-
-### Device Reconnection
-
-Mouser handles mouse power-off/on cycles automatically:
-
-- **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device is back
-- **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` notifications and reinstalls the low-level mouse hook when devices are added or removed
-- **UI layer** — connection state and device identity flow from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time
-
-### Configuration
-
-All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Library/Application Support/Mouser/config.json` (macOS). The config supports:
-- Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
-- Per-profile app associations (list of `.exe` names)
-- Global settings: DPI, scroll inversion, gesture tuning, appearance, debug flags, Smart Shift, and startup preferences (`start_at_login`, `start_minimized`)
-- Per-device layout override selections for unsupported devices
-- Automatic migration from older config versions
-
----
-
-## Project Structure
-
-```
-mouser/
-├── main_qml.py              # Application entry point (PySide6 + QML)
-├── Mouser.bat               # Quick-launch batch file
-├── Mouser-mac.spec          # Native macOS app-bundle spec
-├── Mouser-linux.spec        # Linux PyInstaller spec
-├── build_macos_app.sh       # macOS bundle build + icon/signing flow
-├── .github/workflows/
-│   ├── ci.yml               # CI checks (compile, tests, QML lint)
-│   └── release.yml          # Automated release builds (Win/macOS/Linux)
-├── README.md
-├── readme_mac_osx.md
-├── requirements.txt
-├── .gitignore
-│
-├── core/                    # Backend logic
-│   ├── accessibility.py     # macOS Accessibility trust checks
-│   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
-│   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
-│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
-│   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
-│   ├── device_layouts.py    # Device-family layout registry for QML overlays
-│   ├── key_simulator.py     # Platform-specific action simulator
-│   ├── startup.py           # Cross-platform login startup (Windows registry + macOS LaunchAgent)
-│   ├── config.py            # Config manager (JSON load/save/migrate)
-│   └── app_detector.py      # Foreground app polling
-│
-├── ui/                      # UI layer
-│   ├── backend.py           # QML ↔ Python bridge (QObject with properties/slots)
-│   └── qml/
-│       ├── Main.qml         # App shell (sidebar + page stack + tray toast)
-│       ├── MousePage.qml    # Merged mouse diagram + profile manager
-│       ├── ScrollPage.qml   # DPI slider + scroll inversion toggles
-│       ├── HotspotDot.qml   # Interactive button overlay on mouse image
-│       ├── ActionChip.qml   # Selectable action pill
-│       └── Theme.js         # Shared colors and constants
-│
-└── images/
-    ├── AppIcon.icns        # Committed macOS app-bundle icon
-    ├── mouse.png            # MX Master 3S top-down diagram
-    ├── icons/mouse-simple.svg # Generic fallback device card artwork
-    ├── logo.png             # Mouser logo (source)
-    ├── logo.ico             # Multi-size icon for shortcuts
-    ├── logo_icon.png        # Square icon with background
-    ├── chrom.png            # App icon: Chrome
-    ├── VSCODE.png           # App icon: VS Code
-    ├── VLC.png              # App icon: VLC
-    └── media.webp           # App icon: Windows Media Player
-```
-
-## UI Overview
-
-The app has two pages accessible from a slim sidebar:
-
-### Mouse & Profiles (Page 1)
-
-- **Left panel:** List of profiles. The "Default (All Apps)" profile is always present. Per-app profiles show the app icon and name. Select a profile to edit its mappings.
-- **Right panel:** Device-aware mouse view. MX Master-family devices get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
-- **Add profile:** ComboBox at the bottom lists known apps (Chrome, Edge, VS Code, VLC, etc.). Click "+" to create a per-app profile.
-
-### Point & Scroll (Page 2)
-
-- **DPI slider:** 200–8000 with quick presets (400, 800, 1000, 1600, 2400, 4000, 6000, 8000). Reads the current DPI from the device on startup.
-- **Scroll inversion:** Independent toggles for vertical and horizontal scroll direction.
-- **Smart Shift:** Toggle Logitech Smart Shift (ratchet-to-free-spin scroll mode switching) on or off.
-- **Startup controls:** **Start at login** (Windows and macOS) and **Start minimized** (all platforms) to launch directly into the system tray.
-
----
-
-## Known Limitations
-
-- **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
-- **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
-- **Bluetooth and Logi Bolt supported** — HID++ gesture button divert works over both Bluetooth and Logi Bolt USB receivers
-- **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
-- **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
-- **Admin not required** — but some games or elevated windows may not receive injected keystrokes
-- **Linux app detection is still limited** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, and GNOME / other Wayland compositors still fall back to the default profile
-- **Linux remapping needs device permissions** — Mouser must be able to read `/dev/input/event*` and write `/dev/uinput`. HID++ features (DPI, battery, Smart Shift) additionally require access to `/dev/hidraw*`, which most distros restrict to root by default. Create a udev rule file at `/etc/udev/rules.d/69-logitech-mouser.rules` with the following content:
-  ```
-  # Logitech HID++ access for Mouser (USB + Bluetooth)
-  ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
-  ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", TAG+="uaccess"
-  ```
-  Then reload:
-  ```bash
-  sudo udevadm control --reload && sudo udevadm trigger
-  ```
-
-## Future Work
-
-- [ ] **Dedicated overlays for more devices** — add real hotspot maps and artwork for MX Anywhere, MX Vertical, and other Logitech families
-- [ ] **True per-device config** — separate mappings and layout state cleanly when multiple Logitech mice are used on the same machine
-- [ ] **Dynamic button inventory** — build button lists from discovered `REPROG_CONTROLS_V4` controls instead of relying on the current fixed mapping set
-- [x] **Custom key combos** — user-defined arbitrary key sequences (e.g., Ctrl+Shift+P)
-- [x] **Windows login item support** — cross-platform login startup via Windows registry and macOS LaunchAgent
-- [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches
-- [ ] **Gesture swipe tuning** — improve swipe reliability and defaults across more Logitech devices
-- [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
-- [ ] **Export/import config** — share configurations between machines
-- [ ] **Tray icon badge** — show active profile name in tray tooltip
-- [x] **macOS support** — added via CGEventTap, Quartz CGEvent, and NSWorkspace
-- [ ] **Broader Wayland support and Linux validation** — extend app detection beyond KDE Wayland / X11 and validate across more distros and desktop environments
-- [ ] **Plugin system** — allow third-party action providers
-
-## Contributing
+<p align="center" id="section-contributing">
+<img src=".github/assets/contributing_banner_en.png" alt="Contributing Banner" />
+</p>
 
 Contributions are welcome! To get started:
 
 1. Fork the repo and create a feature branch
-2. Set up the dev environment (see [Installation](#installation))
-3. Make your changes and test with a supported Logitech HID++ mouse (MX Master family preferred for now)
+2. Set up the dev environment (see [Building Section](#building-section))
+3. Make your changes and test with a supported Logitech _HID++_ mouse (MX Master family preferred for now)
 4. Submit a pull request with a clear description
 
 ### Areas where help is needed
 
-- Testing with other Logitech HID++ devices
+- Testing with other Logitech _HID++_ devices
 - Scroll inversion improvements
 - Broader Linux/Wayland validation
 - UI/UX polish and accessibility
 
-## Support the Project
+<hr />
 
-If Mouser saves you from installing Logitech Options+, consider supporting development:
+<p align="center" id="section-support">
+<img src=".github/assets/support_banner_en.png" alt="Support Banner" />
+</p>
+
+<p align="center">
+If <b>Mouser</b> saves you from installing <b>Logitech Options+</b>, consider supporting development:
+</p>
 
 <p align="center">
   <a href="https://github.com/sponsors/TomBadash">
@@ -498,15 +563,13 @@ If Mouser saves you from installing Logitech Options+, consider supporting devel
   </a>
 </p>
 
-Every bit helps keep the project going — thank you!
+<p align="center">Every bit helps keep the project going — thank you!</p>
 
-## License
+<hr />
 
-This project is licensed under the [MIT License](LICENSE).
-
----
-
-## Acknowledgments
+<p align="center" id="section-acknowledgments">
+<img src=".github/assets/acknowledgments_banner_en.png" alt="Acknowledgments Banner" />
+</p>
 
 - **[@andrew-sz](https://github.com/andrew-sz)** — macOS port: CGEventTap mouse hooking, Quartz key simulation, NSWorkspace app detection, and NSEvent media key support
 - **[@thisislvca](https://github.com/thisislvca)** — significant expansion of the project including macOS compatibility improvements, multi-device support, new UI features, and active involvement in triaging and resolving open issues
@@ -516,6 +579,12 @@ This project is licensed under the [MIT License](LICENSE).
 - **[@nellwhoami](https://github.com/nellwhoami)** — Multi-language UI system (English, Simplified Chinese, Traditional Chinese) and Page Up/Down/Home/End navigation actions
 - **[@guilamu](https://github.com/guilamu)** — Mouse-to-mouse button remapping (left, right, middle, back, forward click), HID++ stability fixes (stuck button auto-release, auto-reconnect after consecutive timeouts, async dispatch queue for Windows hook)
 
----
+<hr />
 
-**Mouser** is not affiliated with or endorsed by Logitech. "Logitech", "MX Master", and "Options+" are trademarks of Logitech International S.A.
+<p align="center">
+<b>Mouser</b> is not affiliated with or endorsed by Logitech. "Logitech", "MX Master", and "Options+" are trademarks of Logitech International S.A.
+</p>
+
+<p align="center">
+This project is licensed under the <a href="LICENSE">MIT License</a>.
+</p>
