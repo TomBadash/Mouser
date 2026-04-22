@@ -24,6 +24,9 @@ family, with support for additional Logitech models.
 <a href="#section-installation">Installation</a> |
 <a href="#section-build-from-source">Build From Source</a> |
 <a href="#section-device-coverage">Device Coverage</a> |
+<a href="#section-features">Features</a> |
+<a href="#section-default-mappings">Default Mappings</a> |
+<a href="#section-actions">Actions</a> |
 <a href="#section-contributing">Contributing</a> |
 <a href="#section-support">Support</a> |
 <a href="#section-acknowledgments">Acknowledgments</a>
