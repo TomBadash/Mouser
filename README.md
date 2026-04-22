@@ -119,6 +119,9 @@ The file `.python-version` specifies _python_ version to use when interacting wi
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
 - **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
 
+<details>
+<summary>Windows</summary>
+
 ### Windows
 
 ```PowerShell
@@ -197,6 +200,11 @@ pyinstaller Mouser.spec --noconfirm
 
 The output is in `dist\Mouser\`. Zip that entire folder and distribute it. `build.bat` fails early if `hidapi` is not importable, which avoids producing a packaged app that cannot detect Logitech devices.
 
+</details>
+
+<details>
+<summary>macOS</summary>
+
 ### macOS
 
 ```bash
@@ -246,6 +254,11 @@ pip install pyinstaller
 
 The output is `dist/Mouser.app`. The script prefers `images/AppIcon.icns` when present, otherwise it generates an `.icns` icon from `images/logo_icon.png`, then ad-hoc signs the bundle with `codesign --sign -`.
 
+</details>
+
+<details>
+<summary>Linux</summary>
+
 ### Linux
 
 ```bash
@@ -279,6 +292,8 @@ pyinstaller Mouser-linux.spec --noconfirm
 The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 > **Automated releases:** Pushing a `v*` tag triggers the [release workflow](.github/workflows/release.yml), which builds all three platforms in CI and publishes them as GitHub Release assets.
+
+</details>
 
 </div>
 
@@ -321,7 +336,7 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 <hr />
 
 <details>
-<summary>Featuresl, Default Mappings, and Actions</summary>
+<summary>Features, Default Mappings, and Actions</summary>
 <p align="center" id="section-features">
 <img src=".github/assets/features_banner_en.png" alt="Features Banner" />
 </p>
