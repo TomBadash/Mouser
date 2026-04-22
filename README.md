@@ -82,7 +82,7 @@ family, with support for additional Logitech models.
 
 That's it. The app will open and start remapping your mouse buttons immediately.
 
-For macOS Accessibility permissions and login-item notes, see the [macOS Setup Guide](readme_mac_osx.md).
+For macOS Accessibility permissions and login-item notes, see the [macOS Setup Guide](MAC_OSX.md).
 
 ### What to expect
 
