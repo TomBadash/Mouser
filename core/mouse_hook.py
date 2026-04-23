@@ -57,6 +57,16 @@ def _format_debug_details(raw_data):
     return f" value={raw_data}"
 
 
+_LOG_ONCE_KEYS = set()
+
+
+def _log_once(key, message):
+    if key in _LOG_ONCE_KEYS:
+        return
+    _LOG_ONCE_KEYS.add(key)
+    print(message)
+
+
 # ==================================================================
 # Windows implementation
 # ==================================================================
@@ -2206,10 +2216,37 @@ elif sys.platform == "linux":
         def _find_mouse_device(self):
             """Find the best Logitech mouse evdev device."""
             logi_mice = []
-            for path in _evdev_mod.list_devices():
+            try:
+                paths = list(_evdev_mod.list_devices())
+            except Exception as exc:
+                _log_once(
+                    ("evdev-list-error", type(exc).__name__, str(exc)),
+                    f"[MouseHook] Cannot list evdev devices: {exc}"
+                )
+                return None
+            if not paths:
+                _log_once(
+                    "evdev-no-input-devices",
+                    "[MouseHook] evdev returned no input devices; remapping needs "
+                    "/dev/input/event* access"
+                )
+
+            for path in paths:
                 try:
                     dev = _InputDevice(path)
-                except Exception:
+                except PermissionError as exc:
+                    _log_once(
+                        ("evdev-open-permission", path),
+                        f"[MouseHook] Permission denied opening {path}: {exc}. "
+                        "Add the user to a group with /dev/input/event* access "
+                        "or install a udev rule."
+                    )
+                    continue
+                except Exception as exc:
+                    _log_once(
+                        ("evdev-open-error", path, type(exc).__name__, str(exc)),
+                        f"[MouseHook] Cannot open evdev device {path}: {exc}"
+                    )
                     continue
                 try:
                     caps = dev.capabilities(absinfo=False)
@@ -2229,7 +2266,19 @@ elif sys.platform == "linux":
                     has_side = bool(key_caps.intersection({
                         _ecodes.BTN_SIDE, _ecodes.BTN_EXTRA,
                     }))
-                except Exception:
+                except PermissionError as exc:
+                    _log_once(
+                        ("evdev-capabilities-permission", dev.path),
+                        f"[MouseHook] Permission denied reading capabilities for "
+                        f"{dev.path}: {exc}"
+                    )
+                    dev.close()
+                    continue
+                except Exception as exc:
+                    _log_once(
+                        ("evdev-capabilities-error", dev.path, type(exc).__name__, str(exc)),
+                        f"[MouseHook] Cannot inspect evdev device {dev.path}: {exc}"
+                    )
                     dev.close()
                     continue
                 if dev.info.vendor == _LOGI_VENDOR:
@@ -2260,6 +2309,12 @@ elif sys.platform == "linux":
                 print(f"[MouseHook] Found mouse: {chosen.name} ({chosen.path}) "
                       f"vendor=0x{chosen.info.vendor:04X}")
                 return chosen
+            _log_once(
+                "evdev-no-logitech-mouse",
+                "[MouseHook] No Logitech evdev mouse found; UI connection state "
+                "and remapping require a Logitech mouse visible under "
+                "/dev/input/event* with vendor 0x046D"
+            )
             return None
 
         def _setup_evdev(self):

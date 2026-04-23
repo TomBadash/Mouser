@@ -11,6 +11,7 @@ Requires:  pip install hidapi
 Falls back gracefully if the package or device are unavailable.
 """
 
+import os
 import sys
 import queue
 import threading
@@ -23,8 +24,22 @@ from core.logi_devices import (
     resolve_device,
 )
 
+_HID_MODULE_NAME = None
 try:
-    import hid as _hid
+    # The PyPI hidapi Linux wheels expose `hid` as the libusb backend and
+    # `hidraw` as the hidraw backend. Bluetooth HID devices only work through
+    # hidraw, so prefer it on Linux and fall back to `hid` for source builds
+    # where `hid` itself was compiled against hidraw.
+    if sys.platform.startswith("linux"):
+        try:
+            import hidraw as _hid
+            _HID_MODULE_NAME = "hidraw"
+        except ImportError:
+            import hid as _hid
+            _HID_MODULE_NAME = "hid"
+    else:
+        import hid as _hid
+        _HID_MODULE_NAME = "hid"
     HIDAPI_OK = True
     HIDAPI_IMPORT_ERROR = None
     # On macOS, allow non-exclusive HID access so the mouse keeps working
@@ -34,13 +49,23 @@ except Exception as exc:
     HIDAPI_OK = False
     HIDAPI_IMPORT_ERROR = exc
 
-# Support both "pip install hidapi" (hid.device) and "pip install hid" (hid.Device)
+# Support both hidapi/hidraw-style modules (device) and "pip install hid" (Device).
 _HID_API_STYLE = None
 if HIDAPI_OK:
     if hasattr(_hid, 'device'):
         _HID_API_STYLE = "hidapi"
     elif hasattr(_hid, 'Device'):
         _HID_API_STYLE = "hid"
+
+
+_LOG_ONCE_KEYS = set()
+
+
+def _log_once(key, message):
+    if key in _LOG_ONCE_KEYS:
+        return
+    _LOG_ONCE_KEYS.add(key)
+    print(message)
 
 
 class _HidDeviceCompat:
@@ -464,6 +489,64 @@ if _MAC_NATIVE_OK:
 # ── Constants ─────────────────────────────────────────────────────
 LOGI_VID       = 0x046D
 
+
+def _summarize_hid_infos(infos, limit=8):
+    parts = []
+    for info in list(infos)[:limit]:
+        pid = int(info.get("product_id", 0) or 0)
+        usage_page = int(info.get("usage_page", 0) or 0)
+        usage = int(info.get("usage", 0) or 0)
+        product = info.get("product_string") or "?"
+        transport = info.get("transport") or "-"
+        parts.append(
+            f"PID=0x{pid:04X} UP=0x{usage_page:04X} "
+            f"usage=0x{usage:04X} transport={transport} product={product}"
+        )
+    remaining = max(0, len(infos) - limit)
+    if remaining:
+        parts.append(f"... {remaining} more")
+    return "; ".join(parts) if parts else "-"
+
+
+def _linux_logitech_hidraw_nodes(base="/sys/class/hidraw"):
+    if not sys.platform.startswith("linux"):
+        return []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return []
+
+    nodes = []
+    for entry in entries:
+        if not entry.startswith("hidraw"):
+            continue
+        uevent_path = os.path.join(base, entry, "device", "uevent")
+        try:
+            with open(uevent_path, "r", encoding="utf-8", errors="replace") as fh:
+                values = dict(
+                    line.rstrip("\n").split("=", 1)
+                    for line in fh
+                    if "=" in line
+                )
+        except OSError:
+            continue
+
+        parts = values.get("HID_ID", "").split(":")
+        if len(parts) < 3:
+            continue
+        try:
+            vid = int(parts[1], 16)
+            pid = int(parts[2], 16)
+        except ValueError:
+            continue
+        if vid != LOGI_VID:
+            continue
+
+        product = values.get("HID_NAME") or "?"
+        nodes.append(f"{entry} PID=0x{pid:04X} product={product}")
+    return nodes
+
+
 SHORT_ID       = 0x10        # HID++ short report (7 bytes total)
 LONG_ID        = 0x11        # HID++ long  report (20 bytes total)
 SHORT_LEN      = 7
@@ -624,6 +707,16 @@ class HidGestureListener:
             return False
         if not HIDAPI_OK and _MAC_NATIVE_OK:
             print("[HidGesture] hidapi unavailable; using native macOS HID backend only")
+        if HIDAPI_OK:
+            print(
+                "[HidGesture] HID module: "
+                f"{_HID_MODULE_NAME or '?'} API style: {_HID_API_STYLE or '?'}"
+            )
+            if sys.platform.startswith("linux") and _HID_MODULE_NAME != "hidraw":
+                print(
+                    "[HidGesture] Linux hidraw module is unavailable; Bluetooth "
+                    "Logitech HID++ devices may not enumerate"
+                )
         self._running = True
         self._thread = threading.Thread(
             target=self._main_loop, daemon=True, name="HidGesture")
@@ -723,6 +816,29 @@ class HidGestureListener:
         if HIDAPI_OK and _BACKEND_PREFERENCE in ("auto", "hidapi"):
             try:
                 raw_infos = list(_hid.enumerate(LOGI_VID, 0))
+                if not raw_infos:
+                    _log_once(
+                        f"hidapi-empty-{_HID_MODULE_NAME}",
+                        "[HidGesture] "
+                        f"{_HID_MODULE_NAME or 'hidapi'} enumerate(0x{LOGI_VID:04X}) "
+                        "returned no Logitech HID interfaces"
+                    )
+                    linux_nodes = _linux_logitech_hidraw_nodes()
+                    if linux_nodes:
+                        _log_once(
+                            "linux-hidraw-logitech-present",
+                            "[HidGesture] Linux sysfs sees Logitech hidraw nodes: "
+                            f"{'; '.join(linux_nodes[:8])}. If hidapi still sees "
+                            "none, check hidraw backend packaging and /dev/hidraw "
+                            "permissions."
+                        )
+                    elif sys.platform.startswith("linux"):
+                        _log_once(
+                            "linux-hidraw-logitech-missing",
+                            "[HidGesture] Linux sysfs sees no Logitech hidraw "
+                            "nodes for VID 0x046D; verify the mouse is connected "
+                            "as an active HID device, not only paired."
+                        )
                 hidapi_candidates = 0
                 fallback_candidates = 0
                 for info in raw_infos:
@@ -747,6 +863,11 @@ class HidGestureListener:
                     print(
                         "[HidGesture] hidapi found Logitech interfaces, but none "
                         "matched vendor usage metadata or known-device fallback"
+                    )
+                    _log_once(
+                        f"hidapi-filtered-{_HID_MODULE_NAME}",
+                        "[HidGesture] Filtered Logitech HID interfaces: "
+                        f"{_summarize_hid_infos(raw_infos)}"
                     )
             except Exception as exc:
                 print(f"[HidGesture] hidapi enumerate error: {exc}")

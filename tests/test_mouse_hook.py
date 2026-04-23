@@ -154,6 +154,26 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
         self.assertIsNone(chosen)
 
+    def test_find_mouse_device_logs_permission_errors_opening_evdev(self):
+        module = self._reload_for_linux()
+        fake_evdev_mod = SimpleNamespace(list_devices=lambda: ["/dev/input/event0"])
+
+        with (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module, "_InputDevice", side_effect=PermissionError("denied")),
+            patch("builtins.print") as print_mock,
+        ):
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIsNone(chosen)
+        messages = [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+        self.assertTrue(
+            any("Permission denied opening /dev/input/event0" in msg for msg in messages)
+        )
+
     def test_hid_reconnect_requests_rescan_for_fallback_evdev_device(self):
         module = self._reload_for_linux()
         hook = module.MouseHook()

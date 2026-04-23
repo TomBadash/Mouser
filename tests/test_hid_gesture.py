@@ -1,8 +1,74 @@
+import importlib
+import os
+import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core import hid_gesture
+
+
+class HidModuleImportTests(unittest.TestCase):
+    def tearDown(self):
+        importlib.reload(hid_gesture)
+
+    def test_linux_prefers_hidraw_module_when_available(self):
+        fake_hidraw = SimpleNamespace(device=object, enumerate=lambda *_args: [])
+        fake_hid = SimpleNamespace(device=object, enumerate=lambda *_args: [])
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"hidraw": fake_hidraw, "hid": fake_hid}),
+        ):
+            module = importlib.reload(hid_gesture)
+
+        self.assertTrue(module.HIDAPI_OK)
+        self.assertIs(module._hid, fake_hidraw)
+        self.assertEqual(module._HID_MODULE_NAME, "hidraw")
+
+    def test_linux_falls_back_to_hid_when_hidraw_module_is_absent(self):
+        fake_hid = SimpleNamespace(device=object, enumerate=lambda *_args: [])
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"hidraw": None, "hid": fake_hid}),
+        ):
+            module = importlib.reload(hid_gesture)
+
+        self.assertTrue(module.HIDAPI_OK)
+        self.assertIs(module._hid, fake_hid)
+        self.assertEqual(module._HID_MODULE_NAME, "hid")
+
+
+class HidLinuxDiagnosticsTests(unittest.TestCase):
+    def test_linux_logitech_hidraw_nodes_reads_sysfs_uevent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node_dir = os.path.join(tmp, "hidraw3", "device")
+            os.makedirs(node_dir)
+            with open(os.path.join(node_dir, "uevent"), "w", encoding="utf-8") as fh:
+                fh.write("HID_ID=0005:0000046D:0000B034\n")
+                fh.write("HID_NAME=MX Master 3S\n")
+
+            with patch.object(sys, "platform", "linux"):
+                nodes = hid_gesture._linux_logitech_hidraw_nodes(base=tmp)
+
+        self.assertEqual(nodes, ["hidraw3 PID=0xB034 product=MX Master 3S"])
+
+    def test_summarize_hid_infos_includes_candidate_metadata(self):
+        summary = hid_gesture._summarize_hid_infos([
+            {
+                "product_id": 0xB034,
+                "usage_page": 0x0000,
+                "usage": 0x0001,
+                "transport": "Bluetooth Low Energy",
+                "product_string": "MX Master 3S",
+            }
+        ])
+
+        self.assertIn("PID=0xB034", summary)
+        self.assertIn("UP=0x0000", summary)
+        self.assertIn("product=MX Master 3S", summary)
 
 
 class HidBackendPreferenceTests(unittest.TestCase):

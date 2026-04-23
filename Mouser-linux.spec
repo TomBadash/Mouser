@@ -94,6 +94,7 @@ a = Analysis(
     ],
     hiddenimports=[
         "hid",
+        "hidraw",
         "logging.handlers",
         "evdev",
         "ui.locale_manager",
