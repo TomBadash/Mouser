@@ -6,6 +6,9 @@ so we can remap them before they reach applications.
 """
 
 import queue
+import glob
+import os
+import stat
 import sys
 import threading
 import time
@@ -65,6 +68,50 @@ def _log_once(key, message):
         return
     _LOG_ONCE_KEYS.add(key)
     print(message)
+
+
+def _owner_name(uid):
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _group_name(gid):
+    try:
+        import grp
+        return grp.getgrgid(gid).gr_name
+    except Exception:
+        return str(gid)
+
+
+def _format_linux_device_access(path):
+    if not path:
+        return "path=-"
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        return f"path={path} stat_error={exc}"
+
+    mode = stat.S_IMODE(st.st_mode)
+    can_read = os.access(path, os.R_OK)
+    can_write = os.access(path, os.W_OK)
+    can_rw = os.access(path, os.R_OK | os.W_OK)
+    return (
+        f"path={path} mode={mode:04o} "
+        f"owner={_owner_name(st.st_uid)}({st.st_uid}) "
+        f"group={_group_name(st.st_gid)}({st.st_gid}) "
+        f"access=read:{can_read} write:{can_write} read_write:{can_rw}"
+    )
+
+
+def _format_linux_device_access_list(paths, limit=8):
+    details = [_format_linux_device_access(path) for path in list(paths)[:limit]]
+    remaining = max(0, len(paths) - limit)
+    if remaining:
+        details.append(f"... {remaining} more")
+    return "; ".join(details) if details else "-"
 
 
 # ==================================================================
@@ -2225,11 +2272,23 @@ elif sys.platform == "linux":
                 )
                 return None
             if not paths:
-                _log_once(
-                    "evdev-no-input-devices",
-                    "[MouseHook] evdev returned no input devices; remapping needs "
-                    "/dev/input/event* access"
-                )
+                event_paths = sorted(glob.glob("/dev/input/event*"))
+                if event_paths:
+                    _log_once(
+                        "evdev-empty-fallback-event-nodes",
+                        "[MouseHook] evdev returned no input devices; falling "
+                        "back to visible /dev/input/event* nodes: "
+                        f"{_format_linux_device_access_list(event_paths)}"
+                    )
+                    paths = event_paths
+                else:
+                    _log_once(
+                        "evdev-no-input-devices",
+                        "[MouseHook] evdev returned no input devices and no "
+                        "/dev/input/event* nodes are visible; remapping needs "
+                        f"/dev/input/event* access. "
+                        f"{_format_linux_device_access('/dev/input')}"
+                    )
 
             for path in paths:
                 try:
@@ -2238,6 +2297,7 @@ elif sys.platform == "linux":
                     _log_once(
                         ("evdev-open-permission", path),
                         f"[MouseHook] Permission denied opening {path}: {exc}. "
+                        f"{_format_linux_device_access(path)}. "
                         "Add the user to a group with /dev/input/event* access "
                         "or install a udev rule."
                     )

@@ -174,6 +174,34 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             any("Permission denied opening /dev/input/event0" in msg for msg in messages)
         )
 
+    def test_find_mouse_device_falls_back_to_glob_when_evdev_list_is_empty(self):
+        module = self._reload_for_linux()
+        logi = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event4",
+            vendor=module._LOGI_VENDOR,
+            capabilities=self._fake_caps(module),
+        )
+        fake_evdev_mod = SimpleNamespace(list_devices=lambda: [])
+
+        with (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module.glob, "glob", return_value=[logi.path]),
+            patch.object(module, "_InputDevice", return_value=logi),
+            patch("builtins.print") as print_mock,
+        ):
+            module._LOG_ONCE_KEYS.clear()
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIs(chosen, logi)
+        messages = [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+        self.assertTrue(
+            any("falling back to visible /dev/input/event* nodes" in msg for msg in messages)
+        )
+
     def test_hid_reconnect_requests_rescan_for_fallback_evdev_device(self):
         module = self._reload_for_linux()
         hook = module.MouseHook()

@@ -70,6 +70,16 @@ class HidLinuxDiagnosticsTests(unittest.TestCase):
         self.assertIn("UP=0x0000", summary)
         self.assertIn("product=MX Master 3S", summary)
 
+    def test_format_linux_device_access_includes_path_permissions_and_access(self):
+        with tempfile.NamedTemporaryFile() as fh:
+            summary = hid_gesture._format_linux_device_access(fh.name.encode())
+
+        self.assertIn("path=", summary)
+        self.assertIn("mode=", summary)
+        self.assertIn("owner=", summary)
+        self.assertIn("group=", summary)
+        self.assertIn("access=read:", summary)
+
 
 class HidBackendPreferenceTests(unittest.TestCase):
     def test_default_backend_uses_auto_on_macos(self):
@@ -270,6 +280,36 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
             any(self._is_missing_reprog_diag(message) for message in messages)
         )
         fake_dev.close.assert_called_once_with()
+
+    def test_try_connect_logs_linux_hid_path_access_before_open(self):
+        listener, info = self._make_listener()
+        fake_dev = _FakeHidDevice()
+        fake_dev.open_path.side_effect = OSError("open failed")
+
+        with tempfile.NamedTemporaryFile() as fh:
+            info = dict(info, path=fh.name.encode())
+            with (
+                patch.object(sys, "platform", "linux"),
+                patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+                patch.object(hid_gesture, "HIDAPI_OK", True),
+                patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+                patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+                patch.object(
+                    hid_gesture,
+                    "_hid",
+                    SimpleNamespace(device=lambda: fake_dev),
+                    create=True,
+                ),
+                patch("builtins.print") as print_mock,
+            ):
+                hid_gesture._LOG_ONCE_KEYS.clear()
+                self.assertFalse(listener._try_connect())
+
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(
+            any("HID path access before open:" in message for message in messages)
+        )
+        self.assertTrue(any("access=read:" in message for message in messages))
 
     def test_try_connect_success_path_keeps_existing_reprog_discovery_diagnostics(self):
         listener, info = self._make_listener()

@@ -12,6 +12,7 @@ Falls back gracefully if the package or device are unavailable.
 """
 
 import os
+import stat
 import sys
 import queue
 import threading
@@ -66,6 +67,53 @@ def _log_once(key, message):
         return
     _LOG_ONCE_KEYS.add(key)
     print(message)
+
+
+def _device_path_display(path):
+    if isinstance(path, memoryview):
+        path = bytes(path)
+    if isinstance(path, bytes):
+        return path.decode("utf-8", errors="replace")
+    return str(path or "")
+
+
+def _owner_name(uid):
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _group_name(gid):
+    try:
+        import grp
+        return grp.getgrgid(gid).gr_name
+    except Exception:
+        return str(gid)
+
+
+def _format_linux_device_access(path):
+    if isinstance(path, memoryview):
+        path = bytes(path)
+    display = _device_path_display(path)
+    if not path:
+        return "path=-"
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        return f"path={display} stat_error={exc}"
+
+    mode = stat.S_IMODE(st.st_mode)
+    can_read = os.access(path, os.R_OK)
+    can_write = os.access(path, os.W_OK)
+    can_rw = os.access(path, os.R_OK | os.W_OK)
+    return (
+        f"path={display} mode={mode:04o} "
+        f"owner={_owner_name(st.st_uid)}({st.st_uid}) "
+        f"group={_group_name(st.st_gid)}({st.st_gid}) "
+        f"access=read:{can_read} write:{can_write} read_write:{can_rw}"
+    )
 
 
 class _HidDeviceCompat:
@@ -1593,9 +1641,10 @@ class HidGestureListener:
             transport = info.get("transport")
             source = info.get("source", "unknown")
             product = info.get("product_string") or "?"
+            path = _device_path_display(info.get("path"))
             print(f"[HidGesture] Candidate PID=0x{pid:04X} UP=0x{up:04X} "
                   f"usage=0x{usage:04X} transport={transport or '-'} "
-                  f"source={source} product={product}")
+                  f"source={source} product={product} path={path or '-'}")
 
         for info in infos:
             pid = info.get("product_id", 0)
@@ -1650,6 +1699,13 @@ class HidGestureListener:
                     else:
                         if not HIDAPI_OK:
                             continue
+                        if sys.platform.startswith("linux"):
+                            path = open_info.get("path")
+                            _log_once(
+                                ("hid-path-access", _device_path_display(path)),
+                                "[HidGesture] HID path access before open: "
+                                f"{_format_linux_device_access(path)}",
+                            )
                         if _HID_API_STYLE == "hidapi":
                             d = _hid.device()
                             d.open_path(open_info["path"])
