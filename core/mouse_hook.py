@@ -977,9 +977,17 @@ if sys.platform == "win32":
 # ==================================================================
 
 elif sys.platform == "darwin":
+    import functools
+
     try:
-        import functools
         import objc
+    except ImportError as exc:
+        raise ImportError(
+            "PyObjC is required on macOS. Run "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
+
+    try:
         import Quartz
         _QUARTZ_OK = True
     except ImportError:

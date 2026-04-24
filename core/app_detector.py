@@ -165,7 +165,14 @@ if sys.platform == "win32":
 
 elif sys.platform == "darwin":
     import functools
-    import objc as _objc
+
+    try:
+        import objc as _objc
+    except ImportError as exc:
+        raise ImportError(
+            "PyObjC is required on macOS. Run "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
 
     def _autoreleased(fn):
         @functools.wraps(fn)
