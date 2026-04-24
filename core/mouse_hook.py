@@ -978,12 +978,21 @@ if sys.platform == "win32":
 
 elif sys.platform == "darwin":
     try:
+        import functools
+        import objc
         import Quartz
         _QUARTZ_OK = True
     except ImportError:
         _QUARTZ_OK = False
         print("[MouseHook] pyobjc-framework-Quartz not installed — "
               "pip install pyobjc-framework-Quartz")
+
+    def _autoreleased(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with objc.autorelease_pool():
+                return fn(*args, **kwargs)
+        return wrapper
 
     # HID button numbers (typical USB/BT HID mapping on macOS)
     _BTN_MIDDLE = 2
@@ -1363,6 +1372,7 @@ elif sys.platform == "darwin":
                 except queue.Empty:
                     continue
 
+        @_autoreleased
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:

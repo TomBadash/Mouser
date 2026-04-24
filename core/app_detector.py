@@ -164,6 +164,17 @@ if sys.platform == "win32":
         return exe_path
 
 elif sys.platform == "darwin":
+    import functools
+    import objc as _objc
+
+    def _autoreleased(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with _objc.autorelease_pool():
+                return fn(*args, **kwargs)
+        return wrapper
+
+    @_autoreleased
     def get_foreground_exe() -> str | None:
         """Return a stable app identifier for the frontmost app on macOS."""
         try:
