@@ -8,11 +8,11 @@ from core import mouse_hook
 
 
 class _FakeEvdevDevice:
-    def __init__(self, *, name, path, vendor, capabilities, fd=11):
+    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11):
         self.name = name
         self.path = path
         self.fd = fd
-        self.info = SimpleNamespace(vendor=vendor)
+        self.info = SimpleNamespace(vendor=vendor, product=product)
         self._capabilities = capabilities
         self.grab = Mock()
         self.ungrab = Mock()
@@ -126,6 +126,37 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertIs(chosen, logi)
         self.assertTrue(generic.close.called)
         self.assertFalse(logi.close.called)
+
+    def test_find_mouse_device_prefers_known_supported_logitech_model(self):
+        module = self._reload_for_linux()
+        legacy = _FakeEvdevDevice(
+            name="Logitech Performance MX",
+            path="/dev/input/event11",
+            vendor=module._LOGI_VENDOR,
+            product=0x101A,
+            capabilities=self._fake_caps(module),
+        )
+        modern = _FakeEvdevDevice(
+            name="Logitech MX Master 3S",
+            path="/dev/input/event22",
+            vendor=module._LOGI_VENDOR,
+            product=0xB034,
+            capabilities=self._fake_caps(module),
+        )
+
+        patches = self._patch_evdev_lookup(
+            module,
+            {
+                legacy.path: legacy,
+                modern.path: modern,
+            },
+        )
+        with patches[0], patches[1]:
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIs(chosen, modern)
+        self.assertTrue(legacy.close.called)
+        self.assertFalse(modern.close.called)
 
     def test_find_mouse_device_returns_none_when_only_non_logitech_candidates_exist(self):
         module = self._reload_for_linux()

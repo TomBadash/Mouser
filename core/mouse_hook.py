@@ -1814,7 +1814,10 @@ elif sys.platform == "linux":
         _EVDEV_OK = False
         print("[MouseHook] python-evdev not installed — pip install evdev")
 
-    from core.logi_devices import build_evdev_connected_device_info
+    from core.logi_devices import (
+        build_evdev_connected_device_info,
+        resolve_device as _resolve_logi_device,
+    )
 
     _LOGI_VENDOR = 0x046D
 
@@ -2361,7 +2364,26 @@ elif sys.platform == "linux":
                         )
                     dev.close()
 
-            ordered = sorted(logi_mice, key=lambda x: -x[1])
+            def _event_num(dev):
+                try:
+                    return int(str(dev.path).rsplit("event", 1)[1])
+                except (IndexError, ValueError):
+                    return -1
+
+            def _sort_key(item):
+                dev, has_side = item
+                info = getattr(dev, "info", None)
+                spec = _resolve_logi_device(
+                    product_id=getattr(info, "product", None),
+                    product_name=getattr(dev, "name", None),
+                )
+                return (
+                    int(spec is not None),
+                    int(has_side),
+                    _event_num(dev),
+                )
+
+            ordered = sorted(logi_mice, key=_sort_key, reverse=True)
             if ordered:
                 chosen = ordered[0][0]
                 for dev, _ in ordered[1:]:
