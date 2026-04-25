@@ -197,20 +197,20 @@ def _render_svg_pixmap(path: str, color: QColor, size: int) -> QPixmap:
 
 
 def _tray_icon() -> QIcon:
-    if sys.platform != "darwin":
-        return _app_icon()
 
     tray_svg = os.path.join(ROOT, "images", "icons", "mouse-simple.svg")
     icon = QIcon()
     # Provide both Normal (black, for light menu bar) and Selected (white,
     # for dark menu bar) modes so macOS always picks the correct contrast.
     for size in (18, 36):
+        normalColor = "#FFFFFF" if sys.platform == "linux"  else "#000000"
         icon.addPixmap(
-            _render_svg_pixmap(tray_svg, QColor("#000000"), size),
+            _render_svg_pixmap(tray_svg, QColor(normalColor), size),
             QIcon.Mode.Normal)
         icon.addPixmap(
             _render_svg_pixmap(tray_svg, QColor("#FFFFFF"), size),
             QIcon.Mode.Selected)
+            
     icon.setIsMask(True)
     return icon
 
@@ -476,6 +476,16 @@ def main():
         root_window.requestActivate()
         _activate_macos_window()
 
+    def toggle_main_window():
+        if root_window.isVisible() and root_window.isActive():
+            root_window.hide()
+        else:
+            root_window.show()
+            root_window.raise_()
+            root_window.requestActivate()
+            _activate_macos_window()
+        
+
     def _on_second_instance_activate():
         _drain_local_activate_socket(single_server.nextPendingConnection())
         show_main_window()
@@ -541,6 +551,17 @@ def main():
 
     tray_menu.addSeparator()
 
+    check_update_action = QAction(locale_mgr.tr("tray.check_for_update"), tray_menu)
+
+    def _tray_check_for_update():
+        show_main_window()
+        backend.checkForUpdate()
+
+    check_update_action.triggered.connect(_tray_check_for_update)
+    tray_menu.addAction(check_update_action)
+
+    tray_menu.addSeparator()
+
     quit_action = QAction(locale_mgr.tr("tray.quit"), tray_menu)
 
     def quit_app():
@@ -554,6 +575,7 @@ def main():
     def _update_tray_texts():
         """Refresh tray menu labels after a language change."""
         open_action.setText(locale_mgr.tr("tray.open_settings"))
+        check_update_action.setText(locale_mgr.tr("tray.check_for_update"))
         quit_action.setText(locale_mgr.tr("tray.quit"))
         sync_debug_action()
         # Re-sync toggle text based on current engine state
@@ -575,7 +597,7 @@ def main():
 
     tray.setContextMenu(tray_menu)
     tray.activated.connect(lambda reason: (
-        show_main_window()
+        toggle_main_window()
     ) if reason in (
         QSystemTrayIcon.ActivationReason.Trigger,
         QSystemTrayIcon.ActivationReason.DoubleClick,

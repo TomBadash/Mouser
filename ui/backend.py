@@ -31,6 +31,25 @@ from core.startup import (
     supports_login_startup,
     sync_from_config as sync_login_startup_from_config,
 )
+from core.updater import (
+    Updater,
+    STATUS_IDLE,
+    STATUS_CHECKING,
+    STATUS_UP_TO_DATE,
+    STATUS_AVAILABLE,
+    STATUS_DOWNLOADING,
+    STATUS_INSTALLING,
+    STATUS_INSTALLED,
+    STATUS_NEEDS_MANUAL,
+    STATUS_CANCELLED,
+    STATUS_ERROR,
+)
+
+# Delay (ms) before the startup auto-update check so the UI is fully ready.
+_AUTO_UPDATE_CHECK_DELAY_MS    = 5_000
+# How often to repeat the auto-update check (24 hours).
+_AUTO_UPDATE_CHECK_INTERVAL_S  = 86_400
+_AUTO_UPDATE_CHECK_INTERVAL_MS = _AUTO_UPDATE_CHECK_INTERVAL_S * 1_000
 
 
 def _action_label(action_id):
@@ -60,6 +79,7 @@ class Backend(QObject):
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
     knownAppsChanged = Signal()
+    updateStatusChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
@@ -70,6 +90,8 @@ class Backend(QObject):
     _gestureEventRequest = Signal(object)
     _smartShiftReadRequest = Signal()
     _statusMessageRequest = Signal(str)
+    _updateProgressRequest = Signal(str, float)
+    _updateFinishedRequest = Signal(str, str)
 
     def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
@@ -105,6 +127,21 @@ class Backend(QObject):
         self._connected_device_refresh_pending = False
         self._connected_device_refresh_attempts = 0
 
+        # ── Updater state ───────────────────────────────────────
+        self._update_status = STATUS_IDLE
+        self._update_latest_version = ""
+        self._update_download_progress = 0.0
+        self._update_detail = ""
+        self._updater = Updater(
+            on_progress=self._onUpdaterProgress,
+            on_finished=self._onUpdaterFinished,
+        )
+        # Daily repeating timer for auto-update checks.
+        # Only started when auto_update is enabled.
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.setInterval(_AUTO_UPDATE_CHECK_INTERVAL_MS)
+        self._update_check_timer.timeout.connect(self._periodicUpdateCheck)
+
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
             self._handleProfileSwitch, Qt.QueuedConnection)
@@ -122,6 +159,10 @@ class Backend(QObject):
             self._handleSmartShiftRead, Qt.QueuedConnection)
         self._statusMessageRequest.connect(
             self._handleStatusMessage, Qt.QueuedConnection)
+        self._updateProgressRequest.connect(
+            self._handleUpdateProgress, Qt.QueuedConnection)
+        self._updateFinishedRequest.connect(
+            self._handleUpdateFinished, Qt.QueuedConnection)
 
         # Wire engine callbacks
         if engine:
@@ -149,6 +190,10 @@ class Backend(QObject):
         else:
             self._cfg.setdefault("settings", {})["start_at_login"] = False
         self._sync_connected_device_info()
+        # Schedule auto-update check on startup (delayed so the UI is fully ready).
+        if self._cfg.get("settings", {}).get("auto_update", True):
+            QTimer.singleShot(_AUTO_UPDATE_CHECK_DELAY_MS, self._updater.check)
+            self._update_check_timer.start()
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -323,6 +368,28 @@ class Backend(QObject):
     @Property(bool, notify=debugEventsEnabledChanged)
     def debugEventsEnabled(self):
         return self._debug_events_enabled
+
+    # ── Update properties ───────────────────────────────────────
+
+    @Property(bool, notify=settingsChanged)
+    def autoUpdate(self):
+        return bool(self._cfg.get("settings", {}).get("auto_update", True))
+
+    @Property(str, notify=updateStatusChanged)
+    def updateStatus(self):
+        return self._update_status
+
+    @Property(str, notify=updateStatusChanged)
+    def updateLatestVersion(self):
+        return self._update_latest_version
+
+    @Property(float, notify=updateStatusChanged)
+    def updateDownloadProgress(self):
+        return self._update_download_progress
+
+    @Property(str, notify=updateStatusChanged)
+    def updateDetail(self):
+        return self._update_detail
 
     @Property(bool, constant=True)
     def supportsGestureDirections(self):
@@ -670,6 +737,94 @@ class Backend(QObject):
             self._append_debug_line("Debug mode disabled")
         self.settingsChanged.emit()
         self.debugEventsEnabledChanged.emit()
+
+    # ── Update slots ────────────────────────────────────────────
+
+    @Slot(bool)
+    def setAutoUpdate(self, value):
+        enabled = bool(value)
+        self._cfg.setdefault("settings", {})["auto_update"] = enabled
+        save_config(self._cfg)
+        if enabled:
+            self._update_check_timer.start()
+        else:
+            self._update_check_timer.stop()
+        self.settingsChanged.emit()
+
+    @Slot()
+    def checkForUpdate(self):
+        """Trigger a background update check."""
+        if not self._updater.is_busy():
+            self._update_status = STATUS_CHECKING
+            self._update_download_progress = 0.0
+            self.updateStatusChanged.emit()
+            self._updater.check()
+
+    @Slot()
+    def downloadAndInstallUpdate(self):
+        """Download and install the latest update."""
+        if not self._updater.is_busy():
+            self._update_status = STATUS_DOWNLOADING
+            self._update_download_progress = 0.0
+            self.updateStatusChanged.emit()
+            self._updater.download_and_install()
+
+    @Slot()
+    def restartApp(self):
+        """Restart the application (used after a successful update install)."""
+        from PySide6.QtGui import QGuiApplication
+        if sys.platform == "darwin":
+            # Locate the .app bundle and reopen it, then quit this process.
+            import subprocess as _sp
+            from pathlib import Path as _Path
+            candidate = _Path(sys.executable)
+            bundle = None
+            for _ in range(8):
+                if candidate.suffix == ".app":
+                    bundle = candidate
+                    break
+                candidate = candidate.parent
+            if bundle and bundle.exists():
+                _sp.Popen(["open", "-n", str(bundle)])
+        QGuiApplication.quit()
+
+    @Slot()
+    def _periodicUpdateCheck(self):
+        """Called every 24 h by the daily timer to silently check for updates."""
+        if not self._updater.is_busy():
+            self._update_status = STATUS_CHECKING
+            self._update_download_progress = 0.0
+            self.updateStatusChanged.emit()
+            self._updater.check()
+
+    # Updater background callbacks → marshal to Qt main thread
+
+    def _onUpdaterProgress(self, status: str, fraction: float):
+        self._updateProgressRequest.emit(status, fraction)
+
+    def _onUpdaterFinished(self, status: str, detail):
+        self._updateFinishedRequest.emit(status, detail or "")
+
+    @Slot(str, float)
+    def _handleUpdateProgress(self, status: str, fraction: float):
+        self._update_status = status
+        self._update_download_progress = fraction
+        self.updateStatusChanged.emit()
+
+    @Slot(str, str)
+    def _handleUpdateFinished(self, status: str, detail: str):
+        self._update_status = status
+        self._update_detail = detail
+        if status == STATUS_AVAILABLE:
+            self._update_latest_version = detail
+        # Persist the last-check time after any completed check operation
+        # (not during download/install which are follow-on operations).
+        if status not in (
+            STATUS_DOWNLOADING, STATUS_INSTALLING,
+            STATUS_INSTALLED, STATUS_NEEDS_MANUAL,
+        ):
+            save_config(self._cfg)
+        self.updateStatusChanged.emit()
 
     @Slot(bool)
     def setDebugEventsEnabled(self, value):

@@ -237,7 +237,17 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,              # UPX OFF — decompression at startup is very slow
+    upx=True,               # compress main executable
+    upx_exclude=[
+        # Qt DLLs use mmap-based resource loading; compressing them can
+        # break resource access and slow startup significantly.
+        "Qt6*.dll",
+        # Python runtime
+        "python3*.dll",
+        # VC runtime
+        "MSVCP*.dll",
+        "VCRUNTIME*.dll",
+    ],
     console=False,          # windowed app (no terminal)
     icon=os.path.join(ROOT, "images", "logo.ico"),
     uac_admin=False,        # does NOT require admin
@@ -249,8 +259,16 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,              # UPX OFF — faster cold start
-    upx_exclude=[],
+    upx=True,               # compress collected binaries where safe
+    upx_exclude=[
+        # Qt DLLs — mmap-based resource loading, risky to UPX-compress
+        "Qt6*.dll",
+        # Python runtime
+        "python3*.dll",
+        # VC runtime DLLs
+        "MSVCP*.dll",
+        "VCRUNTIME*.dll",
+    ],
     name="Mouser",
 )
 

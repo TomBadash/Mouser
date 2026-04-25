@@ -872,6 +872,237 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            // ── Updates ───────────────────────────────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: updateContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: updateContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["update.title"] || "Updates"
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["update.desc"] || "Automatically check for and install new versions of Mouser."
+                        font { family: uiState.fontFamily; pixelSize: 12 }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    // ── Auto-update toggle ─────────────────────────────
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: s["update.auto_update"] || "Auto-update"
+                                font { family: uiState.fontFamily; pixelSize: 13 }
+                                color: scrollPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: autoUpdateSwitch
+                                checked: backend.autoUpdate
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["update.auto_update"] || "Auto-update"
+                                onToggled: backend.setAutoUpdate(checked)
+                            }
+                        }
+                    }
+
+                    // ── Status message + progress ──────────────────────
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: backend.updateStatus !== "idle"
+
+                        Text {
+                            id: updateStatusText
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            font { family: uiState.fontFamily; pixelSize: 12 }
+                            color: {
+                                var st = backend.updateStatus
+                                if (st === "error") return scrollPage.theme.warning
+                                if (st === "available" || st === "installed") return scrollPage.theme.accent
+                                return scrollPage.theme.textSecondary
+                            }
+                            text: {
+                                var st = backend.updateStatus
+                                if (st === "checking")
+                                    return s["update.checking"] || "Checking for updates…"
+                                if (st === "up_to_date")
+                                    return s["update.up_to_date"] || "Mouser is up to date."
+                                if (st === "available")
+                                    return (s["update.available_prefix"] || "Version ")
+                                        + backend.updateLatestVersion
+                                        + (s["update.available_suffix"] || " is available!")
+                                if (st === "downloading" || st === "installing")
+                                    return st === "downloading"
+                                        ? (s["update.downloading"] || "Downloading update…")
+                                        : (s["update.installing"] || "Installing…")
+                                if (st === "installed")
+                                    return s["update.installed"] || "Update installed — please restart Mouser."
+                                if (st === "needs_manual")
+                                    return (s["update.needs_manual_prefix"] || "Download ready at: ")
+                                        + backend.updateDetail
+                                        + (s["update.needs_manual_suffix"] || "\nInstall manually with: sudo dpkg -i <file>")
+                                if (st === "cancelled")
+                                    return s["update.cancelled"] || "Update cancelled."
+                                if (st === "error")
+                                    return (s["update.error_prefix"] || "Error: ") + backend.updateDetail
+                                return ""
+                            }
+                        }
+
+                        // Download progress bar
+                        Rectangle {
+                            width: parent.width
+                            height: 6
+                            radius: 3
+                            color: scrollPage.theme.bgSubtle
+                            visible: backend.updateStatus === "downloading" || backend.updateStatus === "installing"
+
+                            Rectangle {
+                                width: parent.width * backend.updateDownloadProgress
+                                height: parent.height
+                                radius: parent.radius
+                                color: scrollPage.theme.accent
+                                Behavior on width { NumberAnimation { duration: 150 } }
+                            }
+                        }
+                    }
+
+                    // ── Action buttons ─────────────────────────────────
+                    Row {
+                        width: parent.width
+                        spacing: 10
+
+                        // Check for Update button — styled like other setting buttons
+                        Rectangle {
+                            width: Math.max(140, checkUpdateText.implicitWidth + 32)
+                            height: 38
+                            radius: 10
+                            visible: backend.updateStatus !== "downloading" && backend.updateStatus !== "installing"
+                            color: checkUpdateMa.containsMouse
+                                   ? scrollPage.theme.bgCardHover
+                                   : scrollPage.theme.bgSubtle
+                            border.width: 1
+                            border.color: scrollPage.theme.border
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            Text {
+                                id: checkUpdateText
+                                anchors.centerIn: parent
+                                text: s["update.check_now"] || "Check for Update"
+                                font { family: uiState.fontFamily; pixelSize: 13 }
+                                color: scrollPage.theme.textPrimary
+                            }
+
+                            MouseArea {
+                                id: checkUpdateMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: backend.checkForUpdate()
+                            }
+                        }
+
+                        // Download & Install button (shown only when update available)
+                        Rectangle {
+                            width: Math.max(140, dlText.implicitWidth + 32)
+                            height: 38
+                            radius: 10
+                            visible: backend.updateStatus === "available"
+                            color: dlMa.containsMouse
+                                   ? Qt.darker(scrollPage.theme.accent, 1.08)
+                                   : scrollPage.theme.accent
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            Text {
+                                id: dlText
+                                anchors.centerIn: parent
+                                text: s["update.download_install"] || "Download & Install"
+                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                color: scrollPage.theme.bgSidebar
+                            }
+
+                            MouseArea {
+                                id: dlMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: backend.downloadAndInstallUpdate()
+                            }
+                        }
+
+                        // Restart button (shown after install)
+                        Rectangle {
+                            width: Math.max(140, restartText.implicitWidth + 32)
+                            height: 38
+                            radius: 10
+                            visible: backend.updateStatus === "installed"
+                            color: restartMa.containsMouse
+                                   ? Qt.darker(scrollPage.theme.accent, 1.08)
+                                   : scrollPage.theme.accent
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            Text {
+                                id: restartText
+                                anchors.centerIn: parent
+                                text: s["update.restart"] || "Restart Now"
+                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                color: scrollPage.theme.bgSidebar
+                            }
+
+                            MouseArea {
+                                id: restartMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: backend.restartApp()
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── DPI note ──────────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
@@ -934,6 +1165,7 @@ Item {
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            autoUpdateSwitch.checked = backend.autoUpdate
         }
     }
 }

@@ -1,0 +1,82 @@
+# .github/release-drafter.yml
+#
+# Configuration for release-drafter/release-drafter.
+# Generates release notes from merged PRs (with contributors) and conventional
+# commits that are not part of a merged PR.
+
+name-template: 'Mouser $RESOLVED_VERSION'
+tag-template:  'v$RESOLVED_VERSION'
+
+# ── Category mapping (by PR label) ────────────────────────────────────────────
+categories:
+  - title: '🚀 Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'feat'
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'bug'
+      - 'bugfix'
+      - 'fix'
+  - title: '📝 Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
+  - title: '⚡ Performance'
+    labels:
+      - 'performance'
+      - 'perf'
+  - title: '🔧 Maintenance'
+    labels:
+      - 'chore'
+      - 'maintenance'
+      - 'refactor'
+      - 'ci'
+      - 'build'
+  - title: '🔒 Security'
+    labels:
+      - 'security'
+
+# ── Autolabeler: map conventional-commit prefixes in PR titles to labels ──────
+autolabeler:
+  - label: 'feature'
+    title:
+      - '/^feat(\(.+\))?:/i'
+  - label: 'fix'
+    title:
+      - '/^fix(\(.+\))?:/i'
+  - label: 'docs'
+    title:
+      - '/^docs(\(.+\))?:/i'
+  - label: 'perf'
+    title:
+      - '/^perf(\(.+\))?:/i'
+  - label: 'chore'
+    title:
+      - '/^(chore|refactor|ci|build|style|test)(\(.+\))?:/i'
+
+# ── Version resolver (used when release-drafter is kept as a draft) ───────────
+version-resolver:
+  major:
+    labels: ['major', 'breaking']
+  minor:
+    labels: ['minor', 'feature', 'enhancement', 'feat']
+  patch:
+    labels: ['patch', 'bug', 'bugfix', 'fix', 'chore']
+  default: patch
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+change-title-escapes: '\<*_&'
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  $CONTRIBUTORS
+
+  **Full Changelog**: $PREVIOUS_TAG...$TAG
+
+no-changes-template: 'No significant changes in this release.'
