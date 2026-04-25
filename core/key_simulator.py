@@ -56,8 +56,32 @@ def normalize_captured_shortcut_parts(modifier_names, key_name="", platform_name
     return "+".join(parts)
 
 
+_CUSTOM_KEY_NAME_ALIASES = {
+    "control": "ctrl",
+    "option": "alt",
+    "opt": "alt",
+    "cmd": "super",
+    "command": "super",
+    "meta": "super",
+    "win": "super",
+    "windows": "super",
+    "return": "enter",
+    "escape": "esc",
+}
+
+
+def _build_custom_key_name_map(base_map):
+    """Add common aliases to a per-platform key-name map."""
+    key_map = dict(base_map)
+    for alias, canonical in _CUSTOM_KEY_NAME_ALIASES.items():
+        code = key_map.get(canonical)
+        if code is not None:
+            key_map[alias] = code
+    return key_map
+
+
 def _pretty_custom_key_name(name):
-    normalized = name.strip().lower()
+    normalized = _CUSTOM_KEY_NAME_ALIASES.get(name.strip().lower(), name.strip().lower())
     if normalized in {"super", "cmd", "command", "meta", "win", "windows"}:
         return "Super"
     if normalized in {"alt", "option", "opt"}:
@@ -542,17 +566,15 @@ if sys.platform == "win32":
         },
     }
 
-    _KEY_NAME_TO_CODE = {
-        "ctrl": VK_CONTROL, "control": VK_CONTROL,
-        "shift": VK_SHIFT,
-        "alt": VK_MENU, "option": VK_MENU, "opt": VK_MENU,
-        "super": VK_LWIN, "cmd": VK_LWIN, "command": VK_LWIN,
-        "meta": VK_LWIN, "win": VK_LWIN, "windows": VK_LWIN,
-        "tab": VK_TAB, "space": VK_SPACE,
+    _KEY_NAME_TO_CODE = _build_custom_key_name_map({
+        "ctrl": VK_CONTROL, "shift": VK_SHIFT, "alt": VK_MENU,
+        "super": VK_LWIN, "tab": VK_TAB, "space": VK_SPACE,
         "enter": VK_RETURN, "esc": VK_ESCAPE, "backspace": VK_BACK,
         "delete": VK_DELETE, "left": VK_LEFT, "right": VK_RIGHT,
         "up": VK_UP, "down": VK_DOWN,
         "pageup": VK_PRIOR, "pagedown": VK_NEXT, "home": VK_HOME, "end": VK_END,
+        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
         "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45,
         "f": 0x46, "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A,
         "k": 0x4B, "l": 0x4C, "m": 0x4D, "n": 0x4E, "o": 0x4F,
@@ -565,7 +587,7 @@ if sys.platform == "win32":
         "volumeup": VK_VOLUME_UP, "volumedown": VK_VOLUME_DOWN,
         "mute": VK_VOLUME_MUTE, "playpause": VK_MEDIA_PLAY_PAUSE,
         "nexttrack": VK_MEDIA_NEXT_TRACK, "prevtrack": VK_MEDIA_PREV_TRACK,
-    }
+    })
 
     def execute_action(action_id):
         try:
@@ -599,6 +621,7 @@ if sys.platform == "win32":
 # ==================================================================
 
 elif sys.platform == "darwin":
+    _INJECTED_EVENT_MARKER = 0x4D4F5554
     import ctypes
 
     try:
@@ -638,6 +661,16 @@ elif sys.platform == "darwin":
     kVK_ANSI_S = 0x01
     kVK_ANSI_D = 0x02
     kVK_ANSI_F = 0x03
+    kVK_ANSI_1 = 0x12
+    kVK_ANSI_2 = 0x13
+    kVK_ANSI_3 = 0x14
+    kVK_ANSI_4 = 0x15
+    kVK_ANSI_6 = 0x16
+    kVK_ANSI_5 = 0x17
+    kVK_ANSI_9 = 0x19
+    kVK_ANSI_7 = 0x1A
+    kVK_ANSI_0 = 0x1D
+    kVK_ANSI_8 = 0x1C
     kVK_ANSI_N = 0x2D
     kVK_ANSI_T = 0x11
     kVK_ANSI_W = 0x0D
@@ -672,6 +705,13 @@ elif sys.platform == "darwin":
         else:
             event = Quartz.CGEventCreateScrollWheelEvent(None, 0, 2, 0, delta)
         if event:
+            try:
+                # Mark synthetic scroll events so the CGEventTap can ignore them
+                Quartz.CGEventSetIntegerValueField(
+                    event, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+                )
+            except Exception:
+                pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
     # Mouse button simulation
@@ -720,6 +760,13 @@ elif sys.platform == "darwin":
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
         ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
         if ev:
+            try:
+                # Mark synthetic mouse events so the CGEventTap can ignore them
+                Quartz.CGEventSetIntegerValueField(
+                    ev, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+                )
+            except Exception:
+                pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def inject_mouse_down(action_id):
@@ -1115,18 +1162,18 @@ elif sys.platform == "darwin":
         },
     }
 
-    _KEY_NAME_TO_CODE = {
-        "ctrl": kVK_Control, "control": kVK_Control,
-        "shift": kVK_Shift,
-        "alt": kVK_Option, "option": kVK_Option, "opt": kVK_Option,
-        "super": kVK_Command, "cmd": kVK_Command, "command": kVK_Command,
-        "meta": kVK_Command, "win": kVK_Command, "windows": kVK_Command,
-        "tab": kVK_Tab, "space": kVK_Space,
+    _KEY_NAME_TO_CODE = _build_custom_key_name_map({
+        "ctrl": kVK_Control, "shift": kVK_Shift, "alt": kVK_Option,
+        "super": kVK_Command, "tab": kVK_Tab, "space": kVK_Space,
         "enter": kVK_Return, "esc": kVK_Escape, "backspace": kVK_Delete,
         "delete": kVK_ForwardDelete, "left": kVK_LeftArrow,
         "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
         "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
         "home": kVK_Home, "end": kVK_End,
+        "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2,
+        "3": kVK_ANSI_3, "4": kVK_ANSI_4, "5": kVK_ANSI_5,
+        "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8,
+        "9": kVK_ANSI_9,
         "a": 0x00, "b": 0x0B, "c": 0x08, "d": 0x02, "e": 0x0E,
         "f": 0x03, "g": 0x05, "h": 0x04, "i": 0x22, "j": 0x26,
         "k": 0x28, "l": 0x25, "m": 0x2E, "n": 0x2D, "o": 0x1F,
@@ -1136,7 +1183,7 @@ elif sys.platform == "darwin":
         "f1": kVK_F1, "f2": kVK_F2, "f3": kVK_F3, "f4": kVK_F4,
         "f5": kVK_F5, "f6": kVK_F6, "f7": kVK_F7, "f8": kVK_F8,
         "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
-    }
+    })
 
     def execute_action(action_id):
         if action_id.startswith("custom:"):
@@ -1183,6 +1230,16 @@ elif sys.platform == "linux":
     KEY_PAGEDOWN = 109
     KEY_HOME = 102
     KEY_END = 107
+    KEY_1 = 2
+    KEY_2 = 3
+    KEY_3 = 4
+    KEY_4 = 5
+    KEY_5 = 6
+    KEY_6 = 7
+    KEY_7 = 8
+    KEY_8 = 9
+    KEY_9 = 10
+    KEY_0 = 11
     KEY_A = 30; KEY_B = 48; KEY_C = 46; KEY_D = 32; KEY_E = 18
     KEY_F = 33; KEY_G = 34; KEY_H = 35; KEY_I = 23; KEY_J = 36
     KEY_K = 37; KEY_L = 38; KEY_M = 50; KEY_N = 49; KEY_O = 24
@@ -1215,6 +1272,8 @@ elif sys.platform == "linux":
         KEY_TAB, KEY_SPACE, KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_ESC,
         KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN,
         KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END,
+        KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+        KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
         KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
         KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
         KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
@@ -1522,7 +1581,7 @@ elif sys.platform == "linux":
         },
     }
 
-    _KEY_NAME_TO_CODE = {
+    _KEY_NAME_TO_CODE = _build_custom_key_name_map({
         "ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT,
         "super": KEY_LEFTMETA, "tab": KEY_TAB, "space": KEY_SPACE,
         "enter": KEY_ENTER, "esc": KEY_ESC, "backspace": KEY_BACKSPACE,
@@ -1530,6 +1589,8 @@ elif sys.platform == "linux":
         "up": KEY_UP, "down": KEY_DOWN,
         "pageup": KEY_PAGEUP, "pagedown": KEY_PAGEDOWN,
         "home": KEY_HOME, "end": KEY_END,
+        "0": KEY_0, "1": KEY_1, "2": KEY_2, "3": KEY_3, "4": KEY_4,
+        "5": KEY_5, "6": KEY_6, "7": KEY_7, "8": KEY_8, "9": KEY_9,
         "a": KEY_A, "b": KEY_B, "c": KEY_C, "d": KEY_D, "e": KEY_E,
         "f": KEY_F, "g": KEY_G, "h": KEY_H, "i": KEY_I, "j": KEY_J,
         "k": KEY_K, "l": KEY_L, "m": KEY_M, "n": KEY_N, "o": KEY_O,
@@ -1542,7 +1603,7 @@ elif sys.platform == "linux":
         "volumeup": KEY_VOLUMEUP, "volumedown": KEY_VOLUMEDOWN,
         "mute": KEY_MUTE, "playpause": KEY_PLAYPAUSE,
         "nexttrack": KEY_NEXTSONG, "prevtrack": KEY_PREVIOUSSONG,
-    }
+    })
 
     def execute_action(action_id):
         if action_id.startswith("custom:"):

@@ -977,6 +977,16 @@ if sys.platform == "win32":
 # ==================================================================
 
 elif sys.platform == "darwin":
+    import functools
+
+    try:
+        import objc
+    except ImportError as exc:
+        raise ImportError(
+            "PyObjC is required on macOS. Run "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
+
     try:
         import Quartz
         _QUARTZ_OK = True
@@ -985,11 +995,19 @@ elif sys.platform == "darwin":
         print("[MouseHook] pyobjc-framework-Quartz not installed — "
               "pip install pyobjc-framework-Quartz")
 
+    def _autoreleased(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with objc.autorelease_pool():
+                return fn(*args, **kwargs)
+        return wrapper
+
     # HID button numbers (typical USB/BT HID mapping on macOS)
     _BTN_MIDDLE = 2
     _BTN_BACK = 3
     _BTN_FORWARD = 4
     _SCROLL_INVERT_MARKER = 0x4D4F5553
+    _INJECTED_EVENT_MARKER = 0x4D4F5554
     _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
     _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -1363,6 +1381,7 @@ elif sys.platform == "darwin":
                 except queue.Empty:
                     continue
 
+        @_autoreleased
         def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
             """CGEventTap callback.  Return the event to pass through, or None to suppress."""
             try:
@@ -1379,6 +1398,16 @@ elif sys.platform == "darwin":
                     self._first_event_logged = True
                     print("[MouseHook] CGEventTap: first event received", flush=True)
 
+                # Ignore events we injected ourselves.  The key_simulator marks
+                # synthetic events by setting kCGEventSourceUserData to _INJECTED_EVENT_MARKER.
+                try:
+                    if Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGEventSourceUserData
+                    ) == _INJECTED_EVENT_MARKER:
+                        return cg_event
+                except Exception:
+                    # If the field isn't available or the call fails, continue.
+                    pass
                 mouse_event = None
                 should_block = False
 

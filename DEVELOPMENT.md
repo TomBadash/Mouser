@@ -2,6 +2,24 @@
 
 This document contains technical details designed to help new developers understand the core components of the Mouser project.
 
+## Development Setup
+
+Install the project dependencies before running the app or test suite. Do not rely on the system Python unless it already has the requirements installed.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On macOS, `requirements.txt` installs PyObjC (`objc`, Quartz, and AppKit bindings), which Mouser needs for CGEventTap, app detection, and key simulation.
+
+Run the test suite from the activated environment:
+
+```bash
+python -m unittest discover -s tests
+```
+
 ## Entry Point: `main_qml.py`
 
 `main_qml.py` is the primary launch script for Mouser, bringing together the core processing logic (Engine) and the graphical user interface (QML Backend). It replaces an older `tkinter`-based interface.

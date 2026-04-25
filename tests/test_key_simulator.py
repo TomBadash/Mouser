@@ -24,6 +24,36 @@ class KeySimulatorActionTests(unittest.TestCase):
         self.assertTrue(len(key_simulator.ACTIONS["next_tab"]["keys"]) > 0)
         self.assertTrue(len(key_simulator.ACTIONS["prev_tab"]["keys"]) > 0)
 
+
+class CustomShortcutParsingTests(unittest.TestCase):
+    def test_build_custom_key_name_map_adds_common_aliases(self):
+        key_map = key_simulator._build_custom_key_name_map({
+            "ctrl": 1,
+            "alt": 2,
+            "super": 3,
+            "enter": 4,
+            "esc": 5,
+        })
+
+        self.assertEqual(key_map["control"], 1)
+        self.assertEqual(key_map["option"], 2)
+        self.assertEqual(key_map["opt"], 2)
+        self.assertEqual(key_map["cmd"], 3)
+        self.assertEqual(key_map["command"], 3)
+        self.assertEqual(key_map["meta"], 3)
+        self.assertEqual(key_map["win"], 3)
+        self.assertEqual(key_map["windows"], 3)
+        self.assertEqual(key_map["return"], 4)
+        self.assertEqual(key_map["escape"], 5)
+
+    def test_parse_custom_combo_accepts_digit_keys(self):
+        keys = key_simulator._parse_custom_combo(
+            "custom:ctrl+4",
+            {"ctrl": 17, "4": 52},
+        )
+        self.assertEqual(keys, [17, 52])
+
+
 class LinuxDesktopShortcutTests(unittest.TestCase):
     def _reload_for_linux(self, desktop: str):
         with (
@@ -58,6 +88,13 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
             [module.KEY_LEFTCTRL, module.KEY_LEFTMETA, module.KEY_RIGHT],
         )
 
+    def test_linux_custom_shortcuts_include_digit_keys_and_aliases(self):
+        module = self._reload_for_linux("GNOME")
+
+        self.assertEqual(module._KEY_NAME_TO_CODE["4"], module.KEY_4)
+        self.assertIn(module.KEY_4, module._ALL_KEY_CODES)
+        self.assertEqual(module._KEY_NAME_TO_CODE["control"], module.KEY_LEFTCTRL)
+        self.assertEqual(module._KEY_NAME_TO_CODE["cmd"], module.KEY_LEFTMETA)
 
 class CustomShortcutCaptureTests(unittest.TestCase):
     def test_custom_action_label_uses_super_as_canonical_name(self):
@@ -121,6 +158,7 @@ class CustomShortcutCaptureTests(unittest.TestCase):
             ),
             "super+w",
         )
+
 
 class MouseButtonActionTests(unittest.TestCase):
     """Tests for the mouse-button-to-mouse-button remapping feature."""

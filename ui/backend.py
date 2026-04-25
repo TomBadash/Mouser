@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt
+from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt, QUrl
 
 from core.accessibility import is_process_trusted
 from core.config import (
@@ -163,9 +163,10 @@ class Backend(QObject):
     _smartShiftReadRequest = Signal()
     _statusMessageRequest = Signal(str)
 
-    def __init__(self, engine=None, parent=None):
+    def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
         self._engine = engine
+        self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._cfg = load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
@@ -464,6 +465,12 @@ class Backend(QObject):
     @Property(str, notify=deviceLayoutChanged)
     def deviceImageAsset(self):
         return self._device_layout.get("image_asset", "mouse.png")
+
+    @Property(str, notify=deviceLayoutChanged)
+    def deviceImageSource(self):
+        asset = self._device_layout.get("image_asset", "mouse.png")
+        path = os.path.join(self._root_dir, "images", asset)
+        return QUrl.fromLocalFile(os.path.abspath(path)).toString()
 
     @Property(int, notify=deviceLayoutChanged)
     def deviceImageWidth(self):

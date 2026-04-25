@@ -17,11 +17,25 @@ import getpass
 import time
 from urllib.parse import parse_qs, unquote
 
-# Ensure project root on path — works for both normal Python and PyInstaller
-if getattr(sys, "frozen", False):
-    ROOT = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-else:
-    ROOT = os.path.dirname(os.path.abspath(__file__))
+# Ensure project root on path — works for both normal Python and PyInstaller.
+# PyInstaller on Windows/Linux stores bundled data in `_internal/` next to the
+# executable, while macOS app bundles expose resources from `Contents/Resources`.
+def _resolve_root_dir():
+    if not getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(__file__))
+    if sys.platform == "darwin":
+        resources_dir = os.path.abspath(
+            os.path.join(os.path.dirname(sys.executable), "..", "Resources")
+        )
+        return getattr(sys, "_MEIPASS", resources_dir)
+    return getattr(
+        sys,
+        "_MEIPASS",
+        os.path.join(os.path.dirname(sys.executable), "_internal"),
+    )
+
+
+ROOT = _resolve_root_dir()
 sys.path.insert(0, ROOT)
 
 from core.log_setup import setup_logging
@@ -426,7 +440,7 @@ def main():
 
     _t7 = _time.perf_counter()
     # ── QML Backend ────────────────────────────────────────────
-    backend = Backend(engine)
+    backend = Backend(engine, root_dir=ROOT)
     ui_state.appearanceMode = backend.appearanceMode
     backend.settingsChanged.connect(
         lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
@@ -445,8 +459,6 @@ def main():
     qml_engine.rootContext().setContextProperty("appCommit", APP_COMMIT_DISPLAY)
     qml_engine.rootContext().setContextProperty(
         "appLaunchPath", _runtime_launch_path().replace("\\", "/"))
-    qml_engine.rootContext().setContextProperty(
-        "applicationDirPath", ROOT.replace("\\", "/"))
 
     qml_path = os.path.join(ROOT, "ui", "qml", "Main.qml")
     qml_engine.load(QUrl.fromLocalFile(qml_path))

@@ -981,7 +981,7 @@ Item {
 
                         Image {
                             id: mouseImg
-                            source: "file:///" + applicationDirPath + "/images/" + backend.deviceImageAsset
+                            source: backend.deviceImageSource
                             fillMode: Image.PreserveAspectFit
                             width: backend.deviceImageWidth
                             height: backend.deviceImageHeight
