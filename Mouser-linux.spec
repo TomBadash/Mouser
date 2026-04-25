@@ -90,6 +90,14 @@ a = Analysis(
     datas=[
         (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
         (os.path.join(ROOT, "images"), "images"),
+        (
+            os.path.join(ROOT, "packaging", "linux", "69-mouser-logitech.rules"),
+            os.path.join("linux", "69-mouser-logitech.rules"),
+        ),
+        (
+            os.path.join(ROOT, "packaging", "linux", "install-linux-permissions.sh"),
+            os.path.join("linux", "install-linux-permissions.sh"),
+        ),
         (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[

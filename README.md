@@ -155,7 +155,7 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
-- **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
+- **Linux only:** access to Logitech `/dev/hidraw*`, `/dev/input/event*`, and `/dev/uinput` is required. The Linux release includes `install-linux-permissions.sh` to install Mouser's udev rule.
 
 ### Steps
 
@@ -185,6 +185,32 @@ pip install -r requirements.txt
 | `pyobjc-framework-Quartz` | macOS CGEventTap / Quartz event support |
 | `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
 | `evdev` | Linux mouse grab and virtual device forwarding (uinput) |
+
+### Linux Device Permissions
+
+Mouser's Linux portable build runs as a normal user. HID++ features need
+Logitech `hidraw` access, while button remapping needs readable
+`/dev/input/event*` nodes and writable `/dev/uinput`. If Mouser sees the mouse
+only when launched with `sudo`, install the bundled udev rule instead of
+running the app as root:
+
+```bash
+cd /path/to/extracted/Mouser
+./install-linux-permissions.sh
+```
+
+When running from source, use the same helper from the checkout:
+
+```bash
+./packaging/linux/install-linux-permissions.sh
+```
+
+The helper installs `69-mouser-logitech.rules`, reloads udev, and tries to load
+`uinput`. Reconnect the mouse, fully quit Mouser, and launch it normally. If a
+desktop launcher or autostart entry still cannot access the devices, log out and
+back in once so the session receives fresh device ACLs. On systems without
+logind/uaccess support, adding the user to the `input` group may still be
+required as a distro-specific fallback.
 
 ### Running
 
@@ -445,16 +471,7 @@ The app has two pages accessible from a slim sidebar:
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
 - **Admin not required** — but some games or elevated windows may not receive injected keystrokes
 - **Linux app detection is still limited** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, and GNOME / other Wayland compositors still fall back to the default profile
-- **Linux remapping needs device permissions** — Mouser must be able to read `/dev/input/event*` and write `/dev/uinput`. HID++ features (DPI, battery, Smart Shift) additionally require access to `/dev/hidraw*`, which most distros restrict to root by default. Create a udev rule file at `/etc/udev/rules.d/69-logitech-mouser.rules` with the following content:
-  ```
-  # Logitech HID++ access for Mouser (USB + Bluetooth)
-  ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
-  ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", TAG+="uaccess"
-  ```
-  Then reload:
-  ```bash
-  sudo udevadm control --reload && sudo udevadm trigger
-  ```
+- **Linux remapping needs device permissions** — Mouser must be able to access Logitech `/dev/hidraw*`, read `/dev/input/event*`, and write `/dev/uinput`. Use the bundled `install-linux-permissions.sh` helper to install the udev rule, then reconnect the mouse and restart Mouser.
 
 ## Future Work
 

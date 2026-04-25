@@ -205,6 +205,12 @@ jobs:
             exit "$status"
           fi
 
+      - name: Add Linux permission helper
+        run: |
+          cp packaging/linux/69-mouser-logitech.rules dist/Mouser/
+          cp packaging/linux/install-linux-permissions.sh dist/Mouser/
+          chmod +x dist/Mouser/install-linux-permissions.sh
+
       - name: Create archive
         run: cd dist && zip -r -y ../Mouser-Linux.zip Mouser
 
