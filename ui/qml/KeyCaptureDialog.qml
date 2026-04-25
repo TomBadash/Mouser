@@ -127,8 +127,6 @@ Rectangle {
         var combo = _comboFromEvent(event)
         if (!combo)
             return
-        if (combo === "enter")
-            return
         shortcutField.text = combo
         _validate(combo)
         event.accepted = true
@@ -171,16 +169,6 @@ Rectangle {
                 Material.accent: dialog.theme.accent
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) { dialog._acceptKey(event) }
-                Keys.onEscapePressed: { dialog.cancelled(); dialog.close() }
-                Keys.onReturnPressed: {
-                    if (dialog._valid) {
-                        var normalized = shortcutField.text.split("+").map(
-                            function(p) { return dialog._canonicalKeyName(p) }
-                        ).join("+")
-                        dialog.captured(normalized)
-                        dialog.close()
-                    }
-                }
             }
 
             Text {

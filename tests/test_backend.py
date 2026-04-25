@@ -309,6 +309,34 @@ class BackendDeviceLayoutTests(unittest.TestCase):
                 "super+w",
             )
 
+    def test_shortcut_capture_keeps_enter_and_escape_capturable(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Return,
+                Qt.NoModifier,
+                "",
+            ),
+            "enter",
+        )
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Enter,
+                Qt.NoModifier,
+                "",
+            ),
+            "enter",
+        )
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Escape,
+                Qt.NoModifier,
+                "",
+            ),
+            "esc",
+        )
+
     def test_add_profile_stores_catalog_id_for_linux_app(self):
         backend = self._make_backend()
         fake_catalog = [
