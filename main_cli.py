@@ -19,28 +19,18 @@ import Quartz
 import yaml
 
 from core.config import (
-    DEFAULT_CONFIG,
-    _merge_defaults,
-    _migrate,
-    _validate_types,
     load_config,
     save_config,
+)
+from core.config_validation import (
+    ConfigValidationError,
+    assemble_full_config,
+    normalize_config,
 )
 from core.log_setup import setup_logging
 
 CLI_SERVICE_LABEL = "io.github.tombadash.mouser.headless"
 CLI_SERVICE_PLIST_NAME = f"{CLI_SERVICE_LABEL}.plist"
-
-
-def normalize_config(raw_cfg: Any) -> dict[str, Any]:
-    """Return a migrated, default-filled config dict."""
-    if not isinstance(raw_cfg, dict):
-        raise ValueError("Config JSON must be an object")
-    cfg = json.loads(json.dumps(raw_cfg))
-    cfg = _migrate(cfg)
-    cfg = _merge_defaults(cfg, DEFAULT_CONFIG)
-    cfg = _validate_types(cfg, DEFAULT_CONFIG)
-    return cfg
 
 
 def export_config(*, stdout=None) -> int:
@@ -69,6 +59,21 @@ def _read_config_json(path: str, ft: str=None) -> dict[str, Any]:
                 processed = yaml.safe_load(raw)
 
     return normalize_config(processed)
+
+
+def _format_cli_error(exc: Exception) -> str:
+    if isinstance(exc, ConfigValidationError):
+        return str(exc)
+    if isinstance(exc, json.JSONDecodeError):
+        return f"Invalid JSON: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+    yaml_error = getattr(yaml, "YAMLError", None)
+    if yaml_error and isinstance(exc, yaml_error):
+        return f"Invalid YAML: {exc}"
+    if isinstance(exc, FileNotFoundError):
+        return f"File not found: {exc.filename}"
+    if isinstance(exc, OSError):
+        return str(exc)
+    return str(exc) or exc.__class__.__name__
 
 
 def run_headless_instance(*, stop_event: threading.Event | None = None, engine_factory=None) -> int:
@@ -191,27 +196,6 @@ def stop_background_service() -> int:
     return 0
 
 
-def assemble_full_config(config: dict[str, Any]):
-    try:
-        active_profile = config["active_profile"]
-        if active_profile not in config["profiles"]:
-            raise ValueError(f"Active profile '{active_profile}' not found in profiles")
-        if config["profiles"][active_profile]["apps"] != []:
-            raise ValueError("Active profile must have an empty `apps` list")
-    except KeyError:
-        raise ValueError("Config must specify an `active_profile`")
-
-    default_mappings = config["profiles"][active_profile]["mappings"]
-    for profile_name, profile in config["profiles"].items():
-        if profile_name == active_profile:
-            continue
-        for mapping in default_mappings:
-            if mapping not in profile["mappings"]:
-                profile["mappings"][mapping] = default_mappings[mapping]
-
-    return config
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Mouser command line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -262,18 +246,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "export":
-        return export_config()
-    setup_logging()
-    if args.command == "load":
-        return load_config_and_start(args.config, filetype=args.filetype)
-    if args.command == "start":
-        return start_background_service()
-    if args.command == "stop":
-        return stop_background_service()
-    if args.command == "_run":
-        return run_headless_instance()
-    parser.error(f"Unknown command: {args.command}")
+    try:
+        if args.command == "export":
+            return export_config()
+        setup_logging()
+        if args.command == "load":
+            return load_config_and_start(args.config, filetype=args.filetype)
+        if args.command == "start":
+            return start_background_service()
+        if args.command == "stop":
+            return stop_background_service()
+        if args.command == "_run":
+            return run_headless_instance()
+        parser.error(f"Unknown command: {args.command}")
+    except (ConfigValidationError, json.JSONDecodeError, OSError, RuntimeError) as exc:
+        print(f"Error: {_format_cli_error(exc)}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        yaml_error = getattr(yaml, "YAMLError", None)
+        if yaml_error and isinstance(exc, yaml_error):
+            print(f"Error: {_format_cli_error(exc)}", file=sys.stderr)
+            return 2
+        raise
 
 
 if __name__ == "__main__":
