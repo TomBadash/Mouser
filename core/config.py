@@ -69,7 +69,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -89,6 +89,7 @@ DEFAULT_CONFIG = {
                 "mode_shift": "switch_scroll_mode",
                 "actions_ring": "none",
             },
+            "button_haptic": {},  # per-button haptic override; absent key = enabled (True)
         }
     },
     "settings": {
@@ -224,7 +225,27 @@ def create_profile(cfg, name, label=None, copy_from="default", apps=None):
         "label": label,
         "apps": apps if apps is not None else [],
         "mappings": dict(source.get("mappings", {})),
+        "button_haptic": dict(source.get("button_haptic", {})),
     }
+    save_config(cfg)
+    return cfg
+
+
+def get_button_haptic(cfg, button, profile=None):
+    """Return True if haptic is enabled for this button in the given profile (default: True)."""
+    if profile is None:
+        profile = cfg.get("active_profile", "default")
+    profiles = cfg.get("profiles", {})
+    pdata = profiles.get(profile, profiles.get("default", {}))
+    return bool(pdata.get("button_haptic", {}).get(button, True))
+
+
+def set_button_haptic(cfg, button, enabled, profile=None):
+    """Set per-button haptic enabled flag in the given profile and save."""
+    if profile is None:
+        profile = cfg.get("active_profile", "default")
+    pdata = cfg.setdefault("profiles", {}).setdefault(profile, {})
+    pdata.setdefault("button_haptic", {})[button] = bool(enabled)
     save_config(cfg)
     return cfg
 
@@ -334,6 +355,12 @@ def _migrate(cfg):
         settings = cfg.setdefault("settings", {})
         settings.setdefault("haptic_level", 2)
         cfg["version"] = 9
+
+    if version < 10:
+        # v9 -> v10: add per-button haptic override dict to each profile.
+        for pdata in cfg.get("profiles", {}).values():
+            pdata.setdefault("button_haptic", {})
+        cfg["version"] = 10
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

@@ -14,7 +14,7 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, get_button_haptic, set_button_haptic,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -646,6 +646,21 @@ class Backend(QObject):
                 target=lambda: self._engine.play_haptic_waveform(0),
                 daemon=True, name="HapticTest"
             ).start()
+
+    @Slot(str, result=bool)
+    def buttonHapticEnabled(self, button):
+        """Return whether haptic is enabled for the given button in the active profile."""
+        profile = self._cfg.get("active_profile", "default")
+        return get_button_haptic(self._cfg, button, profile)
+
+    @Slot(str, bool)
+    def setButtonHaptic(self, button, enabled):
+        """Set per-button haptic enabled flag in the active profile."""
+        profile = self._cfg.get("active_profile", "default")
+        self._cfg = set_button_haptic(self._cfg, button, enabled, profile)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.mappingsChanged.emit()
 
     @Slot(bool)
     def setInvertVScroll(self, value):

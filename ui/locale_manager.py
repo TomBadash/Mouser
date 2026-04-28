@@ -79,6 +79,7 @@ _TRANSLATIONS = {
         "mouse.swipe_up": "Swipe up",
         "mouse.swipe_down": "Swipe down",
         "mouse.threshold": "Threshold",
+        "mouse.haptic_feedback": "Haptic",
 
         # Mouse page — debug panel
         "mouse.debug_events": "Debug Events",
@@ -253,6 +254,7 @@ _TRANSLATIONS = {
         "mouse.swipe_up": "\u5411\u4e0a\u6ed1\u52a8",
         "mouse.swipe_down": "\u5411\u4e0b\u6ed1\u52a8",
         "mouse.threshold": "\u9608\u5024",
+        "mouse.haptic_feedback": "\u9707\u52a8\u53cd\u9988",
 
         "mouse.debug_events": "\u8c03\u8bd5\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u68c0\u6d4b\u5230\u7684\u6309\u952e\u3001\u624b\u52bf\u548c\u6620\u5c04\u52a8\u4f5c",
@@ -418,6 +420,7 @@ _TRANSLATIONS = {
         "mouse.swipe_up": "\u5411\u4e0a\u6ed1\u52d5",
         "mouse.swipe_down": "\u5411\u4e0b\u6ed1\u52d5",
         "mouse.threshold": "\u95be\u5024",
+        "mouse.haptic_feedback": "\u9707\u52d5\u56de\u9994",
 
         "mouse.debug_events": "\u9664\u932f\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u5075\u6e2c\u5230\u7684\u6309\u9375\u3001\u624b\u52e2\u548c\u5c0d\u6620\u52d5\u4f5c",

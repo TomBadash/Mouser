@@ -14,6 +14,7 @@ from core.key_simulator import (
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
+    get_button_haptic,
 )
 from core.app_detector import AppDetector
 from core.logi_devices import clamp_dpi
@@ -154,11 +155,17 @@ class Engine:
                             self.hook.register(evt_type, self._make_mouse_down_handler(action_id))
                         else:
                             # Single-fire event (gesture, swipe) → full click
-                            self.hook.register(evt_type, self._make_handler(action_id))
+                            self.hook.register(evt_type, self._make_handler(action_id, btn_key))
                     else:
-                        self.hook.register(evt_type, self._make_handler(action_id))
+                        self.hook.register(evt_type, self._make_handler(action_id, btn_key))
 
-    def _make_handler(self, action_id):
+    def _button_haptic_enabled(self, btn_key):
+        """Return True if haptic feedback is enabled for this button in the active profile."""
+        if not btn_key:
+            return True
+        return get_button_haptic(self.cfg, btn_key, self._current_profile)
+
+    def _make_handler(self, action_id, btn_key=""):
         def handler(event):
             try:
                 if self._enabled:
@@ -174,16 +181,18 @@ class Engine:
                             "action_label": self._action_label(action_id),
                         })
                         # Haptic confirmation when a gesture resolves to an action.
-                        self._play_haptic_async(7)  # COMPLETED
+                        if self._button_haptic_enabled(btn_key):
+                            self._play_haptic_async(7)  # COMPLETED
                     elif event.event_type == "actions_ring_down":
                         # Haptic detent feedback for each ring step.
-                        self._play_haptic_async(0)  # SHARP_STATE_CHANGE
+                        if self._button_haptic_enabled(btn_key):
+                            self._play_haptic_async(0)  # SHARP_STATE_CHANGE
                     if action_id == "toggle_smart_shift":
-                        self._toggle_smart_shift()
+                        self._toggle_smart_shift(btn_key)
                     elif action_id == "switch_scroll_mode":
-                        self._switch_scroll_mode()
+                        self._switch_scroll_mode(btn_key)
                     elif action_id == "cycle_dpi":
-                        self._cycle_dpi()
+                        self._cycle_dpi(btn_key)
                     else:
                         execute_action(action_id)
             except Exception as exc:
@@ -239,7 +248,7 @@ class Engine:
                 import traceback; traceback.print_exc()
         return handler
 
-    def _toggle_smart_shift(self):
+    def _toggle_smart_shift(self, btn_key=""):
         """Toggle SmartShift auto-switching on/off.
 
         IMPORTANT: this is called from a HID event callback which runs on the HID
@@ -261,14 +270,16 @@ class Engine:
             except Exception:
                 pass
         hg = self.hook._hid_gesture
+        haptic_ok = self._button_haptic_enabled(btn_key)
         if hg:
             def _write():
                 ok = hg.set_smart_shift(mode, new_enabled, threshold)
                 print(f"[Engine] toggle_smart_shift device write -> {'OK' if ok else 'FAILED'}")
-                hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
+                if haptic_ok:
+                    hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
             threading.Thread(target=_write, daemon=True, name="ToggleSmartShift").start()
 
-    def _switch_scroll_mode(self):
+    def _switch_scroll_mode(self, btn_key=""):
         """Switch between ratchet and free-spin (Logi Options+ physical button behaviour).
 
         SmartShift auto-switching is disabled so the chosen fixed mode takes effect.
@@ -288,16 +299,18 @@ class Engine:
             except Exception:
                 pass
         hg = self.hook._hid_gesture
+        haptic_ok = self._button_haptic_enabled(btn_key)
         if hg:
             def _write():
                 ok = hg.set_smart_shift(new_mode, False, threshold)
                 print(f"[Engine] switch_scroll_mode device write -> {'OK' if ok else 'FAILED'}")
-                hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
+                if haptic_ok:
+                    hg.play_haptic_waveform(1)  # DAMP_STATE_CHANGE — mode confirmed
             threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
 
     _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
 
-    def _cycle_dpi(self):
+    def _cycle_dpi(self, btn_key=""):
         """Cycle through user-configured DPI presets.
 
         Advances to the next preset in the list.  If the current DPI doesn't
@@ -324,10 +337,12 @@ class Engine:
             except Exception:
                 pass
         hg = self.hook._hid_gesture
+        haptic_ok = self._button_haptic_enabled(btn_key)
         if hg:
             def _write():
                 hg.set_dpi(new_dpi)
-                hg.play_haptic_waveform(3)  # DAMP_COLLISION — per-step click
+                if haptic_ok:
+                    hg.play_haptic_waveform(3)  # DAMP_COLLISION — per-step click
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
