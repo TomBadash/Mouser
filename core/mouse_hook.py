@@ -270,6 +270,7 @@ if sys.platform == "win32":
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
+            self._gesture_last_swipe_event = None
             self._gesture_input_source = None
             self._connected_device = None
             self._dispatch_queue = queue.Queue()
@@ -415,24 +416,21 @@ if sys.platform == "win32":
 
             abs_x = abs(delta_x)
             abs_y = abs(delta_y)
-            dominant = max(abs_x, abs_y)
-            if dominant < self._gesture_threshold:
-                return None
+            threshold = self._gesture_threshold
+            deadzone = self._gesture_deadzone
+            axis_margin = max(5.0, threshold * 0.2)
 
-            cross_limit = max(self._gesture_deadzone, dominant * 0.35)
-
-            if abs_x > abs_y:
-                if abs_y > cross_limit:
-                    return None
+            if abs_x >= threshold and abs_y <= deadzone and abs_x >= abs_y + axis_margin:
                 if delta_x > 0:
                     return MouseEvent.GESTURE_SWIPE_RIGHT
                 return MouseEvent.GESTURE_SWIPE_LEFT
 
-            if abs_x > cross_limit:
-                return None
-            if delta_y > 0:
-                return MouseEvent.GESTURE_SWIPE_DOWN
-            return MouseEvent.GESTURE_SWIPE_UP
+            if abs_y >= threshold and abs_x <= deadzone and abs_y >= abs_x + axis_margin:
+                if delta_y > 0:
+                    return MouseEvent.GESTURE_SWIPE_DOWN
+                return MouseEvent.GESTURE_SWIPE_UP
+
+            return None
 
         def _accumulate_gesture_delta(self, delta_x, delta_y, source):
             if not (self._gesture_direction_enabled and self._gesture_active):
@@ -492,7 +490,30 @@ if sys.platform == "win32":
             if not gesture_event:
                 return
 
+            if (
+                self._gesture_last_swipe_event is not None
+                and gesture_event != self._gesture_last_swipe_event
+            ):
+                self._emit_debug(
+                    "Gesture rebound suppressed "
+                    f"{gesture_event} after {self._gesture_last_swipe_event}"
+                )
+                self._emit_gesture_event({
+                    "type": "rebound_suppressed",
+                    "event_name": gesture_event,
+                    "previous_event_name": self._gesture_last_swipe_event,
+                    "source": source,
+                    "dx": self._gesture_delta_x,
+                    "dy": self._gesture_delta_y,
+                })
+                self._gesture_cooldown_until = (
+                    time.monotonic() + self._gesture_cooldown_ms / 1000.0
+                )
+                self._finish_gesture_tracking()
+                return
+
             self._gesture_triggered = True
+            self._gesture_last_swipe_event = gesture_event
             self._emit_debug(
                 "Gesture detected "
                 f"{gesture_event} source={source} "
@@ -729,10 +750,12 @@ if sys.platform == "win32":
                 if not self._gesture_active:
                     self._gesture_active = True
                     self._gesture_triggered = False
+                    self._gesture_last_swipe_event = None
                     print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
             elif not extra_now and extra_prev:
                 if self._gesture_active:
                     self._gesture_active = False
+                    self._gesture_last_swipe_event = None
                     print("[MouseHook] Gesture UP")
                     self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -848,6 +871,7 @@ if sys.platform == "win32":
             if not self._gesture_active:
                 self._gesture_active = True
                 self._gesture_triggered = False
+                self._gesture_last_swipe_event = None
                 self._emit_debug("HID gesture button down")
                 self._emit_gesture_event({"type": "button_down"})
                 if self._gesture_direction_enabled and not self._gesture_cooldown_active():
@@ -862,6 +886,7 @@ if sys.platform == "win32":
                 self._gesture_active = False
                 self._finish_gesture_tracking()
                 self._gesture_triggered = False
+                self._gesture_last_swipe_event = None
                 self._emit_debug(
                     f"HID gesture button up click_candidate={str(should_click).lower()}"
                 )
@@ -1054,6 +1079,7 @@ elif sys.platform == "darwin":
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
+            self._gesture_last_swipe_event = None
             self._gesture_input_source = None
             self._connected_device = None
 
@@ -1245,24 +1271,21 @@ elif sys.platform == "darwin":
 
             abs_x = abs(delta_x)
             abs_y = abs(delta_y)
-            dominant = max(abs_x, abs_y)
-            if dominant < self._gesture_threshold:
-                return None
+            threshold = self._gesture_threshold
+            deadzone = self._gesture_deadzone
+            axis_margin = max(5.0, threshold * 0.2)
 
-            cross_limit = max(self._gesture_deadzone, dominant * 0.35)
-
-            if abs_x > abs_y:
-                if abs_y > cross_limit:
-                    return None
+            if abs_x >= threshold and abs_y <= deadzone and abs_x >= abs_y + axis_margin:
                 if delta_x > 0:
                     return MouseEvent.GESTURE_SWIPE_RIGHT
                 return MouseEvent.GESTURE_SWIPE_LEFT
 
-            if abs_x > cross_limit:
-                return None
-            if delta_y > 0:
-                return MouseEvent.GESTURE_SWIPE_DOWN
-            return MouseEvent.GESTURE_SWIPE_UP
+            if abs_y >= threshold and abs_x <= deadzone and abs_y >= abs_x + axis_margin:
+                if delta_y > 0:
+                    return MouseEvent.GESTURE_SWIPE_DOWN
+                return MouseEvent.GESTURE_SWIPE_UP
+
+            return None
 
         def _accumulate_gesture_delta(self, delta_x, delta_y, source):
             if not (self._gesture_direction_enabled and self._gesture_active):
@@ -1335,7 +1358,30 @@ elif sys.platform == "darwin":
                 if not gesture_event:
                     return
 
+                if (
+                    self._gesture_last_swipe_event is not None
+                    and gesture_event != self._gesture_last_swipe_event
+                ):
+                    self._emit_debug(
+                        "Gesture rebound suppressed "
+                        f"{gesture_event} after {self._gesture_last_swipe_event}"
+                    )
+                    self._emit_gesture_event({
+                        "type": "rebound_suppressed",
+                        "event_name": gesture_event,
+                        "previous_event_name": self._gesture_last_swipe_event,
+                        "source": source,
+                        "dx": self._gesture_delta_x,
+                        "dy": self._gesture_delta_y,
+                    })
+                    self._gesture_cooldown_until = (
+                        time.monotonic() + self._gesture_cooldown_ms / 1000.0
+                    )
+                    self._finish_gesture_tracking()
+                    return
+
                 self._gesture_triggered = True
+                self._gesture_last_swipe_event = gesture_event
                 self._emit_debug(
                     "Gesture detected "
                     f"{gesture_event} source={source} "
@@ -1535,6 +1581,7 @@ elif sys.platform == "darwin":
             if not self._gesture_active:
                 self._gesture_active = True
                 self._gesture_triggered = False
+                self._gesture_last_swipe_event = None
                 self._emit_debug("HID gesture button down")
                 self._emit_gesture_event({"type": "button_down"})
                 if self._gesture_direction_enabled and not self._gesture_cooldown_active():
@@ -1549,6 +1596,7 @@ elif sys.platform == "darwin":
                 self._gesture_active = False
                 self._finish_gesture_tracking()
                 self._gesture_triggered = False
+                self._gesture_last_swipe_event = None
                 self._emit_debug(
                     f"HID gesture button up click_candidate={str(should_click).lower()}"
                 )
@@ -1803,6 +1851,7 @@ elif sys.platform == "linux":
             self._gesture_delta_x = 0.0
             self._gesture_delta_y = 0.0
             self._gesture_cooldown_until = 0.0
+            self._gesture_last_swipe_event = None
             self._gesture_input_source = None
             self._gesture_lock = threading.Lock()
             # Linux-specific
@@ -1988,24 +2037,21 @@ elif sys.platform == "linux":
 
             abs_x = abs(delta_x)
             abs_y = abs(delta_y)
-            dominant = max(abs_x, abs_y)
-            if dominant < self._gesture_threshold:
-                return None
+            threshold = self._gesture_threshold
+            deadzone = self._gesture_deadzone
+            axis_margin = max(5.0, threshold * 0.2)
 
-            cross_limit = max(self._gesture_deadzone, dominant * 0.35)
-
-            if abs_x > abs_y:
-                if abs_y > cross_limit:
-                    return None
+            if abs_x >= threshold and abs_y <= deadzone and abs_x >= abs_y + axis_margin:
                 if delta_x > 0:
                     return MouseEvent.GESTURE_SWIPE_RIGHT
                 return MouseEvent.GESTURE_SWIPE_LEFT
 
-            if abs_x > cross_limit:
-                return None
-            if delta_y > 0:
-                return MouseEvent.GESTURE_SWIPE_DOWN
-            return MouseEvent.GESTURE_SWIPE_UP
+            if abs_y >= threshold and abs_x <= deadzone and abs_y >= abs_x + axis_margin:
+                if delta_y > 0:
+                    return MouseEvent.GESTURE_SWIPE_DOWN
+                return MouseEvent.GESTURE_SWIPE_UP
+
+            return None
 
         def _accumulate_gesture_delta(self, delta_x, delta_y, source):
             dispatch_event = None
@@ -2076,7 +2122,29 @@ elif sys.platform == "linux":
                 if not gesture_event:
                     return
 
+                if (
+                    self._gesture_last_swipe_event is not None
+                    and gesture_event != self._gesture_last_swipe_event
+                ):
+                    self._emit_debug(
+                        "Gesture rebound suppressed "
+                        f"{gesture_event} after {self._gesture_last_swipe_event}"
+                    )
+                    self._emit_gesture_event({
+                        "type": "rebound_suppressed",
+                        "event_name": gesture_event,
+                        "previous_event_name": self._gesture_last_swipe_event,
+                        "source": source,
+                        "dx": self._gesture_delta_x,
+                        "dy": self._gesture_delta_y,
+                    })
+                    self._gesture_cooldown_until = (
+                        time.monotonic() + self._gesture_cooldown_ms / 1000.0
+                    )
+                    self._finish_gesture_tracking()
+                    return
                 self._gesture_triggered = True
+                self._gesture_last_swipe_event = gesture_event
                 self._emit_debug(
                     "Gesture detected "
                     f"{gesture_event} source={source} "
@@ -2122,6 +2190,7 @@ elif sys.platform == "linux":
                 if not self._gesture_active:
                     self._gesture_active = True
                     self._gesture_triggered = False
+                    self._gesture_last_swipe_event = None
                     self._emit_debug("HID gesture button down")
                     self._emit_gesture_event({"type": "button_down"})
                     if self._gesture_direction_enabled and not self._gesture_cooldown_active():
@@ -2138,6 +2207,7 @@ elif sys.platform == "linux":
                     self._gesture_active = False
                     self._finish_gesture_tracking()
                     self._gesture_triggered = False
+                    self._gesture_last_swipe_event = None
                     self._emit_debug(
                         f"HID gesture button up click_candidate={str(should_click).lower()}"
                     )

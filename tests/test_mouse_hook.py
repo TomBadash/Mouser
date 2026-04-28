@@ -259,6 +259,72 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertEqual(select_calls, [0.5])
         self.assertEqual(hook._evdev_device.read.call_count, 1)
 
+
+class LinuxGestureDetectionTests(unittest.TestCase):
+    def _reload_for_linux(self):
+        fake_evdev = SimpleNamespace(
+            ecodes=_FakeLinuxEcodes,
+            UInput=_FakeLinuxUInput,
+            InputDevice=Mock(name="InputDevice"),
+        )
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"evdev": fake_evdev}),
+        ):
+            importlib.reload(mouse_hook)
+        self.addCleanup(importlib.reload, mouse_hook)
+        return mouse_hook
+
+    def _make_hook(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook.configure_gestures(enabled=True, threshold=50, deadzone=40)
+        return module, hook
+
+    def test_horizontal_swipe_with_vertical_noise_resolves_horizontal(self):
+        module, hook = self._make_hook()
+        hook._gesture_delta_x = -72
+        hook._gesture_delta_y = -20
+
+        self.assertEqual(
+            hook._detect_gesture_event(),
+            module.MouseEvent.GESTURE_SWIPE_LEFT,
+        )
+
+    def test_equal_diagonal_stays_ambiguous_instead_of_becoming_vertical(self):
+        module, hook = self._make_hook()
+        hook._gesture_delta_x = -60
+        hook._gesture_delta_y = -60
+
+        self.assertIsNone(hook._detect_gesture_event())
+
+    def test_repeated_left_swipes_ignore_rebound_right_within_same_hold(self):
+        module, hook = self._make_hook()
+        hook._gesture_cooldown_ms = 0
+        seen = []
+        hook.register(
+            module.MouseEvent.GESTURE_SWIPE_LEFT,
+            lambda event: seen.append(event.event_type),
+        )
+        hook.register(
+            module.MouseEvent.GESTURE_SWIPE_RIGHT,
+            lambda event: seen.append(event.event_type),
+        )
+
+        hook._on_hid_gesture_down()
+        hook._accumulate_gesture_delta(-70, 0, "hid_rawxy")
+        hook._accumulate_gesture_delta(70, 0, "hid_rawxy")
+        hook._accumulate_gesture_delta(-70, 0, "hid_rawxy")
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(
+            seen,
+            [
+                module.MouseEvent.GESTURE_SWIPE_LEFT,
+                module.MouseEvent.GESTURE_SWIPE_LEFT,
+            ],
+        )
+
     def test_evdev_loop_clears_rescan_and_retries_after_listen_returns(self):
         module = self._reload_for_linux()
         hook = module.MouseHook()
