@@ -315,10 +315,14 @@ graph TD
     Backend <--> UI
     Detector --> Backend
 
-    %% Styling
-    style Engine fill:#f9f,stroke:#333,stroke-width:2px
-    style Logitech fill:#dfd,stroke:#333
-    style UI fill:#dff,stroke:#333
+%% Styling for better readability
+    style Engine fill:#e8eaff,stroke:#4f46e5,stroke-width:2px,color:#000
+    style UI fill:#e1f9f0,stroke:#059669,stroke-width:2px,color:#000
+    style Mouse fill:#fff7ed,stroke:#d97706,stroke-width:2px,color:#000
+    style Hook fill:#f3f4f6,stroke:#374151,color:#000
+    style Simulator fill:#f3f4f6,stroke:#374151,color:#000
+    style Backend fill:#f3f4f6,stroke:#374151,color:#000
+    style Detector fill:#f3f4f6,stroke:#374151,color:#000
 ```
 
 ### Mouse Hook (`mouse_hook.py`)
