@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
         "start_minimized": True,
         "start_at_login": False,
         "hscroll_threshold": 1,
+        "hscroll_cooldown_ms": 350,
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting

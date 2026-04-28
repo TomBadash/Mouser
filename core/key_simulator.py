@@ -786,28 +786,50 @@ elif sys.platform == "darwin":
         kVK_Control: Quartz.kCGEventFlagMaskControl if _QUARTZ_OK else 0,
     }
 
+    def _split_modifier_keys(keys):
+        modifiers = []
+        normals = []
+        for key in keys:
+            if key in _MOD_FLAGS:
+                modifiers.append(key)
+            else:
+                normals.append(key)
+        return modifiers, normals
+
     def send_key_combo(keys, hold_ms=50):
         """Press and release a combination of CGKeyCodes."""
         if not _QUARTZ_OK:
             return
-        # Compute modifier flags
-        flags = 0
-        for k in keys:
-            flags |= _MOD_FLAGS.get(k, 0)
+        modifiers, normals = _split_modifier_keys(keys)
+        active_flags = 0
 
-        # Press all
-        for k in keys:
-            ev = Quartz.CGEventCreateKeyboardEvent(None, k, True)
-            if flags:
-                Quartz.CGEventSetFlags(ev, flags)
+        for key in modifiers:
+            active_flags |= _MOD_FLAGS[key]
+            ev = Quartz.CGEventCreateKeyboardEvent(None, key, True)
+            if active_flags:
+                Quartz.CGEventSetFlags(ev, active_flags)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+        for key in normals:
+            ev = Quartz.CGEventCreateKeyboardEvent(None, key, True)
+            if active_flags:
+                Quartz.CGEventSetFlags(ev, active_flags)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
         if hold_ms:
             time.sleep(hold_ms / 1000.0)
 
-        # Release in reverse
-        for k in reversed(keys):
-            ev = Quartz.CGEventCreateKeyboardEvent(None, k, False)
+        for key in reversed(normals):
+            ev = Quartz.CGEventCreateKeyboardEvent(None, key, False)
+            if active_flags:
+                Quartz.CGEventSetFlags(ev, active_flags)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+        for key in reversed(modifiers):
+            active_flags &= ~_MOD_FLAGS[key]
+            ev = Quartz.CGEventCreateKeyboardEvent(None, key, False)
+            if active_flags:
+                Quartz.CGEventSetFlags(ev, active_flags)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def send_key_press(vk):

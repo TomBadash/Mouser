@@ -196,5 +196,25 @@ class MouseButtonActionTests(unittest.TestCase):
             self.assertTrue(len(label) > 0)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS key ordering is platform-specific")
+class MacKeyComboTests(unittest.TestCase):
+    def test_split_modifier_keys_preserves_modifier_first_order(self):
+        modifiers, normals = key_simulator._split_modifier_keys([
+            key_simulator.kVK_Command,
+            key_simulator.kVK_ANSI_C,
+            key_simulator.kVK_Shift,
+            key_simulator.kVK_ANSI_W,
+        ])
+
+        self.assertEqual(
+            modifiers,
+            [key_simulator.kVK_Command, key_simulator.kVK_Shift],
+        )
+        self.assertEqual(
+            normals,
+            [key_simulator.kVK_ANSI_C, key_simulator.kVK_ANSI_W],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -89,11 +89,13 @@ class _RecordedThread:
 
 
 class EngineHorizontalScrollTests(unittest.TestCase):
-    def _make_engine(self):
+    def _make_engine(self, *, hscroll_threshold=1, hscroll_cooldown_ms=None):
         from core.engine import Engine
 
         cfg = copy.deepcopy(DEFAULT_CONFIG)
-        cfg["settings"]["hscroll_threshold"] = 1
+        cfg["settings"]["hscroll_threshold"] = hscroll_threshold
+        if hscroll_cooldown_ms is not None:
+            cfg["settings"]["hscroll_cooldown_ms"] = hscroll_cooldown_ms
 
         with (
             patch("core.engine.MouseHook", _FakeMouseHook),
@@ -147,6 +149,29 @@ class EngineHorizontalScrollTests(unittest.TestCase):
             ))
 
         self.assertEqual(execute_action_mock.call_count, 1)
+
+    def test_hscroll_uses_configured_cooldown(self):
+        engine = self._make_engine(hscroll_cooldown_ms=100)
+        handler = engine._make_hscroll_handler("space_left")
+
+        with patch("core.engine.execute_action") as execute_action_mock:
+            handler(SimpleNamespace(
+                event_type=MouseEvent.HSCROLL_LEFT,
+                raw_data=1,
+                timestamp=1.00,
+            ))
+            handler(SimpleNamespace(
+                event_type=MouseEvent.HSCROLL_LEFT,
+                raw_data=1,
+                timestamp=1.05,
+            ))
+            handler(SimpleNamespace(
+                event_type=MouseEvent.HSCROLL_LEFT,
+                raw_data=1,
+                timestamp=1.15,
+            ))
+
+        self.assertEqual(execute_action_mock.call_count, 2)
 
     def test_connection_callback_receives_current_state_immediately(self):
         engine = self._make_engine()
