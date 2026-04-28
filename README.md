@@ -288,23 +288,37 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 ### Architecture
 
-```
-┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
-│ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
-│ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
-                         ▲
-                    ┌────┴────────┐
-                    │ App         │
-                    │ Detector    │
-                    └─────────────┘
+```mermaid
+graph TD
+    %% Devices and Hooks
+    Logitech["Logitech Mouse / HID++ Device"]
+    Hook["Mouse Hook (Platform Specific)"]
+    Engine["Engine (Orchestrator)"]
+    
+    %% Connections
+    Logitech --> Hook
+    Hook --> Engine
+    
+    %% Feedback Loop
+    Engine -- "block / pass" --> Hook
+    
+    %% Outputs
+    Simulator["Key Simulator (SendInput / CGEvent)"]
+    Engine --> Simulator
+    
+    %% UI and Backend
+    Backend["Backend (QObject)"]
+    UI["QML UI (PySide6)"]
+    Detector["App Detector"]
+    
+    Engine <--> Backend
+    Backend <--> UI
+    Detector --> Backend
+
+    %% Styling
+    style Engine fill:#f9f,stroke:#333,stroke-width:2px
+    style Logitech fill:#dfd,stroke:#333
+    style UI fill:#dff,stroke:#333
 ```
 
 ### Mouse Hook (`mouse_hook.py`)
