@@ -41,7 +41,11 @@ jobs:
           architecture: ${{ matrix.python_architecture }}
 
       - name: Install dependencies
+        shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force C:/pip-tmp | Out-Null
+          $env:TEMP = "C:/pip-tmp"
+          $env:TMP = "C:/pip-tmp"
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r requirements.txt
 
