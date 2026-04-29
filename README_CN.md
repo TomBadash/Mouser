@@ -105,7 +105,10 @@
 
 <p align="center">
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows&displayAssetName=false" alt="Windows Downloads" />
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows%20x64&displayAssetName=false" alt="Windows x64 Downloads" />
+  </a>
+  <a href="https://github.com/TomBadash/Mouser/releases/latest">
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows-arm64.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows%20ARM64&displayAssetName=false" alt="Windows ARM64 Downloads" />
   </a>
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
     <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-macOS.zip?style=for-the-badge&color=00d4aa&logo=apple&label=macOS&displayAssetName=false" alt="macOS Downloads" />
@@ -120,7 +123,7 @@
 ### 步骤
 
 1. 进入 [**最新 Release 页面**](https://github.com/TomBadash/Mouser/releases/latest)
-2. 下载对应平台的 zip：**Mouser-Windows.zip**、**Mouser-macOS.zip**、**Mouser-Linux.zip**
+2. 下载对应平台的 zip：**Mouser-Windows.zip**（Windows x64）、**Mouser-Windows-arm64.zip**（Windows ARM64）、**Mouser-macOS.zip**、**Mouser-Linux.zip**
 3. **解压**到任意目录（桌面/文档等均可）
 4. **运行**：`Mouser.exe`（Windows）、`Mouser.app`（macOS）、`./Mouser`（Linux）
 
@@ -313,7 +316,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 
 输出目录为 `dist/Mouser/`，将整个目录打包 zip 即可分发。
 
-> **自动化发布：** 推送 `v*` 标签会触发 [release 工作流](.github/workflows/release.yml)，在 CI 中构建三平台产物并发布到 GitHub Releases。
+> **自动化发布：** 推送 `v*` 标签会触发 [release 工作流](.github/workflows/release.yml)，在 CI 中构建 Windows x64、Windows ARM64、macOS 与 Linux 产物并发布到 GitHub Releases。
 
 #### 多语言支持（无需额外构建步骤）
 

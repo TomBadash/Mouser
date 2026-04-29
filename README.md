@@ -103,7 +103,10 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 
 <p align="center">
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
-    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows&displayAssetName=false" alt="Windows Downloads" />
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows%20x64&displayAssetName=false" alt="Windows x64 Downloads" />
+  </a>
+  <a href="https://github.com/TomBadash/Mouser/releases/latest">
+    <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-Windows-arm64.zip?style=for-the-badge&color=00d4aa&logo=windows&label=Windows%20ARM64&displayAssetName=false" alt="Windows ARM64 Downloads" />
   </a>
   <a href="https://github.com/TomBadash/Mouser/releases/latest">
     <img src="https://img.shields.io/github/downloads/TomBadash/Mouser/latest/Mouser-macOS.zip?style=for-the-badge&color=00d4aa&logo=apple&label=macOS%20Apple%20Silicon&displayAssetName=false" alt="macOS Apple Silicon Downloads" />
@@ -121,7 +124,7 @@ Action labels adapt by platform. For example, Windows exposes `Win+D` and `Task 
 ### Steps
 
 1. Go to the [**latest release page**](https://github.com/TomBadash/Mouser/releases/latest)
-2. Download the zip for your platform: **Mouser-Windows.zip**, **Mouser-macOS.zip** (Apple Silicon), **Mouser-macOS-intel.zip** (Intel macOS), or **Mouser-Linux.zip**
+2. Download the zip for your platform: **Mouser-Windows.zip** (Windows x64), **Mouser-Windows-arm64.zip** (Windows ARM64), **Mouser-macOS.zip** (Apple Silicon), **Mouser-macOS-intel.zip** (Intel macOS), or **Mouser-Linux.zip**
 3. **Extract** the zip to any folder (Desktop, Documents, wherever you like)
 4. **Run** the executable: `Mouser.exe` (Windows), `Mouser.app` (macOS), or `./Mouser` (Linux)
 
@@ -306,7 +309,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 
 The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
-> **Automated releases:** Pushing a `v*` tag triggers the [release workflow](.github/workflows/release.yml), which builds all three platforms in CI and publishes them as GitHub Release assets.
+> **Automated releases:** Pushing a `v*` tag triggers the [release workflow](.github/workflows/release.yml), which builds Windows x64, Windows ARM64, macOS, and Linux artifacts in CI and publishes them as GitHub Release assets.
 
 ---
 
