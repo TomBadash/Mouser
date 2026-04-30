@@ -91,13 +91,9 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 ## Screenshots
 
-<p align="center">
-  <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
-</p>
-
-<p align="center">
-  <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" />
-</p>
+| Mouse & Profiles | Point & Scroll |
+|---|---|
+| <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" /> | <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" /> |
 
 ---
 
