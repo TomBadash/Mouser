@@ -33,6 +33,16 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertEqual(layout["image_asset"], "mouse_mx_anywhere_3s.png")
         self.assertGreater(len(layout["hotspots"]), 0)
 
+    def test_mx_anywhere_device_specific_keys_use_family_layout(self):
+        for layout_key in ("mx_anywhere_3s", "mx_anywhere_3", "mx_anywhere_2s"):
+            with self.subTest(layout_key=layout_key):
+                layout = get_device_layout(layout_key)
+
+                self.assertEqual(layout["key"], "mx_anywhere")
+                self.assertTrue(layout["interactive"])
+                self.assertEqual(layout["image_asset"], "mouse_mx_anywhere_3s.png")
+                self.assertGreater(len(layout["hotspots"]), 0)
+
     def test_mx_vertical_layout_is_interactive(self):
         layout = get_device_layout("mx_vertical")
 
