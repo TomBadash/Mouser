@@ -36,6 +36,7 @@ def _autoreleased(fn):
     def wrapper(*args, **kwargs):
         with objc.autorelease_pool():
             return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -66,6 +67,49 @@ class MouseHook(BaseMouseHook):
         self._dispatch_queue = queue.Queue()
         self._dispatch_thread = None
         self._first_event_logged = False
+        self._gesture_prefer_hid_until = 0.0
+        self._pending_event_tap_dx = 0.0
+        self._pending_event_tap_dy = 0.0
+        self._gesture_consumed = False
+
+    _EVENT_TAP_HID_GRACE_MS = 30
+    _MAX_EFFECTIVE_GESTURE_COOLDOWN_MS = 70
+
+    def _clear_pending_event_tap_gesture(self):
+        self._pending_event_tap_dx = 0.0
+        self._pending_event_tap_dy = 0.0
+
+    def _gesture_cooldown_duration_ms(self):
+        return min(
+            self._gesture_cooldown_ms,
+            self._MAX_EFFECTIVE_GESTURE_COOLDOWN_MS,
+        )
+
+    def _buffer_event_tap_gesture(self, delta_x, delta_y):
+        self._pending_event_tap_dx += delta_x
+        self._pending_event_tap_dy += delta_y
+
+    def _has_pending_event_tap_gesture(self):
+        return bool(self._pending_event_tap_dx or self._pending_event_tap_dy)
+
+    def _should_buffer_event_tap_gesture(self):
+        if not self._gesture_active or self._gesture_input_source is not None:
+            return False
+        if not self._hid_gesture_available():
+            return False
+        return time.monotonic() < self._gesture_prefer_hid_until
+
+    def _flush_pending_event_tap_gesture(self):
+        if not self._has_pending_event_tap_gesture():
+            return
+        delta_x = self._pending_event_tap_dx
+        delta_y = self._pending_event_tap_dy
+        self._clear_pending_event_tap_gesture()
+        self._emit_debug(
+            "Gesture using buffered event_tap motion "
+            f"dx={delta_x} dy={delta_y}"
+        )
+        self._accumulate_gesture_delta(delta_x, delta_y, "event_tap")
 
     def _negate_scroll_axis(self, cg_event, axis):
         for field_name in (
@@ -132,20 +176,38 @@ class MouseHook(BaseMouseHook):
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, inverted)
         return True
 
+    def _gesture_distance(self):
+        return (self._gesture_delta_x ** 2 + self._gesture_delta_y ** 2) ** 0.5
+
+    def _gesture_click_radius(self):
+        return max(8.0, min(self._gesture_threshold * 0.5, self._gesture_deadzone))
+
+    def _classify_gesture_displacement(self):
+        delta_x = self._gesture_delta_x
+        delta_y = self._gesture_delta_y
+        abs_x = abs(delta_x)
+        abs_y = abs(delta_y)
+        if max(abs_x, abs_y) <= self._gesture_click_radius():
+            return MouseEvent.GESTURE_CLICK
+        if abs_x >= abs_y:
+            return (
+                MouseEvent.GESTURE_SWIPE_RIGHT
+                if delta_x > 0
+                else MouseEvent.GESTURE_SWIPE_LEFT
+            )
+        return (
+            MouseEvent.GESTURE_SWIPE_DOWN
+            if delta_y > 0
+            else MouseEvent.GESTURE_SWIPE_UP
+        )
+
     def _accumulate_gesture_delta(self, delta_x, delta_y, source):
         if not (self._gesture_direction_enabled and self._gesture_active):
             return
-        if self._gesture_cooldown_active():
+        if self._gesture_consumed:
             self._emit_debug(
-                f"Gesture cooldown active source={source} dx={delta_x} dy={delta_y}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "cooldown_active",
-                    "source": source,
-                    "dx": delta_x,
-                    "dy": delta_y,
-                }
+                f"Gesture move ignored after consume source={source} "
+                f"dx={delta_x} dy={delta_y}"
             )
             return
         if not self._gesture_tracking:
@@ -199,52 +261,133 @@ class MouseHook(BaseMouseHook):
             }
         )
 
-        while True:
-            gesture_event = self._detect_gesture_event()
-            if not gesture_event:
-                return
-
-            self._gesture_triggered = True
+        gesture_event = self._detect_gesture_event()
+        if not gesture_event:
             self._emit_debug(
-                "Gesture detected "
-                f"{gesture_event} source={source} "
-                f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
+                "Gesture threshold not yet reached "
+                f"source={source} distance={self._gesture_distance():.1f} "
+                f"threshold={self._gesture_threshold:.1f}"
             )
-            self._emit_gesture_event(
-                {
-                    "type": "detected",
-                    "event_name": gesture_event,
-                    "source": source,
-                    "dx": self._gesture_delta_x,
-                    "dy": self._gesture_delta_y,
-                }
-            )
-            self._dispatch_queue.put(
-                MouseEvent(
-                    gesture_event,
-                    {
-                        "delta_x": self._gesture_delta_x,
-                        "delta_y": self._gesture_delta_y,
-                        "source": source,
-                    },
-                )
-            )
-            self._gesture_cooldown_until = (
-                time.monotonic() + self._gesture_cooldown_ms / 1000.0
-            )
-            self._emit_debug(
-                f"Gesture cooldown started source={source} "
-                f"for_ms={self._gesture_cooldown_ms}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "cooldown_started",
-                    "source": source,
-                    "for_ms": self._gesture_cooldown_ms,
-                }
-            )
-            self._finish_gesture_tracking()
             return
+
+        self._gesture_triggered = True
+        self._gesture_consumed = True
+        self._emit_debug(
+            "Gesture detected "
+            f"{gesture_event} source={source} "
+            f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
+        )
+        self._emit_gesture_event(
+            {
+                "type": "detected",
+                "event_name": gesture_event,
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            }
+        )
+        self._dispatch_queue.put(
+            MouseEvent(
+                gesture_event,
+                {
+                    "delta_x": self._gesture_delta_x,
+                    "delta_y": self._gesture_delta_y,
+                    "source": source,
+                },
+            )
+        )
+        self._finish_gesture_tracking()
+        return
+
+    def _accumulate_gesture_position(self, pos_x, pos_y, source):
+        if not (self._gesture_direction_enabled and self._gesture_active):
+            return
+        if self._gesture_consumed:
+            self._emit_debug(
+                f"Gesture position ignored after consume source={source} "
+                f"x={pos_x} y={pos_y}"
+            )
+            return
+        if not self._gesture_tracking:
+            self._emit_debug(f"Gesture tracking started source={source}")
+            self._emit_gesture_event(
+                {
+                    "type": "tracking_started",
+                    "source": source,
+                }
+            )
+            self._start_gesture_tracking()
+
+        now = time.monotonic()
+        idle_ms = (now - self._gesture_last_move_at) * 1000.0
+        if idle_ms > self._gesture_timeout_ms:
+            self._emit_debug(
+                f"Gesture segment reset timeout source={source} "
+                f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
+            )
+            self._start_gesture_tracking()
+
+        if self._gesture_input_source not in (None, source):
+            self._emit_debug(
+                f"Gesture source locked to {self._gesture_input_source}; "
+                f"ignoring {source} x={pos_x} y={pos_y}"
+            )
+            return
+        self._gesture_input_source = source
+
+        self._gesture_delta_x = pos_x
+        self._gesture_delta_y = pos_y
+        self._gesture_last_move_at = now
+        self._emit_debug(
+            f"Gesture position source={source} "
+            f"x={self._gesture_delta_x} y={self._gesture_delta_y}"
+        )
+        self._emit_gesture_event(
+            {
+                "type": "segment",
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            }
+        )
+
+        gesture_event = self._detect_gesture_event()
+        if not gesture_event:
+            self._emit_debug(
+                "Gesture threshold not yet reached "
+                f"source={source} distance={self._gesture_distance():.1f} "
+                f"threshold={self._gesture_threshold:.1f}"
+            )
+            return
+
+        self._gesture_triggered = True
+        self._gesture_consumed = True
+        self._emit_debug(
+            "Gesture detected "
+            f"{gesture_event} source={source} "
+            f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
+        )
+        self._emit_gesture_event(
+            {
+                "type": "detected",
+                "event_name": gesture_event,
+                "source": source,
+                "dx": self._gesture_delta_x,
+                "dy": self._gesture_delta_y,
+            }
+        )
+        self._dispatch_queue.put(
+            MouseEvent(
+                gesture_event,
+                {
+                    "delta_x": self._gesture_delta_x,
+                    "delta_y": self._gesture_delta_y,
+                    "source": source,
+                },
+            )
+        )
+        self._finish_gesture_tracking()
+        return
 
     def _dispatch_worker(self):
         while self._running:
@@ -314,6 +457,31 @@ class MouseHook(BaseMouseHook):
                     }
                 )
                 if self._gesture_input_source == "hid_rawxy":
+                    return None
+                if self._should_buffer_event_tap_gesture():
+                    self._buffer_event_tap_gesture(
+                        Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaX
+                        ),
+                        Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaY
+                        ),
+                    )
+                    self._emit_debug(
+                        "Gesture buffering event_tap motion while waiting "
+                        "for hid_rawxy"
+                    )
+                    return None
+                if self._gesture_input_source is None and self._has_pending_event_tap_gesture():
+                    self._buffer_event_tap_gesture(
+                        Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaX
+                        ),
+                        Quartz.CGEventGetIntegerValueField(
+                            cg_event, Quartz.kCGMouseEventDeltaY
+                        ),
+                    )
+                    self._flush_pending_event_tap_gesture()
                     return None
                 self._accumulate_gesture_delta(
                     Quartz.CGEventGetIntegerValueField(
@@ -423,9 +591,17 @@ class MouseHook(BaseMouseHook):
         if not self._gesture_active:
             self._gesture_active = True
             self._gesture_triggered = False
+            self._gesture_consumed = False
+            self._clear_pending_event_tap_gesture()
+            if self._hid_gesture_available():
+                self._gesture_prefer_hid_until = (
+                    time.monotonic() + self._EVENT_TAP_HID_GRACE_MS / 1000.0
+                )
+            else:
+                self._gesture_prefer_hid_until = 0.0
             self._emit_debug("HID gesture button down")
             self._emit_gesture_event({"type": "button_down"})
-            if self._gesture_direction_enabled and not self._gesture_cooldown_active():
+            if self._gesture_direction_enabled:
                 self._start_gesture_tracking()
             else:
                 self._gesture_tracking = False
@@ -434,7 +610,51 @@ class MouseHook(BaseMouseHook):
     def _on_hid_gesture_up(self):
         if self._gesture_active:
             should_click = not self._gesture_triggered
+            dispatch_event = None
+            if (
+                self._gesture_direction_enabled
+                and not self._gesture_consumed
+                and self._gesture_tracking
+            ):
+                gesture_event = self._classify_gesture_displacement()
+                self._emit_debug(
+                    "Gesture release classification "
+                    f"event={gesture_event} delta_x={self._gesture_delta_x} "
+                    f"delta_y={self._gesture_delta_y} "
+                    f"distance={self._gesture_distance():.1f}"
+                )
+                if gesture_event == MouseEvent.GESTURE_CLICK:
+                    should_click = True
+                else:
+                    should_click = False
+                    dispatch_event = MouseEvent(
+                        gesture_event,
+                        {
+                            "delta_x": self._gesture_delta_x,
+                            "delta_y": self._gesture_delta_y,
+                            "source": self._gesture_input_source,
+                        },
+                    )
+                    self._gesture_triggered = True
+                    self._gesture_consumed = True
+                    self._emit_debug(
+                        "Gesture released -> detected "
+                        f"{gesture_event} delta_x={self._gesture_delta_x} "
+                        f"delta_y={self._gesture_delta_y}"
+                    )
+                    self._emit_gesture_event(
+                        {
+                            "type": "detected",
+                            "event_name": gesture_event,
+                            "source": self._gesture_input_source,
+                            "dx": self._gesture_delta_x,
+                            "dy": self._gesture_delta_y,
+                        }
+                    )
             self._gesture_active = False
+            self._gesture_consumed = False
+            self._gesture_prefer_hid_until = 0.0
+            self._clear_pending_event_tap_gesture()
             self._finish_gesture_tracking()
             self._gesture_triggered = False
             self._emit_debug(
@@ -446,6 +666,8 @@ class MouseHook(BaseMouseHook):
                     "click_candidate": should_click,
                 }
             )
+            if dispatch_event is not None:
+                self._dispatch(dispatch_event)
             if should_click:
                 self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -465,8 +687,18 @@ class MouseHook(BaseMouseHook):
         self._emit_debug("HID DPI switch button up")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
-    def _on_hid_gesture_move(self, delta_x, delta_y):
-        self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
+    def _on_hid_gesture_move(self, delta_x, delta_y, meta=None):
+        if self._has_pending_event_tap_gesture():
+            self._emit_debug(
+                "Gesture discarding buffered event_tap motion in favor of "
+                "hid_rawxy"
+            )
+            self._clear_pending_event_tap_gesture()
+        self._gesture_prefer_hid_until = 0.0
+        self._emit_debug(
+            f"HID rawxy move dx={delta_x} dy={delta_y} "
+            f"mode={(meta or {}).get('mode', 'delta')}"
+        )
         self._emit_gesture_event(
             {
                 "type": "move",
@@ -475,7 +707,10 @@ class MouseHook(BaseMouseHook):
                 "dy": delta_y,
             }
         )
-        self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
+        if (meta or {}).get("mode") == "absolute":
+            self._accumulate_gesture_position(delta_x, delta_y, "hid_rawxy")
+        else:
+            self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
     def _register_wake_observer(self):
         try:
@@ -506,11 +741,13 @@ class MouseHook(BaseMouseHook):
         def _on_session_activate(notification):
             _re_enable_tap_and_reconnect("user-switch")
 
-        self._wake_observer = notification_center.addObserverForName_object_queue_usingBlock_(
-            "NSWorkspaceDidWakeNotification",
-            None,
-            None,
-            _on_wake,
+        self._wake_observer = (
+            notification_center.addObserverForName_object_queue_usingBlock_(
+                "NSWorkspaceDidWakeNotification",
+                None,
+                None,
+                _on_wake,
+            )
         )
         self._session_resign_observer = (
             notification_center.addObserverForName_object_queue_usingBlock_(
