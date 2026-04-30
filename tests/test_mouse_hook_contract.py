@@ -3,7 +3,7 @@ import unittest
 
 from core import mouse_hook
 from core.mouse_hook_contract import MouseHookLike
-from core.mouse_hook_types import MouseEvent
+from core.mouse_hook_types import HidRuntimeState, MouseEvent
 
 
 class MouseHookContractTests(unittest.TestCase):
@@ -22,6 +22,16 @@ class MouseHookContractTests(unittest.TestCase):
     def test_selected_hook_exposes_engine_contract_surface(self):
         hook = mouse_hook.MouseHook()
         self.assertIsInstance(hook, MouseHookLike)
+
+    def test_selected_hook_exposes_hid_runtime_state(self):
+        hook = mouse_hook.MouseHook()
+
+        state = hook.hid_runtime_state
+
+        self.assertIsInstance(state, HidRuntimeState)
+        self.assertFalse(state.input_ready)
+        self.assertFalse(state.hid_ready)
+        self.assertIsNone(state.connected_device)
 
     def test_dispatcher_monkeypatch_forwards_to_platform_module(self):
         platform_module = sys.modules[mouse_hook.MouseHook.__module__]

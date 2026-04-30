@@ -2,7 +2,18 @@
 Shared mouse hook types and helpers.
 """
 
+from dataclasses import dataclass
 import time
+from typing import Any
+
+
+@dataclass(frozen=True)
+class HidRuntimeState:
+    """Read-only snapshot of hook input and HID++ readiness."""
+
+    input_ready: bool = False
+    hid_ready: bool = False
+    connected_device: Any = None
 
 
 class MouseEvent:

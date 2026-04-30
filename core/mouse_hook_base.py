@@ -9,7 +9,7 @@ try:
 except Exception:
     HidGestureListener = None
 
-from core.mouse_hook_types import MouseEvent, format_debug_details
+from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
 
 
 class BaseMouseHook:
@@ -83,6 +83,16 @@ class BaseMouseHook:
     @property
     def connected_device(self):
         return self._connected_device
+
+    @property
+    def hid_runtime_state(self):
+        hg = getattr(self, "_hid_gesture", None)
+        hid_device = getattr(hg, "connected_device", None) if hg else None
+        return HidRuntimeState(
+            input_ready=bool(self._device_connected),
+            hid_ready=hid_device is not None,
+            connected_device=self._connected_device,
+        )
 
     def dump_device_info(self):
         hg = getattr(self, "_hid_gesture", None)

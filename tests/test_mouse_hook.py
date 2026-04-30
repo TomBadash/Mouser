@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, call, patch
 
 from core import mouse_hook
+from core.mouse_hook_base import BaseMouseHook
+from core.mouse_hook_types import HidRuntimeState
 
 
 class _FakeEvdevDevice:
@@ -60,6 +62,25 @@ class _FakeLinuxUInput:
     @staticmethod
     def from_device(*_args, **_kwargs):
         return Mock()
+
+
+class BaseMouseHookRuntimeStateTests(unittest.TestCase):
+    def test_default_runtime_state_is_disconnected(self):
+        hook = BaseMouseHook()
+
+        self.assertEqual(hook.hid_runtime_state, HidRuntimeState())
+
+    def test_runtime_state_projects_hid_identity(self):
+        hook = BaseMouseHook()
+        device = SimpleNamespace(name="MX Master 3S")
+        hook._hid_gesture = SimpleNamespace(connected_device=device)
+
+        hook._on_hid_connect()
+
+        state = hook.hid_runtime_state
+        self.assertTrue(state.input_ready)
+        self.assertTrue(state.hid_ready)
+        self.assertIs(state.connected_device, device)
 
 
 class LinuxMouseHookReconnectTests(unittest.TestCase):
@@ -245,6 +266,14 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertFalse(hook.device_connected)
         self.assertTrue(hook.hid_ready)
         self.assertEqual(hook.connected_device, {"name": "MX Master 3S"})
+        self.assertEqual(
+            hook.hid_runtime_state,
+            HidRuntimeState(
+                input_ready=False,
+                hid_ready=True,
+                connected_device={"name": "MX Master 3S"},
+            ),
+        )
         self.assertTrue(hook._rescan_requested.is_set())
         self.assertTrue(hook._evdev_wakeup.is_set())
 
@@ -274,6 +303,14 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
         self.assertTrue(hook.device_connected)
         self.assertFalse(hook._rescan_requested.is_set())
+        self.assertEqual(
+            hook.hid_runtime_state,
+            HidRuntimeState(
+                input_ready=True,
+                hid_ready=True,
+                connected_device={"name": "MX Master 3S"},
+            ),
+        )
 
     def test_hid_connect_does_not_mark_device_connected_when_evdev_is_missing(self):
         module = self._reload_for_linux()
@@ -299,6 +336,14 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
         self.assertTrue(hook.device_connected)
         self.assertEqual(hook.connected_device, {"name": "MX Master 3S"})
+        self.assertEqual(
+            hook.hid_runtime_state,
+            HidRuntimeState(
+                input_ready=True,
+                hid_ready=False,
+                connected_device={"name": "MX Master 3S"},
+            ),
+        )
 
     def test_setup_evdev_marks_connected_and_populates_fallback_device_info(self):
         module = self._reload_for_linux()
@@ -319,6 +364,12 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertTrue(hook.device_connected)
         self.assertEqual(getattr(hook.connected_device, "display_name", None), "MX Master 3S")
         self.assertEqual(getattr(hook.connected_device, "source", None), "evdev")
+        self.assertEqual(hook.hid_runtime_state.input_ready, True)
+        self.assertEqual(hook.hid_runtime_state.hid_ready, False)
+        self.assertEqual(
+            getattr(hook.hid_runtime_state.connected_device, "source", None),
+            "evdev",
+        )
 
     def test_listen_loop_exits_when_rescan_is_requested(self):
         module = self._reload_for_linux()

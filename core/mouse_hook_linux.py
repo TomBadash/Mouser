@@ -26,7 +26,7 @@ from core.logi_devices import (
     resolve_device as _resolve_logi_device,
 )
 from core.mouse_hook_base import BaseMouseHook, HidGestureListener
-from core.mouse_hook_types import MouseEvent
+from core.mouse_hook_types import HidRuntimeState, MouseEvent
 
 _LOGI_VENDOR = 0x046D
 _LOG_ONCE_KEYS = set()
@@ -111,6 +111,16 @@ class MouseHook(BaseMouseHook):
     @property
     def hid_ready(self):
         return self._hid_ready
+
+    @property
+    def hid_runtime_state(self):
+        hg = getattr(self, "_hid_gesture", None)
+        hid_device = getattr(hg, "connected_device", None) if hg else None
+        return HidRuntimeState(
+            input_ready=bool(self._device_connected),
+            hid_ready=bool(self._hid_ready and hid_device is not None),
+            connected_device=self._connected_device,
+        )
 
     def _set_evdev_ready(self, ready):
         if ready == self._evdev_ready:
