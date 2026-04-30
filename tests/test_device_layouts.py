@@ -62,6 +62,45 @@ class DeviceLayoutTests(unittest.TestCase):
         )
         self.assertGreater(len(layout["hotspots"]), 0)
 
+    def test_exact_mx_anywhere_2s_layout_uses_catalog_asset(self):
+        layout = get_device_layout("mx_anywhere_2s")
+        hotspot_keys = {hotspot["buttonKey"] for hotspot in layout["hotspots"]}
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["key"], "mx_anywhere_2s")
+        self.assertEqual(
+            layout["image_asset"],
+            "logitech-mice/mx_anywhere_2s/mouse.png",
+        )
+        self.assertIn("hscroll_left", hotspot_keys)
+        self.assertNotIn("mode_shift", hotspot_keys)
+
+    def test_exact_mx_anywhere_3_layout_uses_catalog_asset(self):
+        layout = get_device_layout("mx_anywhere_3")
+        hotspot_keys = {hotspot["buttonKey"] for hotspot in layout["hotspots"]}
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["key"], "mx_anywhere_3")
+        self.assertEqual(
+            layout["image_asset"],
+            "logitech-mice/mx_anywhere_3/mouse.png",
+        )
+        self.assertIn("hscroll_left", hotspot_keys)
+        self.assertIn("mode_shift", hotspot_keys)
+
+    def test_exact_mx_anywhere_3s_layout_uses_catalog_asset(self):
+        layout = get_device_layout("mx_anywhere_3s")
+        hotspot_keys = {hotspot["buttonKey"] for hotspot in layout["hotspots"]}
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["key"], "mx_anywhere_3s")
+        self.assertEqual(
+            layout["image_asset"],
+            "logitech-mice/mx_anywhere_3s/mouse.png",
+        )
+        self.assertIn("hscroll_left", hotspot_keys)
+        self.assertIn("mode_shift", hotspot_keys)
+
 
 if __name__ == "__main__":
     unittest.main()

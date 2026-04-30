@@ -35,9 +35,8 @@ MX_MASTER_BUTTONS = (
     "mode_shift",
 )
 
-# MX Anywhere has a gesture button but no horizontal scroll tilt and no
-# dedicated mode-shift button.  Gesture support is a best guess -- needs
-# validation by an owner.
+# Conservative fallback for generic MX Anywhere-family overrides. Exact
+# cataloged MX Anywhere devices provide their own button sets.
 MX_ANYWHERE_BUTTONS = (
     "middle",
     "gesture",
@@ -121,36 +120,6 @@ KNOWN_LOGI_DEVICES = tuple(
         ui_layout="mx_vertical",
         image_asset="mx_vertical.png",
         supported_buttons=MX_VERTICAL_BUTTONS,
-        dpi_max=4000,
-    ),
-    LogiDeviceSpec(
-        key="mx_anywhere_3s",
-        display_name="MX Anywhere 3S",
-        product_ids=(0xB037,),
-        aliases=("MX Anywhere 3S for Mac",),
-        ui_layout="mouse_mx_anywhere_3s.png",
-        image_asset="mouse_mx_anywhere_3s.png",
-        supported_buttons=MX_ANYWHERE_BUTTONS,
-        dpi_max=8000,
-    ),
-    LogiDeviceSpec(
-        key="mx_anywhere_3",
-        display_name="MX Anywhere 3",
-        product_ids=(0xB025,),
-        aliases=("MX Anywhere 3 for Mac",),
-        ui_layout="mx_anywhere_3",
-        image_asset="mouse_mx_anywhere_3s.png",
-        supported_buttons=MX_ANYWHERE_BUTTONS,
-        dpi_max=4000,
-    ),
-    LogiDeviceSpec(
-        key="mx_anywhere_2s",
-        display_name="MX Anywhere 2S",
-        product_ids=(0xB01A,),
-        aliases=("Wireless Mobile Mouse MX Anywhere 2S",),
-        ui_layout="mx_anywhere_2s",
-        image_asset="mouse_mx_anywhere_3s.png",
-        supported_buttons=MX_ANYWHERE_BUTTONS,
         dpi_max=4000,
     ),
 )

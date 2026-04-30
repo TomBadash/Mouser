@@ -4,6 +4,7 @@ from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
     build_connected_device_info,
     clamp_dpi,
+    get_buttons_for_layout,
     resolve_device,
 )
 
@@ -54,6 +55,45 @@ class LogiDeviceRegistryTests(unittest.TestCase):
 
         self.assertIsNotNone(device)
         self.assertEqual(device.key, "mx_master_3")
+
+    def test_resolve_mx_anywhere_3_promoted_pids(self):
+        for product_id in (0xB025, 0xB02D):
+            with self.subTest(product_id=product_id):
+                device = resolve_device(product_id=product_id)
+
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "mx_anywhere_3")
+                self.assertEqual(device.ui_layout, "mx_anywhere_3")
+                self.assertEqual(
+                    device.image_asset,
+                    "logitech-mice/mx_anywhere_3/mouse.png",
+                )
+
+    def test_mx_anywhere_3s_uses_exact_catalog_layout(self):
+        info = build_connected_device_info(product_id=0xB037)
+
+        self.assertEqual(info.display_name, "MX Anywhere 3S")
+        self.assertEqual(info.ui_layout, "mx_anywhere_3s")
+        self.assertEqual(
+            info.image_asset,
+            "logitech-mice/mx_anywhere_3s/mouse.png",
+        )
+
+    def test_exact_mx_anywhere_button_sets_include_expected_controls(self):
+        anywhere_2s = get_buttons_for_layout("mx_anywhere_2s")
+        anywhere_3 = get_buttons_for_layout("mx_anywhere_3")
+        anywhere_3s = get_buttons_for_layout("mx_anywhere_3s")
+
+        for buttons in (anywhere_2s, anywhere_3, anywhere_3s):
+            with self.subTest(buttons=buttons):
+                self.assertIn("hscroll_left", buttons)
+                self.assertIn("hscroll_right", buttons)
+                self.assertIn("gesture_left", buttons)
+                self.assertIn("gesture_right", buttons)
+
+        self.assertNotIn("mode_shift", anywhere_2s)
+        self.assertIn("mode_shift", anywhere_3)
+        self.assertIn("mode_shift", anywhere_3s)
 
     def test_build_connected_device_info_uses_registry_defaults(self):
         info = build_connected_device_info(
