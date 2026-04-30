@@ -16,27 +16,55 @@ env:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    name: build-windows (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            runner: windows-latest
+            python_architecture: x64
+            artifact_name: Mouser-Windows
+            archive_name: Mouser-Windows.zip
+          - name: ARM64
+            runner: windows-11-arm
+            python_architecture: arm64
+            artifact_name: Mouser-Windows-arm64
+            archive_name: Mouser-Windows-arm64.zip
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          architecture: ${{ matrix.python_architecture }}
+
+      - name: Use short pip temp path for ARM64 source builds
+        if: matrix.python_architecture == 'arm64'
+        shell: pwsh
+        run: |
+          # hidapi does not publish Windows ARM64 wheels yet, so pip builds it
+          # from source. Keep MSVC's generated files under a short/simple path.
+          New-Item -ItemType Directory -Force C:/pip-tmp | Out-Null
+          "TEMP=C:/pip-tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:/pip-tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
 
       - name: Build with PyInstaller
         run: pyinstaller Mouser.spec --noconfirm
 
       - name: Create archive
-        run: Compress-Archive -Path dist\Mouser -DestinationPath Mouser-Windows.zip
+        run: Compress-Archive -Path dist/Mouser -DestinationPath "${{ matrix.archive_name }}"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: Mouser-Windows
-          path: Mouser-Windows.zip
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.archive_name }}
 
   build-macos:
     name: build-macos (${{ matrix.name }})
@@ -236,6 +264,7 @@ jobs:
               --repo "${{ github.repository }}" \
               --clobber \
               Mouser-Windows/Mouser-Windows.zip \
+              Mouser-Windows-arm64/Mouser-Windows-arm64.zip \
               Mouser-macOS/Mouser-macOS.zip \
               Mouser-macOS-intel/Mouser-macOS-intel.zip \
               Mouser-Linux/Mouser-Linux.zip
@@ -245,6 +274,7 @@ jobs:
               --title "Mouser ${{ github.ref_name }}" \
               --generate-notes \
               Mouser-Windows/Mouser-Windows.zip \
+              Mouser-Windows-arm64/Mouser-Windows-arm64.zip \
               Mouser-macOS/Mouser-macOS.zip \
               Mouser-macOS-intel/Mouser-macOS-intel.zip \
               Mouser-Linux/Mouser-Linux.zip
