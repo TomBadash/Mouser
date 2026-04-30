@@ -67,6 +67,18 @@ GENERIC_BUTTONS = (
 # Backward-compat alias used by config.py and other modules.
 DEFAULT_BUTTON_LAYOUT = MX_MASTER_BUTTONS
 
+_GESTURE_BUTTON_KEYS = (
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+)
+_CID_GATED_BUTTONS = {
+    "mode_shift": 0x00C4,
+    "dpi_switch": 0x00FD,
+}
+
 
 @dataclass(frozen=True)
 class LogiDeviceSpec:
@@ -147,6 +159,51 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
         if device.matches(product_id=product_id, product_name=product_name):
             return device
     return None
+
+
+def _control_cid(control) -> int | None:
+    if not isinstance(control, dict):
+        return None
+    cid = control.get("cid")
+    if cid in (None, ""):
+        return None
+    try:
+        return int(cid, 0) if isinstance(cid, str) else int(cid)
+    except (TypeError, ValueError):
+        return None
+
+
+def derive_supported_buttons_from_reprog_controls(
+    static_buttons: tuple[str, ...],
+    controls,
+    gesture_cids=None,
+) -> tuple[str, ...]:
+    """Narrow HID++-gated buttons using discovered REPROG_V4 controls.
+
+    OS-level buttons and horizontal scroll remain catalog-driven because they
+    are not always represented as divertable HID++ controls.
+    """
+    if not controls:
+        return static_buttons
+
+    control_cids = {
+        cid
+        for cid in (_control_cid(control) for control in controls)
+        if cid is not None
+    }
+    if not control_cids:
+        return static_buttons
+
+    allowed = set(static_buttons)
+    gesture_candidates = tuple(gesture_cids or DEFAULT_GESTURE_CIDS)
+    if not any(cid in control_cids for cid in gesture_candidates):
+        allowed.difference_update(_GESTURE_BUTTON_KEYS)
+
+    for button_key, cid in _CID_GATED_BUTTONS.items():
+        if cid not in control_cids:
+            allowed.discard(button_key)
+
+    return tuple(button for button in static_buttons if button in allowed)
 
 
 # Maps family layout keys to their button sets so the override picker can

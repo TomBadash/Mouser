@@ -3,8 +3,11 @@ import unittest
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
     KNOWN_LOGI_DEVICES,
+    MX_MASTER_BUTTONS,
+    MX_VERTICAL_BUTTONS,
     build_connected_device_info,
     clamp_dpi,
+    derive_supported_buttons_from_reprog_controls,
     get_buttons_for_layout,
     resolve_device,
 )
@@ -154,6 +157,102 @@ class LogiDeviceRegistryTests(unittest.TestCase):
     def test_clamp_dpi_defaults_without_device(self):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
+
+
+class RuntimeSupportedButtonTests(unittest.TestCase):
+    @staticmethod
+    def _control(cid):
+        return {"cid": cid}
+
+    def test_reprog_control_filter_keeps_static_buttons_without_controls(self):
+        self.assertEqual(
+            derive_supported_buttons_from_reprog_controls(
+                MX_MASTER_BUTTONS,
+                [],
+                gesture_cids=(0x00C3,),
+            ),
+            MX_MASTER_BUTTONS,
+        )
+
+    def test_reprog_control_filter_removes_missing_gesture_group(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x0052),
+                self._control(0x0053),
+                self._control(0x0056),
+                self._control(0x00C4),
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertNotIn("gesture", buttons)
+        self.assertNotIn("gesture_left", buttons)
+        self.assertNotIn("gesture_right", buttons)
+
+    def test_reprog_control_filter_keeps_selected_gesture_cid(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00D7),
+                self._control(0x00C4),
+            ],
+            gesture_cids=(0x00D7,),
+        )
+
+        self.assertIn("gesture", buttons)
+        self.assertIn("gesture_up", buttons)
+
+    def test_reprog_control_filter_removes_missing_mode_shift(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3),
+                self._control(0x0052),
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertNotIn("mode_shift", buttons)
+
+    def test_reprog_control_filter_removes_missing_dpi_switch(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_VERTICAL_BUTTONS,
+            [
+                self._control(0x0052),
+                self._control(0x0053),
+                self._control(0x0056),
+            ],
+        )
+
+        self.assertNotIn("dpi_switch", buttons)
+
+    def test_reprog_control_filter_preserves_hscroll_without_hscroll_cids(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3),
+                self._control(0x00C4),
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertIn("hscroll_left", buttons)
+        self.assertIn("hscroll_right", buttons)
+
+    def test_reprog_control_filter_ignores_unknown_cids_and_preserves_order(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control("0x01A0"),
+                self._control("0x00C3"),
+                self._control("0x00C4"),
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertNotIn("0x01A0", buttons)
+        self.assertEqual(buttons, tuple(button for button in MX_MASTER_BUTTONS))
 
 
 if __name__ == "__main__":
