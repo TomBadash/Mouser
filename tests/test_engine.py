@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from core.config import DEFAULT_CONFIG
 from core.mouse_hook import MouseEvent
+from core.mouse_hook_types import HidRuntimeState
 
 
 class _FakeMouseHook:
@@ -179,6 +180,26 @@ class EngineHorizontalScrollTests(unittest.TestCase):
             connected_device=SimpleNamespace(name="MX Master 3S")
         )
         self.assertTrue(engine.hid_features_ready)
+
+    def test_engine_projection_prefers_hid_runtime_state(self):
+        engine = self._make_engine()
+        device = SimpleNamespace(name="MX Master 3S")
+        engine.hook.device_connected = False
+        engine.hook.connected_device = SimpleNamespace(name="stale fallback")
+        engine.hook._hid_gesture = None
+        engine.hook.hid_runtime_state = HidRuntimeState(
+            input_ready=True,
+            hid_ready=True,
+            connected_device=device,
+        )
+
+        seen = []
+        engine.set_connection_change_callback(seen.append)
+
+        self.assertTrue(engine.device_connected)
+        self.assertIs(engine.connected_device, device)
+        self.assertTrue(engine.hid_features_ready)
+        self.assertEqual(seen, [True])
 
     def test_duplicate_connected_refresh_does_not_restart_battery_poller(self):
         engine = self._make_engine()

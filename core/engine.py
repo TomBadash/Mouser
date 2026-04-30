@@ -16,6 +16,7 @@ from core.config import (
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
 from core.app_detector import AppDetector
+from core.mouse_hook_types import HidRuntimeState
 from core.linux_permissions import (
     linux_permission_log_message,
     linux_permission_report,
@@ -58,7 +59,7 @@ class Engine:
         )
         self._battery_poll_stop = threading.Event()
         self._battery_poll_thread = None          # track the poller thread
-        self._last_connection_state = bool(self.hook.device_connected)
+        self._last_connection_state = bool(self._hid_runtime_state().input_ready)
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
         self._replay_inflight = False
@@ -77,6 +78,18 @@ class Engine:
                 self.hook.set_dpi(dpi)
         except Exception as e:
             print(f"[Engine] Failed to set DPI: {e}")
+
+    def _hid_runtime_state(self):
+        state = getattr(self.hook, "hid_runtime_state", None)
+        if state is not None:
+            return state
+        hg = getattr(self.hook, "_hid_gesture", None)
+        hid_device = getattr(hg, "connected_device", None) if hg else None
+        return HidRuntimeState(
+            input_ready=bool(getattr(self.hook, "device_connected", False)),
+            hid_ready=hid_device is not None,
+            connected_device=getattr(self.hook, "connected_device", None),
+        )
 
     # ------------------------------------------------------------------
     # Hook wiring
@@ -676,25 +689,24 @@ class Engine:
         self._connection_change_cb = cb
         if cb:
             try:
-                cb(bool(self.hook.device_connected))
+                cb(bool(self._hid_runtime_state().input_ready))
             except Exception:
                 pass
 
     @property
     def device_connected(self):
-        return self.hook.device_connected
+        return self._hid_runtime_state().input_ready
 
     @property
     def connected_device(self):
-        return getattr(self.hook, "connected_device", None)
+        return self._hid_runtime_state().connected_device
 
     def dump_device_info(self):
         return getattr(self.hook, "dump_device_info", lambda: None)()
 
     @property
     def hid_features_ready(self):
-        hg = self.hook._hid_gesture
-        return hg is not None and getattr(hg, "connected_device", None) is not None
+        return self._hid_runtime_state().hid_ready
 
     @property
     def enabled(self):
