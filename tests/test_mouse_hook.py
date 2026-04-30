@@ -8,11 +8,11 @@ from core import mouse_hook
 
 
 class _FakeEvdevDevice:
-    def __init__(self, *, name, path, vendor, capabilities, fd=11):
+    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11):
         self.name = name
         self.path = path
         self.fd = fd
-        self.info = SimpleNamespace(vendor=vendor)
+        self.info = SimpleNamespace(vendor=vendor, product=product)
         self._capabilities = capabilities
         self.grab = Mock()
         self.ungrab = Mock()
@@ -127,6 +127,37 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertTrue(generic.close.called)
         self.assertFalse(logi.close.called)
 
+    def test_find_mouse_device_prefers_known_supported_logitech_model(self):
+        module = self._reload_for_linux()
+        legacy = _FakeEvdevDevice(
+            name="Logitech Performance MX",
+            path="/dev/input/event11",
+            vendor=module._LOGI_VENDOR,
+            product=0x101A,
+            capabilities=self._fake_caps(module),
+        )
+        modern = _FakeEvdevDevice(
+            name="Logitech MX Master 3S",
+            path="/dev/input/event22",
+            vendor=module._LOGI_VENDOR,
+            product=0xB034,
+            capabilities=self._fake_caps(module),
+        )
+
+        patches = self._patch_evdev_lookup(
+            module,
+            {
+                legacy.path: legacy,
+                modern.path: modern,
+            },
+        )
+        with patches[0], patches[1]:
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIs(chosen, modern)
+        self.assertTrue(legacy.close.called)
+        self.assertFalse(modern.close.called)
+
     def test_find_mouse_device_returns_none_when_only_non_logitech_candidates_exist(self):
         module = self._reload_for_linux()
         generic_one = _FakeEvdevDevice(
@@ -153,6 +184,54 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             chosen = module.MouseHook()._find_mouse_device()
 
         self.assertIsNone(chosen)
+
+    def test_find_mouse_device_logs_permission_errors_opening_evdev(self):
+        module = self._reload_for_linux()
+        fake_evdev_mod = SimpleNamespace(list_devices=lambda: ["/dev/input/event0"])
+
+        with (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module, "_InputDevice", side_effect=PermissionError("denied")),
+            patch("builtins.print") as print_mock,
+        ):
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIsNone(chosen)
+        messages = [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+        self.assertTrue(
+            any("Permission denied opening /dev/input/event0" in msg for msg in messages)
+        )
+
+    def test_find_mouse_device_falls_back_to_glob_when_evdev_list_is_empty(self):
+        module = self._reload_for_linux()
+        logi = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event4",
+            vendor=module._LOGI_VENDOR,
+            capabilities=self._fake_caps(module),
+        )
+        fake_evdev_mod = SimpleNamespace(list_devices=lambda: [])
+
+        with (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module.glob, "glob", return_value=[logi.path]),
+            patch.object(module, "_InputDevice", return_value=logi),
+            patch("builtins.print") as print_mock,
+        ):
+            module._LOG_ONCE_KEYS.clear()
+            chosen = module.MouseHook()._find_mouse_device()
+
+        self.assertIs(chosen, logi)
+        messages = [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+        self.assertTrue(
+            any("falling back to visible /dev/input/event* nodes" in msg for msg in messages)
+        )
 
     def test_hid_reconnect_requests_rescan_for_fallback_evdev_device(self):
         module = self._reload_for_linux()
@@ -471,6 +550,30 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
 
         self.assertIs(result, cg_event)  # passed through, not blocked
         self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_trackpad_filter_can_be_disabled(self):
+        """Continuous scroll should be handled when ignore_trackpad is off."""
+        hook = self._make_hook()
+        hook.ignore_trackpad = False
+        cg_event = MagicMock(name="cg_event")
+
+        def _get(event, field):
+            if field == self._kCGScrollWheelEventIsContinuous:
+                return 1  # trackpad / Magic Mouse
+            if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
+                return 3 * 65536  # positive = HSCROLL_RIGHT
+            if field == self.mock_quartz.kCGEventSourceUserData:
+                return 0
+            return 0
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = _get
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(result)
+        self.assertFalse(hook._dispatch_queue.empty())
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
 
     def test_mouse_wheel_hscroll_dispatched_and_blocked(self):
         """Discrete mouse wheel horizontal scroll SHOULD dispatch and block."""

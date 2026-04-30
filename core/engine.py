@@ -16,6 +16,11 @@ from core.config import (
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
 from core.app_detector import AppDetector
+from core.linux_permissions import (
+    linux_permission_log_message,
+    linux_permission_report,
+    linux_permission_status_message,
+)
 from core.logi_devices import clamp_dpi
 
 HSCROLL_ACTION_COOLDOWN_S = 0.35
@@ -84,6 +89,8 @@ class Engine:
         settings = self.cfg.get("settings", {})
         self.hook.invert_vscroll = settings.get("invert_vscroll", False)
         self.hook.invert_hscroll = settings.get("invert_hscroll", False)
+        if hasattr(self.hook, "ignore_trackpad"):
+            self.hook.ignore_trackpad = settings.get("ignore_trackpad", True)
         self.hook.debug_mode = self._debug_events_enabled
         self.hook.configure_gestures(
             enabled=any(mappings.get(key, "none") != "none"
@@ -747,7 +754,17 @@ class Engine:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
+    def _emit_linux_permission_warning(self):
+        report = linux_permission_report()
+        log_message = linux_permission_log_message(report)
+        if log_message:
+            print(log_message)
+        status_message = linux_permission_status_message(report)
+        if status_message:
+            self._emit_status(status_message)
+
     def start(self):
+        self._emit_linux_permission_warning()
         self.hook.start()
         self._app_detector.start()
         # Temporary safety-net: keep the old delayed replay path until the

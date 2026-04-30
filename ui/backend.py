@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt
+from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt, QUrl
 
 from core.accessibility import is_process_trusted
 from core.config import (
@@ -25,7 +25,12 @@ from core.logi_devices import (
     clamp_dpi,
     get_buttons_for_layout,
 )
-from core.key_simulator import ACTIONS, custom_action_label, valid_custom_key_names
+from core.key_simulator import (
+    ACTIONS,
+    custom_action_label,
+    normalize_captured_shortcut_parts,
+    valid_custom_key_names,
+)
 from core.startup import (
     apply_login_startup,
     supports_login_startup,
@@ -37,6 +42,93 @@ def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
+
+
+def _qt_shortcut_modifier_name(name):
+    """Return the raw Qt semantic name for a modifier."""
+    return (name or "").strip().lower()
+
+
+def _qt_enum_int(value):
+    """Coerce Qt enum and flag values from QML into plain integers."""
+    if hasattr(value, "value"):
+        return int(value.value)
+    return int(value)
+
+
+def _qt_shortcut_key_name(key, text=""):
+    """Translate a Qt key value into a raw Qt semantic shortcut name."""
+    key = _qt_enum_int(key)
+    text = text or ""
+
+    if key == _qt_enum_int(Qt.Key_Shift):
+        return "shift"
+    if key == _qt_enum_int(Qt.Key_Control):
+        return "ctrl"
+    if key == _qt_enum_int(Qt.Key_Alt):
+        return "alt"
+    if key == _qt_enum_int(Qt.Key_Meta):
+        return "super"
+    if key == _qt_enum_int(Qt.Key_Escape):
+        return "esc"
+    if key == _qt_enum_int(Qt.Key_Tab):
+        return "tab"
+    if key == _qt_enum_int(Qt.Key_Space):
+        return "space"
+    if key in (_qt_enum_int(Qt.Key_Return), _qt_enum_int(Qt.Key_Enter)):
+        return "enter"
+    if key == _qt_enum_int(Qt.Key_Backspace):
+        return "backspace"
+    if key == _qt_enum_int(Qt.Key_Delete):
+        return "delete"
+    if key == _qt_enum_int(Qt.Key_Left):
+        return "left"
+    if key == _qt_enum_int(Qt.Key_Right):
+        return "right"
+    if key == _qt_enum_int(Qt.Key_Up):
+        return "up"
+    if key == _qt_enum_int(Qt.Key_Down):
+        return "down"
+    if key == _qt_enum_int(Qt.Key_Home):
+        return "home"
+    if key == _qt_enum_int(Qt.Key_End):
+        return "end"
+    if key == _qt_enum_int(Qt.Key_PageUp):
+        return "pageup"
+    if key == _qt_enum_int(Qt.Key_PageDown):
+        return "pagedown"
+
+    for n in range(1, 13):
+        if key == _qt_enum_int(getattr(Qt, f"Key_F{n}")):
+            return f"f{n}"
+
+    if _qt_enum_int(Qt.Key_A) <= key <= _qt_enum_int(Qt.Key_Z):
+        return chr(ord("a") + (key - _qt_enum_int(Qt.Key_A)))
+    if _qt_enum_int(Qt.Key_0) <= key <= _qt_enum_int(Qt.Key_9):
+        return chr(ord("0") + (key - _qt_enum_int(Qt.Key_0)))
+
+    if len(text) == 1:
+        lowered = text.lower()
+        if "a" <= lowered <= "z" or "0" <= lowered <= "9":
+            return lowered
+    return ""
+
+
+def _qt_shortcut_combo(key, modifiers, text=""):
+    """Build the stored custom-shortcut string from Qt event parts."""
+    modifiers = _qt_enum_int(modifiers)
+    parts = []
+    if modifiers & _qt_enum_int(Qt.ControlModifier):
+        parts.append(_qt_shortcut_modifier_name("ctrl"))
+    if modifiers & _qt_enum_int(Qt.ShiftModifier):
+        parts.append("shift")
+    if modifiers & _qt_enum_int(Qt.AltModifier):
+        parts.append("alt")
+    if modifiers & _qt_enum_int(Qt.MetaModifier):
+        parts.append(_qt_shortcut_modifier_name("super"))
+
+    key_name = _qt_shortcut_key_name(key, text)
+    return normalize_captured_shortcut_parts(parts, key_name)
 
 
 class Backend(QObject):
@@ -71,9 +163,10 @@ class Backend(QObject):
     _smartShiftReadRequest = Signal()
     _statusMessageRequest = Signal(str)
 
-    def __init__(self, engine=None, parent=None):
+    def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
         self._engine = engine
+        self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._cfg = load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
@@ -83,6 +176,7 @@ class Backend(QObject):
         self._device_dpi_min = DEFAULT_DPI_MIN
         self._device_dpi_max = DEFAULT_DPI_MAX
         self._connected_device_source = ""
+        self._connected_device_transport = ""
         self._battery_level = -1
         self._hid_features_ready = False
         self._debug_lines = []
@@ -305,6 +399,10 @@ class Backend(QObject):
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
+    @Property(bool, notify=settingsChanged)
+    def ignoreTrackpad(self):
+        return self._cfg.get("settings", {}).get("ignore_trackpad", True)
+
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
@@ -325,6 +423,10 @@ class Backend(QObject):
     @Property(bool, constant=True)
     def supportsGestureDirections(self):
         return sys.platform in ("darwin", "win32", "linux")
+
+    @Property(bool, constant=True)
+    def isMacOS(self):
+        return sys.platform == "darwin"
 
     @Property(bool, constant=True)
     def accessibilityGranted(self):
@@ -356,6 +458,10 @@ class Backend(QObject):
     def connectedDeviceKey(self):
         return self._connected_device_key
 
+    @Property(str, notify=deviceInfoChanged)
+    def connectionType(self):
+        return self._connected_device_transport
+
     @Property(int, notify=deviceInfoChanged)
     def deviceDpiMin(self):
         return self._device_dpi_min
@@ -367,6 +473,12 @@ class Backend(QObject):
     @Property(str, notify=deviceLayoutChanged)
     def deviceImageAsset(self):
         return self._device_layout.get("image_asset", "mouse.png")
+
+    @Property(str, notify=deviceLayoutChanged)
+    def deviceImageSource(self):
+        asset = self._device_layout.get("image_asset", "mouse.png")
+        path = os.path.join(self._root_dir, "images", asset)
+        return QUrl.fromLocalFile(os.path.abspath(path)).toString()
 
     @Property(int, notify=deviceLayoutChanged)
     def deviceImageWidth(self):
@@ -626,6 +738,14 @@ class Backend(QObject):
             self._engine.reload_mappings()
         self.settingsChanged.emit()
 
+    @Slot(bool)
+    def setIgnoreTrackpad(self, value):
+        self._cfg.setdefault("settings", {})["ignore_trackpad"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
     @Slot(int)
     def setGestureThreshold(self, value):
         snapped = max(20, min(400, int(round(value / 5.0) * 5)))
@@ -788,6 +908,10 @@ class Backend(QObject):
     @Slot(str, result=str)
     def actionLabelFor(self, actionId):
         return _action_label(actionId)
+
+    @Slot(int, int, str, result=str)
+    def shortcutComboFromQtEvent(self, key, modifiers, text):
+        return _qt_shortcut_combo(key, modifiers, text)
 
     @Slot(result=str)
     def dumpDeviceInfo(self):
@@ -1019,6 +1143,7 @@ class Backend(QObject):
         device_key = getattr(device, "key", "") or ""
         display_name = getattr(device, "display_name", "") or "Logitech mouse"
         source = getattr(device, "source", "") or ""
+        transport = getattr(device, "transport", "") or ""
         dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
         dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
         info_changed = False
@@ -1030,6 +1155,9 @@ class Backend(QObject):
             info_changed = True
         if source != self._connected_device_source:
             self._connected_device_source = source
+            info_changed = True
+        if transport != self._connected_device_transport:
+            self._connected_device_transport = transport
             info_changed = True
         if dpi_min != self._device_dpi_min:
             self._device_dpi_min = dpi_min

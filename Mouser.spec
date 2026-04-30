@@ -8,11 +8,76 @@ Run:  pyinstaller Mouser.spec
 import os
 import sys
 import shutil
+import json
+import subprocess
 import PySide6
 
 block_cipher = None
 ROOT = os.path.abspath(".")
 PYSIDE6_DIR = os.path.dirname(PySide6.__file__)
+BUILD_INFO_PATH = os.path.join(ROOT, "build", "mouser_build_info.json")
+
+
+def _load_app_version() -> str:
+    version_path = os.path.join(ROOT, "core", "version.py")
+    namespace = {"__file__": version_path}
+    with open(version_path, encoding="utf-8") as version_file:
+        exec(version_file.read(), namespace)
+    return namespace["APP_VERSION"]
+
+
+def _run_git(args):
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _git_dirty():
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _write_build_info(version: str) -> str:
+    commit = os.environ.get("MOUSER_GIT_COMMIT", "").strip() or _run_git(["rev-parse", "HEAD"])
+    dirty_env = os.environ.get("MOUSER_GIT_DIRTY")
+    if dirty_env:
+        dirty = dirty_env.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        dirty = _git_dirty()
+
+    os.makedirs(os.path.dirname(BUILD_INFO_PATH), exist_ok=True)
+    with open(BUILD_INFO_PATH, "w", encoding="utf-8") as build_info_file:
+        json.dump(
+            {
+                "version": version,
+                "commit": commit,
+                "dirty": dirty,
+            },
+            build_info_file,
+        )
+    return BUILD_INFO_PATH
+
+
+APP_VERSION = _load_app_version()
+BUILD_INFO_DATA = _write_build_info(APP_VERSION)
 
 a = Analysis(
     ["main_qml.py"],
@@ -23,6 +88,7 @@ a = Analysis(
         (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
         # Image assets
         (os.path.join(ROOT, "images"), "images"),
+        (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[
         # conditional / lazy imports PyInstaller may miss
@@ -257,8 +323,8 @@ if sys.platform == 'darwin':
         icon='images/AppIcon.icns',
         bundle_identifier='com.mouser.app',
         info_plist={
-            'CFBundleShortVersionString': '3.5.3',
-            'CFBundleVersion': '3.5.3',
+            'CFBundleShortVersionString': APP_VERSION,
+            'CFBundleVersion': APP_VERSION,
             'LSUIElement': True, # Runs in background (menu bar app)
             'NSHighResolutionCapable': True,
         },

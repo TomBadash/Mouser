@@ -71,6 +71,12 @@ Desktop/navigation actions are also remapped to native macOS behavior:
 On macOS, the HID gesture listener uses non-exclusive access (`hid_darwin_set_open_exclusive(0)`)
 so the mouse continues to function normally while Mouser reads HID++ reports.
 
+### Trackpad and Magic Mouse Scroll
+
+Mouser ignores trackpad and Magic Mouse continuous scroll events by default so two-finger gestures and macOS natural scrolling keep working normally while mouse wheel mappings stay active.
+
+You can change this in **Point & Scroll → Scroll Direction → Ignore trackpad**. Leave it enabled for built-in trackpads and most Logitech mouse setups. Disable it only if you intentionally want Mouser to handle Magic Mouse or trackpad scroll events.
+
 ## Building a Native macOS App
 
 The repository now includes a dedicated macOS bundle flow:

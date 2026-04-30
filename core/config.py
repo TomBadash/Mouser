@@ -67,7 +67,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 8,
+    "version": 9,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -106,6 +106,7 @@ DEFAULT_CONFIG = {
         "debug_mode": False,
         "device_layout_overrides": {},
         "language": "en",
+        "ignore_trackpad": True,
     },
 }
 
@@ -321,11 +322,17 @@ def _migrate(cfg):
                 mappings["mode_shift"] = "switch_scroll_mode"
         cfg["version"] = 8
 
+    if version < 9:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("ignore_trackpad", True)
+        cfg["version"] = 9
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
     cfg["settings"].setdefault("language", "en")
+    cfg["settings"].setdefault("ignore_trackpad", True)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

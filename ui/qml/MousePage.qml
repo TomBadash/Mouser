@@ -430,8 +430,7 @@ Item {
 
     function customLabel(actionId) {
         if (!actionId.startsWith("custom:")) return ""
-        var parts = actionId.substring(7).split("+")
-        return parts.map(function(p){return p.charAt(0).toUpperCase()+p.slice(1)}).join(" + ")
+        return backend.actionLabelFor(actionId)
     }
 
     function isCustomAction(actionId) {
@@ -884,7 +883,10 @@ Item {
                                     }
                                     Text {
                                         text: backend.mouseConnected
-                                              ? s["mouse.connected"] : s["mouse.not_connected"]
+                                              ? (s["mouse.connected"]
+                                                 + (backend.connectionType !== ""
+                                                    ? " · " + backend.connectionType : ""))
+                                              : s["mouse.not_connected"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         color: backend.mouseConnected
                                                ? theme.accent : "#e05555"
@@ -979,7 +981,7 @@ Item {
 
                         Image {
                             id: mouseImg
-                            source: "file:///" + applicationDirPath + "/images/" + backend.deviceImageAsset
+                            source: backend.deviceImageSource
                             fillMode: Image.PreserveAspectFit
                             width: backend.deviceImageWidth
                             height: backend.deviceImageHeight

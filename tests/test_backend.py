@@ -7,11 +7,13 @@ from unittest.mock import patch
 from core.config import DEFAULT_CONFIG
 
 try:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, Qt, QUrl
     from ui.backend import Backend
 except ModuleNotFoundError:
     Backend = None
     QCoreApplication = None
+    Qt = None
+    QUrl = None
 
 
 def _ensure_qapp():
@@ -69,12 +71,12 @@ class _FakeEngine:
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendDeviceLayoutTests(unittest.TestCase):
-    def _make_backend(self, engine=None):
+    def _make_backend(self, engine=None, root_dir=None):
         with (
             patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
             patch("ui.backend.save_config"),
         ):
-            return Backend(engine=engine)
+            return Backend(engine=engine, root_dir=root_dir)
 
     @staticmethod
     def _fake_create_profile(cfg, name, label=None, copy_from="default", apps=None):
@@ -91,6 +93,15 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertFalse(backend.hasInteractiveDeviceLayout)
+
+    def test_device_image_source_uses_encoded_file_url(self):
+        backend = self._make_backend(root_dir="/tmp/Mouser Build")
+
+        expected = QUrl.fromLocalFile(
+            "/tmp/Mouser Build/images/icons/mouse-simple.svg"
+        ).toString()
+
+        self.assertEqual(backend.deviceImageSource, expected)
 
     def test_disconnected_override_request_does_not_persist(self):
         backend = self._make_backend()
@@ -274,6 +285,89 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(apps[0]["path"], "/usr/bin/code")
         self.assertEqual(len(notifications), 1)
+
+    def test_shortcut_capture_keeps_ctrl_and_super_distinct_on_macos(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "darwin"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "super+w",
+            )
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.MetaModifier,
+                    "w",
+                ),
+                "ctrl+w",
+            )
+
+    def test_shortcut_capture_preserves_default_qt_modifier_names_off_macos(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "linux"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "ctrl+w",
+            )
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.MetaModifier,
+                    "w",
+                ),
+                "super+w",
+            )
+
+    def test_shortcut_capture_accepts_qt_enum_objects(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "darwin"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_W,
+                    Qt.ControlModifier,
+                    "w",
+                ),
+                "super+w",
+            )
+
+    def test_shortcut_capture_keeps_enter_and_escape_capturable(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Return,
+                Qt.NoModifier,
+                "",
+            ),
+            "enter",
+        )
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Enter,
+                Qt.NoModifier,
+                "",
+            ),
+            "enter",
+        )
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Escape,
+                Qt.NoModifier,
+                "",
+            ),
+            "esc",
+        )
 
     def test_add_profile_stores_catalog_id_for_linux_app(self):
         backend = self._make_backend()

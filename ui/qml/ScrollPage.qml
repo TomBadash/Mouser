@@ -867,6 +867,56 @@ Item {
                             }
                         }
                     }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 62
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.isMacOS
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+                            spacing: 12
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: s["scroll.ignore_trackpad"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: s["scroll.ignore_trackpad_desc"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            Switch {
+                                id: ignoreTrackpadSwitch
+                                checked: backend.ignoreTrackpad
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.ignore_trackpad"]
+                                onToggled: backend.setIgnoreTrackpad(checked)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -934,6 +984,7 @@ Item {
             }
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            ignoreTrackpadSwitch.checked = backend.ignoreTrackpad
         }
     }
 }

@@ -11,6 +11,8 @@ Requires:  pip install hidapi
 Falls back gracefully if the package or device are unavailable.
 """
 
+import os
+import stat
 import sys
 import queue
 import threading
@@ -23,22 +25,95 @@ from core.logi_devices import (
     resolve_device,
 )
 
+_HID_MODULE_NAME = None
 try:
-    import hid as _hid
+    # The PyPI hidapi Linux wheels expose `hid` as the libusb backend and
+    # `hidraw` as the hidraw backend. Bluetooth HID devices only work through
+    # hidraw, so prefer it on Linux and fall back to `hid` for source builds
+    # where `hid` itself was compiled against hidraw.
+    if sys.platform.startswith("linux"):
+        try:
+            import hidraw as _hid
+            _HID_MODULE_NAME = "hidraw"
+        except ImportError:
+            import hid as _hid
+            _HID_MODULE_NAME = "hid"
+    else:
+        import hid as _hid
+        _HID_MODULE_NAME = "hid"
     HIDAPI_OK = True
+    HIDAPI_IMPORT_ERROR = None
     # On macOS, allow non-exclusive HID access so the mouse keeps working
     if sys.platform == "darwin" and hasattr(_hid, "hid_darwin_set_open_exclusive"):
         _hid.hid_darwin_set_open_exclusive(0)
-except ImportError:
+except Exception as exc:
     HIDAPI_OK = False
+    HIDAPI_IMPORT_ERROR = exc
 
-# Support both "pip install hidapi" (hid.device) and "pip install hid" (hid.Device)
+# Support both hidapi/hidraw-style modules (device) and "pip install hid" (Device).
 _HID_API_STYLE = None
 if HIDAPI_OK:
     if hasattr(_hid, 'device'):
         _HID_API_STYLE = "hidapi"
     elif hasattr(_hid, 'Device'):
         _HID_API_STYLE = "hid"
+
+
+_LOG_ONCE_KEYS = set()
+
+
+def _log_once(key, message):
+    if key in _LOG_ONCE_KEYS:
+        return
+    _LOG_ONCE_KEYS.add(key)
+    print(message)
+
+
+def _device_path_display(path):
+    if isinstance(path, memoryview):
+        path = bytes(path)
+    if isinstance(path, bytes):
+        return path.decode("utf-8", errors="replace")
+    return str(path or "")
+
+
+def _owner_name(uid):
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _group_name(gid):
+    try:
+        import grp
+        return grp.getgrgid(gid).gr_name
+    except Exception:
+        return str(gid)
+
+
+def _format_linux_device_access(path):
+    if isinstance(path, memoryview):
+        path = bytes(path)
+    display = _device_path_display(path)
+    if not path:
+        return "path=-"
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        return f"path={display} stat_error={exc}"
+
+    mode = stat.S_IMODE(st.st_mode)
+    can_read = os.access(path, os.R_OK)
+    can_write = os.access(path, os.W_OK)
+    can_rw = os.access(path, os.R_OK | os.W_OK)
+    return (
+        f"path={display} mode={mode:04o} "
+        f"owner={_owner_name(st.st_uid)}({st.st_uid}) "
+        f"group={_group_name(st.st_gid)}({st.st_gid}) "
+        f"access=read:{can_read} write:{can_write} read_write:{can_rw}"
+    )
 
 
 class _HidDeviceCompat:
@@ -147,8 +222,6 @@ if sys.platform == "darwin":
 
 def _default_backend_preference(platform_name=None):
     platform_name = sys.platform if platform_name is None else platform_name
-    if platform_name == "darwin":
-        return "iokit"
     return "auto"
 
 
@@ -464,12 +537,73 @@ if _MAC_NATIVE_OK:
 # ── Constants ─────────────────────────────────────────────────────
 LOGI_VID       = 0x046D
 
+
+def _summarize_hid_infos(infos, limit=8):
+    parts = []
+    for info in list(infos)[:limit]:
+        pid = int(info.get("product_id", 0) or 0)
+        usage_page = int(info.get("usage_page", 0) or 0)
+        usage = int(info.get("usage", 0) or 0)
+        product = info.get("product_string") or "?"
+        transport = info.get("transport") or "-"
+        parts.append(
+            f"PID=0x{pid:04X} UP=0x{usage_page:04X} "
+            f"usage=0x{usage:04X} transport={transport} product={product}"
+        )
+    remaining = max(0, len(infos) - limit)
+    if remaining:
+        parts.append(f"... {remaining} more")
+    return "; ".join(parts) if parts else "-"
+
+
+def _linux_logitech_hidraw_nodes(base="/sys/class/hidraw"):
+    if not sys.platform.startswith("linux"):
+        return []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return []
+
+    nodes = []
+    for entry in entries:
+        if not entry.startswith("hidraw"):
+            continue
+        uevent_path = os.path.join(base, entry, "device", "uevent")
+        try:
+            with open(uevent_path, "r", encoding="utf-8", errors="replace") as fh:
+                values = dict(
+                    line.rstrip("\n").split("=", 1)
+                    for line in fh
+                    if "=" in line
+                )
+        except OSError:
+            continue
+
+        parts = values.get("HID_ID", "").split(":")
+        if len(parts) < 3:
+            continue
+        try:
+            vid = int(parts[1], 16)
+            pid = int(parts[2], 16)
+        except ValueError:
+            continue
+        if vid != LOGI_VID:
+            continue
+
+        product = values.get("HID_NAME") or "?"
+        nodes.append(f"{entry} PID=0x{pid:04X} product={product}")
+    return nodes
+
+
 SHORT_ID       = 0x10        # HID++ short report (7 bytes total)
 LONG_ID        = 0x11        # HID++ long  report (20 bytes total)
 SHORT_LEN      = 7
 LONG_LEN       = 20
 
 BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
+# Known Logi Bolt receiver PID.
+# Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
+BOLT_RECEIVER_PID = 0xC548
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
@@ -616,10 +750,21 @@ class HidGestureListener:
 
     def start(self):
         if not HIDAPI_OK and not _MAC_NATIVE_OK:
-            print("[HidGesture] no HID backend available; install hidapi")
+            details = f": {HIDAPI_IMPORT_ERROR!r}" if HIDAPI_IMPORT_ERROR else ""
+            print(f"[HidGesture] no HID backend available; install hidapi{details}")
             return False
         if not HIDAPI_OK and _MAC_NATIVE_OK:
             print("[HidGesture] hidapi unavailable; using native macOS HID backend only")
+        if HIDAPI_OK:
+            print(
+                "[HidGesture] HID module: "
+                f"{_HID_MODULE_NAME or '?'} API style: {_HID_API_STYLE or '?'}"
+            )
+            if sys.platform.startswith("linux") and _HID_MODULE_NAME != "hidraw":
+                print(
+                    "[HidGesture] Linux hidraw module is unavailable; Bluetooth "
+                    "Logitech HID++ devices may not enumerate"
+                )
         self._running = True
         self._thread = threading.Thread(
             target=self._main_loop, daemon=True, name="HidGesture")
@@ -718,9 +863,60 @@ class HidGestureListener:
 
         if HIDAPI_OK and _BACKEND_PREFERENCE in ("auto", "hidapi"):
             try:
-                for info in _hid.enumerate(LOGI_VID, 0):
-                    if info.get("usage_page", 0) >= 0xFF00:
+                raw_infos = list(_hid.enumerate(LOGI_VID, 0))
+                if not raw_infos:
+                    _log_once(
+                        f"hidapi-empty-{_HID_MODULE_NAME}",
+                        "[HidGesture] "
+                        f"{_HID_MODULE_NAME or 'hidapi'} enumerate(0x{LOGI_VID:04X}) "
+                        "returned no Logitech HID interfaces"
+                    )
+                    linux_nodes = _linux_logitech_hidraw_nodes()
+                    if linux_nodes:
+                        _log_once(
+                            "linux-hidraw-logitech-present",
+                            "[HidGesture] Linux sysfs sees Logitech hidraw nodes: "
+                            f"{'; '.join(linux_nodes[:8])}. If hidapi still sees "
+                            "none, check hidraw backend packaging and /dev/hidraw "
+                            "permissions."
+                        )
+                    elif sys.platform.startswith("linux"):
+                        _log_once(
+                            "linux-hidraw-logitech-missing",
+                            "[HidGesture] Linux sysfs sees no Logitech hidraw "
+                            "nodes for VID 0x046D; verify the mouse is connected "
+                            "as an active HID device, not only paired."
+                        )
+                hidapi_candidates = 0
+                fallback_candidates = 0
+                for info in raw_infos:
+                    pid = int(info.get("product_id", 0) or 0)
+                    usage_page = int(info.get("usage_page", 0) or 0)
+                    usage = int(info.get("usage", 0) or 0)
+                    product = info.get("product_string")
+                    if usage_page >= 0xFF00:
                         add_info(dict(info, source="hidapi-enumerate"))
+                        hidapi_candidates += 1
+                        continue
+                    if resolve_device(product_id=pid, product_name=product):
+                        print(
+                            "[HidGesture] Accepting known Logitech device "
+                            "without vendor usage metadata for fallback probe "
+                            f"PID=0x{pid:04X} UP=0x{usage_page:04X} "
+                            f"usage=0x{usage:04X} product={product or '?'}"
+                        )
+                        add_info(dict(info, source="hidapi-enumerate-fallback"))
+                        fallback_candidates += 1
+                if raw_infos and not (hidapi_candidates or fallback_candidates):
+                    print(
+                        "[HidGesture] hidapi found Logitech interfaces, but none "
+                        "matched vendor usage metadata or known-device fallback"
+                    )
+                    _log_once(
+                        f"hidapi-filtered-{_HID_MODULE_NAME}",
+                        "[HidGesture] Filtered Logitech HID interfaces: "
+                        f"{_summarize_hid_infos(raw_infos)}"
+                    )
             except Exception as exc:
                 print(f"[HidGesture] hidapi enumerate error: {exc}")
 
@@ -1428,6 +1624,14 @@ class HidGestureListener:
         if not infos:
             return False
 
+        # Try direct devices (Bluetooth) before USB receivers, which
+        # require scanning multiple slots with slow timeouts.
+        def _direct_device_first(info):
+            name = (info.get("product_string") or "").lower()
+            return (1 if "receiver" in name else 0, name)
+
+        infos.sort(key=_direct_device_first)
+
         print(f"[HidGesture] Backend preference: {_BACKEND_PREFERENCE}")
         print(f"[HidGesture] Candidate HID interfaces: {len(infos)}")
         for info in infos:
@@ -1437,9 +1641,10 @@ class HidGestureListener:
             transport = info.get("transport")
             source = info.get("source", "unknown")
             product = info.get("product_string") or "?"
+            path = _device_path_display(info.get("path"))
             print(f"[HidGesture] Candidate PID=0x{pid:04X} UP=0x{up:04X} "
                   f"usage=0x{usage:04X} transport={transport or '-'} "
-                  f"source={source} product={product}")
+                  f"source={source} product={product} path={path or '-'}")
 
         for info in infos:
             pid = info.get("product_id", 0)
@@ -1462,8 +1667,8 @@ class HidGestureListener:
             opened_up = int(up or 0)
             opened_usage = int(usage or 0)
             open_attempts = []
-            if _BACKEND_PREFERENCE in ("auto", "hidapi") and info.get("path"):
-                open_attempts.append(("hidapi", info))
+            # On macOS, prefer IOKit (non-exclusive access) over hidapi
+            # which may lock the device and freeze the cursor.
             if (
                 sys.platform == "darwin"
                 and _MAC_NATIVE_OK
@@ -1478,6 +1683,8 @@ class HidGestureListener:
                         "transport": "Bluetooth Low Energy",
                     }),
                 ])
+            if _BACKEND_PREFERENCE in ("auto", "hidapi") and info.get("path"):
+                open_attempts.append(("hidapi", info))
 
             for transport, open_info in open_attempts:
                 try:
@@ -1492,6 +1699,13 @@ class HidGestureListener:
                     else:
                         if not HIDAPI_OK:
                             continue
+                        if sys.platform.startswith("linux"):
+                            path = open_info.get("path")
+                            _log_once(
+                                ("hid-path-access", _device_path_display(path)),
+                                "[HidGesture] HID path access before open: "
+                                f"{_format_linux_device_access(path)}",
+                            )
                         if _HID_API_STYLE == "hidapi":
                             d = _hid.device()
                             d.open_path(open_info["path"])
@@ -1575,15 +1789,21 @@ class HidGestureListener:
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
                     if self._divert():
                         self._divert_extras()
+                        if idx == BT_DEV_IDX:
+                            actual_transport = "Bluetooth"
+                        elif pid == BOLT_RECEIVER_PID:
+                            actual_transport = "Logi Bolt"
+                        else:
+                            actual_transport = "USB Receiver"
                         self._connected_device_info = build_connected_device_info(
                             product_id=pid,
                             product_name=hidpp_name or product,
-                            transport=open_info.get("transport") or transport,
+                            transport=actual_transport,
                             source=source,
                             gesture_cids=self._gesture_candidates,
                         )
                         return True
-                    break        # right device but divert failed
+                    continue     # divert failed — try next receiver slot
             if not reprog_found:
                 print(
                     "[HidGesture] Opened candidate but REPROG_V4 was not found "

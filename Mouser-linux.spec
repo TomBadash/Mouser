@@ -9,8 +9,79 @@ Output: dist/Mouser/  (directory with Mouser executable + dependencies)
 """
 
 import os
+import json
+import subprocess
+import sys
 
 ROOT = os.path.abspath(".")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from build_support import should_keep_linux_qt_asset
+
+BUILD_INFO_PATH = os.path.join(ROOT, "build", "mouser_build_info.json")
+
+
+def _load_app_version() -> str:
+    version_path = os.path.join(ROOT, "core", "version.py")
+    namespace = {"__file__": version_path}
+    with open(version_path, encoding="utf-8") as version_file:
+        exec(version_file.read(), namespace)
+    return namespace["APP_VERSION"]
+
+
+def _run_git(args):
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _git_dirty():
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _write_build_info(version: str) -> str:
+    commit = os.environ.get("MOUSER_GIT_COMMIT", "").strip() or _run_git(["rev-parse", "HEAD"])
+    dirty_env = os.environ.get("MOUSER_GIT_DIRTY")
+    if dirty_env:
+        dirty = dirty_env.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        dirty = _git_dirty()
+
+    os.makedirs(os.path.dirname(BUILD_INFO_PATH), exist_ok=True)
+    with open(BUILD_INFO_PATH, "w", encoding="utf-8") as build_info_file:
+        json.dump(
+            {
+                "version": version,
+                "commit": commit,
+                "dirty": dirty,
+            },
+            build_info_file,
+        )
+    return BUILD_INFO_PATH
+
+
+APP_VERSION = _load_app_version()
+BUILD_INFO_DATA = _write_build_info(APP_VERSION)
 
 a = Analysis(
     ["main_qml.py"],
@@ -19,9 +90,19 @@ a = Analysis(
     datas=[
         (os.path.join(ROOT, "ui", "qml"), os.path.join("ui", "qml")),
         (os.path.join(ROOT, "images"), "images"),
+        (
+            os.path.join(ROOT, "packaging", "linux", "69-mouser-logitech.rules"),
+            os.path.join("linux", "69-mouser-logitech.rules"),
+        ),
+        (
+            os.path.join(ROOT, "packaging", "linux", "install-linux-permissions.sh"),
+            os.path.join("linux", "install-linux-permissions.sh"),
+        ),
+        (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[
         "hid",
+        "hidraw",
         "logging.handlers",
         "evdev",
         "ui.locale_manager",
@@ -99,112 +180,8 @@ a = Analysis(
     noarchive=False,
 )
 
-# Keep only the Qt runtime pieces Mouser actually uses. The negative-match
-# approach still let large transitive Qt payload through on Linux.
-QT_KEEP = {
-    "Qt6Core",
-    "Qt6Gui",
-    "Qt6Widgets",
-    "Qt6Network",
-    "Qt6OpenGL",
-    "Qt6Qml",
-    "Qt6QmlCore",
-    "Qt6QmlMeta",
-    "Qt6QmlModels",
-    "Qt6QmlNetwork",
-    "Qt6QmlWorkerScript",
-    "Qt6Quick",
-    "Qt6QuickControls2",
-    "Qt6QuickControls2Impl",
-    "Qt6QuickControls2Basic",
-    "Qt6QuickControls2BasicStyleImpl",
-    "Qt6QuickControls2Material",
-    "Qt6QuickControls2MaterialStyleImpl",
-    "Qt6QuickTemplates2",
-    "Qt6QuickLayouts",
-    "Qt6QuickEffects",
-    "Qt6QuickShapes",
-    "Qt6ShaderTools",
-    "Qt6Svg",
-    "pyside6",
-    "pyside6qml",
-    "shiboken6",
-}
-
-KEEP_PLUGIN_DIRS = {
-    "platforms",
-    "imageformats",
-    "styles",
-    "iconengines",
-    "platforminputcontexts",
-    "xcbglintegrations",
-    "platformthemes",
-    "tls",
-    "egldeviceintegrations",
-    "networkinformation",
-    "generic",
-    "wayland-decoration-client",
-    "wayland-graphics-integration-client",
-    "wayland-shell-integration",
-}
-
-KEEP_QML_TOP = {"QtCore", "QtQml", "QtQuick", "QtNetwork"}
-KEEP_QTQUICK = {"Controls", "Layouts", "Templates", "Window"}
-
-
-def normalized_stem(path):
-    base = os.path.basename(path)
-    if ".so" in base:
-        return base.split(".so", 1)[0].removeprefix("lib")
-    stem = os.path.splitext(base)[0]
-    if stem.endswith(".abi3"):
-        stem = stem[:-5]
-    return stem
-
-
-def should_keep(path):
-    normalized = path.replace("\\", "/")
-    lower = normalized.lower()
-
-    if "PySide6" not in normalized and "pyside6" not in lower:
-        return True
-
-    stem = normalized_stem(normalized)
-    if stem in QT_KEEP:
-        return True
-
-    base = os.path.basename(normalized)
-    if base.endswith(".abi3.so"):
-        return True
-
-    plugin_marker = "/plugins/"
-    plugin_index = lower.find(plugin_marker)
-    if plugin_index != -1:
-        plugin_path = normalized[plugin_index + len(plugin_marker) :]
-        plugin_dir = plugin_path.split("/", 1)[0]
-        return plugin_dir in KEEP_PLUGIN_DIRS and base != "libqpdf.so"
-
-    qml_marker = "/qml/"
-    qml_index = lower.find(qml_marker)
-    if qml_index != -1:
-        qml_path = normalized[qml_index + len(qml_marker) :]
-        parts = [part for part in qml_path.split("/") if part]
-        if not parts:
-            return True
-        if parts[0] not in KEEP_QML_TOP:
-            return False
-        if parts[0] == "QtQuick" and len(parts) > 1 and parts[1] not in KEEP_QTQUICK:
-            return False
-        style_parts = {part.lower() for part in parts}
-        if style_parts & {"fusion", "imagine", "universal", "fluentwinui3", "ios", "macos"}:
-            return False
-        return True
-
-    return False
-
-
-a.binaries = [b for b in a.binaries if should_keep(b[0])]
-a.datas = [d for d in a.datas if should_keep(d[0])]
+a.binaries = [b for b in a.binaries if should_keep_linux_qt_asset(b[0])]
+a.datas = [d for d in a.datas if should_keep_linux_qt_asset(d[0])]
 
 pyz = PYZ(a.pure)
 

@@ -11,6 +11,7 @@ _TRANSLATIONS = {
         # Navigation sidebar
         "nav.mouse_profiles": "Mouse & Profiles",
         "nav.point_scroll": "Point & Scroll",
+        "nav.about": "About",
 
         # Mouse page — profile list
         "mouse.profiles": "Profiles",
@@ -137,14 +138,16 @@ _TRANSLATIONS = {
         "scroll.scroll_direction_desc": "Invert the scroll direction (natural scrolling)",
         "scroll.invert_vertical": "Invert vertical scroll",
         "scroll.invert_horizontal": "Invert horizontal scroll",
+        "scroll.ignore_trackpad": "Ignore trackpad",
+        "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
         "scroll.dpi_note": "DPI changes require HID++ communication with the device and will take effect after a short delay.",
         "scroll.language": "Language",
         "scroll.language_desc": "Choose the display language for the application.",
 
         # Key-capture dialog
         "key_capture.title": "Custom Shortcut",
-        "key_capture.placeholder": "e.g. ctrl+shift+f5",
-        "key_capture.valid_keys": "Valid keys: ctrl, shift, alt, super, a\u2013z, f1\u2013f12,\nspace, tab, enter, esc, left, right, up, down, delete, ...",
+        "key_capture.placeholder": "e.g. super+shift+f5",
+        "key_capture.valid_keys": "Valid keys: ctrl/control, shift, alt/option/opt, super (aliases: cmd, command, meta, win, windows),\n0\u20139, a\u2013z, f1\u2013f12, space, tab, enter, esc, left, right, up, down, delete, ...",
         "key_capture.cancel": "Cancel",
         "key_capture.confirm": "Confirm",
 
@@ -167,6 +170,15 @@ _TRANSLATIONS = {
         ),
         "accessibility.info": "System Settings -> Privacy & Security -> Accessibility",
 
+        # About dialog
+        "about.title": "About Mouser",
+        "about.subtitle": "Runtime and build details for support and debugging.",
+        "about.version": "Version",
+        "about.build_mode": "Build mode",
+        "about.commit": "Commit",
+        "about.launch_path": "Launch path",
+        "about.close": "Close",
+
         # Language names
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
@@ -177,6 +189,7 @@ _TRANSLATIONS = {
     "zh_CN": {
         "nav.mouse_profiles": "\u9f20\u6807\u4e0e\u914d\u7f6e\u6587\u4ef6",
         "nav.point_scroll": "\u6307\u9488\u4e0e\u6eda\u8f6e",
+        "nav.about": "\u5173\u4e8e",
 
         "mouse.profiles": "\u914d\u7f6e\u6587\u4ef6",
         "mouse.all_applications": "\u6240\u6709\u5e94\u7528\u7a0b\u5e8f",
@@ -293,13 +306,15 @@ _TRANSLATIONS = {
         "scroll.scroll_direction_desc": "\u53cd\u8f6c\u6eda\u52a8\u65b9\u5411\uff08\u81ea\u7136\u6eda\u52a8\uff09",
         "scroll.invert_vertical": "\u53cd\u8f6c\u5782\u76f4\u6eda\u52a8",
         "scroll.invert_horizontal": "\u53cd\u8f6c\u6c34\u5e73\u6eda\u52a8",
+        "scroll.ignore_trackpad": "Ignore trackpad",
+        "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u901a\u8fc7 HID++ \u4e0e\u8bbe\u5907\u901a\u4fe1\uff0c\u5c06\u5728\u77ed\u6682\u5ef6\u8fdf\u540e\u751f\u6548\u3002",
         "scroll.language": "\u8bed\u8a00",
         "scroll.language_desc": "\u9009\u62e9\u5e94\u7528\u7a0b\u5e8f\u7684\u663e\u793a\u8bed\u8a00\u3002",
 
         "key_capture.title": "\u81ea\u5b9a\u4e49\u5feb\u6377\u952e",
-        "key_capture.placeholder": "\u4f8b\u5982\uff1actrl+shift+f5",
-        "key_capture.valid_keys": "\u6709\u6548\u6309\u952e\uff1actrl\u3001shift\u3001alt\u3001super\u3001a\u2013z\u3001f1\u2013f12\u3001\nspace\u3001tab\u3001enter\u3001esc\u3001left\u3001right\u3001up\u3001down\u3001delete\u2026\u2026",
+        "key_capture.placeholder": "\u4f8b\u5982\uff1asuper+shift+f5",
+        "key_capture.valid_keys": "\u6709\u6548\u6309\u952e\uff1actrl/control\u3001shift\u3001alt/option/opt\u3001super\uff08\u522b\u540d\uff1acmd\u3001command\u3001meta\u3001win\u3001windows\uff09\u30010\u20139\u3001a\u2013z\u3001f1\u2013f12\u3001\nspace\u3001tab\u3001enter\u3001esc\u3001left\u3001right\u3001up\u3001down\u3001delete\u2026\u2026",
         "key_capture.cancel": "\u53d6\u6d88",
         "key_capture.confirm": "\u786e\u8ba4",
 
@@ -319,6 +334,14 @@ _TRANSLATIONS = {
         ),
         "accessibility.info": "\u7cfb\u7edf\u8bbe\u7f6e -> \u9690\u79c1\u4e0e\u5b89\u5168\u6027 -> \u8f85\u52a9\u529f\u80fd",
 
+        "about.title": "\u5173\u4e8e Mouser",
+        "about.subtitle": "\u7528\u4e8e\u652f\u6301\u548c\u8c03\u8bd5\u7684\u8fd0\u884c\u65f6\u4e0e\u6784\u5efa\u4fe1\u606f\u3002",
+        "about.version": "\u7248\u672c",
+        "about.build_mode": "\u6784\u5efa\u6a21\u5f0f",
+        "about.commit": "\u63d0\u4ea4",
+        "about.launch_path": "\u542f\u52a8\u8def\u5f84",
+        "about.close": "\u5173\u95ed",
+
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
         "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
@@ -328,6 +351,7 @@ _TRANSLATIONS = {
     "zh_TW": {
         "nav.mouse_profiles": "\u6ed1\u9f20\u8207\u8a2d\u5b9a\u6a94",
         "nav.point_scroll": "\u6307\u6a19\u8207\u6372\u8ef8",
+        "nav.about": "\u95dc\u65bc",
 
         "mouse.profiles": "\u8a2d\u5b9a\u6a94",
         "mouse.all_applications": "\u6240\u6709\u61c9\u7528\u7a0b\u5f0f",
@@ -444,13 +468,15 @@ _TRANSLATIONS = {
         "scroll.scroll_direction_desc": "\u53cd\u8f49\u6372\u52d5\u65b9\u5411\uff08\u81ea\u7136\u6372\u52d5\uff09",
         "scroll.invert_vertical": "\u53cd\u8f49\u5782\u76f4\u6372\u52d5",
         "scroll.invert_horizontal": "\u53cd\u8f49\u6c34\u5e73\u6372\u52d5",
+        "scroll.ignore_trackpad": "Ignore trackpad",
+        "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u900f\u904e HID++ \u8207\u88dd\u7f6e\u901a\u8a0a\uff0c\u5c07\u5728\u77ed\u66ab\u5ef6\u9072\u5f8c\u751f\u6548\u3002",
         "scroll.language": "\u8a9e\u8a00",
         "scroll.language_desc": "\u9078\u64c7\u61c9\u7528\u7a0b\u5f0f\u7684\u986f\u793a\u8a9e\u8a00\u3002",
 
         "key_capture.title": "\u81ea\u8a02\u5feb\u901f\u9375",
-        "key_capture.placeholder": "\u4f8b\u5982\uff1actrl+shift+f5",
-        "key_capture.valid_keys": "\u6709\u6548\u6309\u9375\uff1actrl\u3001shift\u3001alt\u3001super\u3001a\u2013z\u3001f1\u2013f12\u3001\nspace\u3001tab\u3001enter\u3001esc\u3001left\u3001right\u3001up\u3001down\u3001delete\u2026\u2026",
+        "key_capture.placeholder": "\u4f8b\u5982\uff1asuper+shift+f5",
+        "key_capture.valid_keys": "\u6709\u6548\u6309\u9375\uff1actrl/control\u3001shift\u3001alt/option/opt\u3001super\uff08\u5225\u540d\uff1acmd\u3001command\u3001meta\u3001win\u3001windows\uff09\u30010\u20139\u3001a\u2013z\u3001f1\u2013f12\u3001\nspace\u3001tab\u3001enter\u3001esc\u3001left\u3001right\u3001up\u3001down\u3001delete\u2026\u2026",
         "key_capture.cancel": "\u53d6\u6d88",
         "key_capture.confirm": "\u78ba\u8a8d",
 
@@ -469,6 +495,14 @@ _TRANSLATIONS = {
             "\u8acb\u6388\u4e88\u6b0a\u9650\uff0c\u7136\u5f8c\u91cd\u65b0\u555f\u52d5 Mouser\u3002"
         ),
         "accessibility.info": "\u7cfb\u7d71\u8a2d\u5b9a -> \u96b1\u79c1\u6b0a\u8207\u5b89\u5168\u6027 -> \u8f14\u52a9\u4f7f\u7528",
+
+        "about.title": "\u95dc\u65bc Mouser",
+        "about.subtitle": "\u63d0\u4f9b\u652f\u63f4\u8207\u9664\u932f\u7528\u7684\u57f7\u884c\u6642\u8207\u5efa\u7f6e\u8cc7\u8a0a\u3002",
+        "about.version": "\u7248\u672c",
+        "about.build_mode": "\u5efa\u7f6e\u6a21\u5f0f",
+        "about.commit": "\u63d0\u4ea4",
+        "about.launch_path": "\u555f\u52d5\u8def\u5f91",
+        "about.close": "\u95dc\u9589",
 
         "lang.en": "English",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",

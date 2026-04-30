@@ -164,6 +164,24 @@ if sys.platform == "win32":
         return exe_path
 
 elif sys.platform == "darwin":
+    import functools
+
+    try:
+        import objc as _objc
+    except ImportError as exc:
+        raise ImportError(
+            "PyObjC is required on macOS. Run "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
+
+    def _autoreleased(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with _objc.autorelease_pool():
+                return fn(*args, **kwargs)
+        return wrapper
+
+    @_autoreleased
     def get_foreground_exe() -> str | None:
         """Return a stable app identifier for the frontmost app on macOS."""
         try:

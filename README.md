@@ -34,6 +34,7 @@ No telemetry. No cloud. No Logitech account required.
 - **Single instance guard** — launching a second copy brings the existing window to the front
 
 ### 🔌 Smart Connectivity
+- **Bluetooth and Logi Bolt** — works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI
 - **Auto-reconnection** — detects power-off/on and restores full functionality without restarting
 - **Live connection status** — real-time "Connected" / "Not Connected" badge in the UI
 - **Device-aware UI** — interactive MX Master diagram with clickable hotspots; generic fallback for other models
@@ -154,7 +155,7 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
-- **Linux only:** read access to `/dev/input/event*` and write access to `/dev/uinput` are required for remapping (you may need to add your user to the `input` group)
+- **Linux only:** access to Logitech `/dev/hidraw*`, `/dev/input/event*`, and `/dev/uinput` is required. The Linux release includes `install-linux-permissions.sh` to install Mouser's udev rule.
 
 ### Steps
 
@@ -184,6 +185,32 @@ pip install -r requirements.txt
 | `pyobjc-framework-Quartz` | macOS CGEventTap / Quartz event support |
 | `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
 | `evdev` | Linux mouse grab and virtual device forwarding (uinput) |
+
+### Linux Device Permissions
+
+Mouser's Linux portable build runs as a normal user. HID++ features need
+Logitech `hidraw` access, while button remapping needs readable
+`/dev/input/event*` nodes and writable `/dev/uinput`. If Mouser sees the mouse
+only when launched with `sudo`, install the bundled udev rule instead of
+running the app as root:
+
+```bash
+cd /path/to/extracted/Mouser
+./install-linux-permissions.sh
+```
+
+When running from source, use the same helper from the checkout:
+
+```bash
+./packaging/linux/install-linux-permissions.sh
+```
+
+The helper installs `69-mouser-logitech.rules`, reloads udev, and tries to load
+`uinput`. Reconnect the mouse, fully quit Mouser, and launch it normally. If a
+desktop launcher or autostart entry still cannot access the devices, log out and
+back in once so the session receives fresh device ACLs. On systems without
+logind/uaccess support, adding the user to the `input` group may still be
+required as a distro-specific fallback.
 
 ### Running
 
@@ -234,17 +261,23 @@ $s.Save()
 Windows portable build:
 
 ```bash
-# 1. Install PyInstaller (inside your venv)
-pip install pyinstaller
-
-# 2. Build using the included spec file
-pyinstaller Mouser.spec --noconfirm
-
-# — or simply run the build script —
+# Preferred: run the build script
+# It installs requirements, verifies `hidapi`, and packages the app
 build.bat
+
+# For packaging/debugging issues, force a clean rebuild
+build.bat --clean
+
+# Manual path: install build/runtime dependencies first
+pip install -r requirements.txt pyinstaller
+
+# Then build using the included spec file
+pyinstaller Mouser.spec --noconfirm
 ```
 
-The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
+The output is in `dist\Mouser\`. Zip that entire folder and distribute it. `build.bat`
+fails early if `hidapi` is not importable, which avoids producing a packaged app that
+cannot detect Logitech devices.
 
 macOS native bundle:
 
@@ -281,28 +314,42 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 ### Architecture
 
-```
-┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
-│ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
-│ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
-                         ▲
-                    ┌────┴────────┐
-                    │ App         │
-                    │ Detector    │
-                    └─────────────┘
+```mermaid
+graph LR
+    %% Nodes
+    Mouse["Logitech Mouse / HID++ Device"]
+    Hook["Mouse Hook"]
+    Engine["Engine (Orchestrator)"]
+    Simulator["Key Simulator (SendInput)"]
+    Backend["Backend (QObject)"]
+    UI["QML UI (PySide6)"]
+    Detector["App Detector"]
+
+    %% Connections
+    Mouse --> Hook
+    Hook --> Engine
+    Engine -- "block/pass" --> Hook
+    Engine --> Simulator
+
+    Engine <--> Backend
+    Backend <--> UI
+    Detector --> Backend
+
+    %% Styling for better readability
+    style Engine fill:#e8eaff,stroke:#4f46e5,stroke-width:2px,color:#000
+    style UI fill:#e1f9f0,stroke:#059669,stroke-width:2px,color:#000
+    style Mouse fill:#fff7ed,stroke:#d97706,stroke-width:2px,color:#000
+    style Hook fill:#f3f4f6,stroke:#374151,color:#000
+    style Simulator fill:#f3f4f6,stroke:#374151,color:#000
+    style Backend fill:#f3f4f6,stroke:#374151,color:#000
+    style Detector fill:#f3f4f6,stroke:#374151,color:#000
 ```
 
-### Mouse Hook (`mouse_hook.py`)
+### Mouse Hook (`mouse_hook.py` + `mouse_hook_*.py`)
 
-Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstraction:
+Mouser uses a shared `MouseHook` façade in `core/mouse_hook.py`, with the
+platform implementations split into dedicated modules behind the same
+abstraction:
 
 - **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
 - **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
@@ -353,7 +400,7 @@ Mouser handles mouse power-off/on cycles automatically:
 All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Library/Application Support/Mouser/config.json` (macOS). The config supports:
 - Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
 - Per-profile app associations (list of `.exe` names)
-- Global settings: DPI, scroll inversion, gesture tuning, appearance, debug flags, Smart Shift, and startup preferences (`start_at_login`, `start_minimized`)
+- Global settings: DPI, scroll inversion, macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift, and startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
 - Automatic migration from older config versions
 
@@ -379,8 +426,9 @@ mouser/
 ├── core/                    # Backend logic
 │   ├── accessibility.py     # macOS Accessibility trust checks
 │   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
-│   ├── mouse_hook.py        # Low-level mouse hook + HID++ gesture listener
-│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth)
+│   ├── mouse_hook.py        # Platform dispatcher shim for MouseHook
+│   ├── mouse_hook_*.py      # Platform-specific MouseHook implementations
+│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
 │   ├── logi_device_catalog.py   # Community-maintained per-device Logitech catalog + hotspots
 │   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
 │   ├── device_layouts.py    # Device-family layout registry for QML overlays
@@ -426,6 +474,7 @@ The app has two pages accessible from a slim sidebar:
 
 - **DPI slider:** 200–8000 with quick presets (400, 800, 1000, 1600, 2400, 4000, 6000, 8000). Reads the current DPI from the device on startup.
 - **Scroll inversion:** Independent toggles for vertical and horizontal scroll direction.
+- **Ignore trackpad (macOS):** Keep trackpad and Magic Mouse continuous scroll gestures out of Mouser mappings. Disable this only if you intentionally want Mouser to handle Magic Mouse or trackpad scroll events.
 - **Smart Shift:** Toggle Logitech Smart Shift (ratchet-to-free-spin scroll mode switching) on or off.
 - **Startup controls:** **Start at login** (Windows and macOS) and **Start minimized** (all platforms) to launch directly into the system tray.
 
@@ -435,21 +484,12 @@ The app has two pages accessible from a slim sidebar:
 
 - **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
-- **Bluetooth recommended** — HID++ gesture button divert works best over Bluetooth; USB receiver has partial support
+- **Bluetooth and Logi Bolt supported** — HID++ gesture button divert works over both Bluetooth and Logi Bolt USB receivers
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
 - **Scroll inversion is experimental** — uses coalesced `PostMessage` injection to avoid LL hook deadlocks; may not work perfectly in all apps
 - **Admin not required** — but some games or elevated windows may not receive injected keystrokes
 - **Linux app detection is still limited** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, and GNOME / other Wayland compositors still fall back to the default profile
-- **Linux remapping needs device permissions** — Mouser must be able to read `/dev/input/event*` and write `/dev/uinput`. HID++ features (DPI, battery, Smart Shift) additionally require access to `/dev/hidraw*`, which most distros restrict to root by default. Create a udev rule file at `/etc/udev/rules.d/69-logitech-mouser.rules` with the following content:
-  ```
-  # Logitech HID++ access for Mouser (USB + Bluetooth)
-  ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
-  ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", TAG+="uaccess"
-  ```
-  Then reload:
-  ```bash
-  sudo udevadm control --reload && sudo udevadm trigger
-  ```
+- **Linux remapping needs device permissions** — Mouser must be able to access Logitech `/dev/hidraw*`, read `/dev/input/event*`, and write `/dev/uinput`. Use the bundled `install-linux-permissions.sh` helper to install the udev rule, then reconnect the mouse and restart Mouser.
 
 ## Future Work
 

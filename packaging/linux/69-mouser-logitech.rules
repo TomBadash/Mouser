@@ -1,0 +1,18 @@
+# Mouser Linux device access for Logitech HID++ mice.
+#
+# HID++ features use hidraw. Button remapping uses evdev input events and
+# uinput. uaccess grants the active local desktop session access through
+# logind without making Mouser run as root.
+
+# Logitech HID++ over USB receivers and Bluetooth.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", TAG+="uaccess"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", TAG+="uaccess"
+
+# Logitech evdev mouse nodes used for button/gesture remapping.
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{idVendor}=="046d", TAG+="uaccess"
+KERNEL=="event*", SUBSYSTEM=="input", KERNELS=="0003:046D:*", TAG+="uaccess"
+KERNEL=="event*", SUBSYSTEM=="input", KERNELS=="0005:046D:*", TAG+="uaccess"
+
+# Virtual input device used to forward non-blocked mouse events.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

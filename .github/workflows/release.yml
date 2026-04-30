@@ -8,13 +8,19 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MOUSER_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+  MOUSER_GIT_COMMIT: ${{ github.sha }}
+  MOUSER_GIT_DIRTY: "false"
+
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -27,7 +33,7 @@ jobs:
       - name: Create archive
         run: Compress-Archive -Path dist\Mouser -DestinationPath Mouser-Windows.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mouser-Windows
           path: Mouser-Windows.zip
@@ -52,9 +58,9 @@ jobs:
             archive_name: Mouser-macOS-intel.zip
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           architecture: ${{ matrix.python_architecture }}
@@ -72,7 +78,7 @@ jobs:
       - name: Create archive
         run: cd dist && zip -r -y "../${{ matrix.archive_name }}" Mouser.app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.archive_name }}
@@ -80,14 +86,27 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libhidapi-dev \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-util1 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xkb1
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -95,10 +114,107 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller Mouser-linux.spec --noconfirm
 
+      - name: Audit Linux bundle dependencies
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import stat
+          import subprocess
+
+          bundle_root = os.path.join("dist", "Mouser")
+          if not os.path.isdir(bundle_root):
+              raise SystemExit(f"Missing bundle directory: {bundle_root}")
+
+          bundle_root_path = pathlib.Path(bundle_root).resolve()
+          internal_root = bundle_root_path / "_internal"
+          pyside_root = internal_root / "PySide6"
+          hidapi_root = internal_root / "hidapi.libs"
+
+          def is_elf(path: str) -> bool:
+              try:
+                  mode = os.stat(path).st_mode
+              except OSError:
+                  return False
+              if not stat.S_ISREG(mode):
+                  return False
+              with open(path, "rb") as fh:
+                  return fh.read(4) == b"\x7fELF"
+
+          library_dirs = []
+          for root, _, files in os.walk(bundle_root):
+              if any(".so" in name for name in files):
+                  library_dirs.append(root)
+
+          ld_library_path = ":".join(dict.fromkeys(library_dirs))
+          env = os.environ.copy()
+          if ld_library_path:
+              env["LD_LIBRARY_PATH"] = ld_library_path
+
+          def should_audit(path: pathlib.Path) -> bool:
+              if path == bundle_root_path / "Mouser":
+                  return True
+              try:
+                  relative = path.relative_to(pyside_root)
+                  return "plugins" not in relative.parts and "qml" not in relative.parts
+              except ValueError:
+                  pass
+              try:
+                  path.relative_to(hidapi_root)
+                  return True
+              except ValueError:
+                  return False
+
+          missing = []
+          for root, _, files in os.walk(bundle_root):
+              for name in files:
+                  path = pathlib.Path(root, name).resolve()
+                  if not is_elf(str(path)) or not should_audit(path):
+                      continue
+                  result = subprocess.run(
+                      ["ldd", str(path)],
+                      check=False,
+                      capture_output=True,
+                      text=True,
+                      env=env,
+                  )
+                  output = result.stdout + result.stderr
+                  unresolved = [
+                      line.strip()
+                      for line in output.splitlines()
+                      if "not found" in line
+                  ]
+                  if unresolved:
+                      missing.append((path, unresolved))
+
+          if missing:
+              for path, unresolved in missing:
+                  print(path)
+                  for line in unresolved:
+                      print(f"  {line}")
+              raise SystemExit("Linux bundle contains unresolved shared-library dependencies")
+          PY
+
+      - name: Smoke test Linux bundle startup
+        run: |
+          set +e
+          QT_QPA_PLATFORM=offscreen timeout --kill-after=5s 15s ./dist/Mouser/Mouser
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$status" -ne 137 ]; then
+            exit "$status"
+          fi
+
+      - name: Add Linux permission helper
+        run: |
+          cp packaging/linux/69-mouser-logitech.rules dist/Mouser/
+          cp packaging/linux/install-linux-permissions.sh dist/Mouser/
+          chmod +x dist/Mouser/install-linux-permissions.sh
+
       - name: Create archive
         run: cd dist && zip -r -y ../Mouser-Linux.zip Mouser
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mouser-Linux
           path: Mouser-Linux.zip
@@ -108,7 +224,7 @@ jobs:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
 
       - name: Create or update GitHub Release
         env:
