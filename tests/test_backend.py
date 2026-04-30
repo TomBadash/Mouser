@@ -133,6 +133,29 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(overrides, {"mx_master_4": "mx_master"})
         self.assertEqual(backend.effectiveDeviceLayoutKey, "mx_master")
 
+    def test_connected_device_supported_buttons_filter_mapping_list(self):
+        device = SimpleNamespace(
+            key="mx_master_3s",
+            display_name="MX Master 3S",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_3s",
+            supported_buttons=("middle", "xbutton1"),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+
+        button_keys = [button["key"] for button in backend.buttons]
+        self.assertIn("middle", button_keys)
+        self.assertIn("xbutton1", button_keys)
+        self.assertNotIn("gesture", button_keys)
+        self.assertNotIn("mode_shift", button_keys)
+
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
         device = SimpleNamespace(
             key="mx_master_3",

@@ -2,8 +2,12 @@ import unittest
 
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
+    KNOWN_LOGI_DEVICES,
+    MX_MASTER_BUTTONS,
+    MX_VERTICAL_BUTTONS,
     build_connected_device_info,
     clamp_dpi,
+    derive_supported_buttons_from_reprog_controls,
     get_buttons_for_layout,
     resolve_device,
 )
@@ -95,6 +99,28 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertIn("mode_shift", anywhere_3)
         self.assertIn("mode_shift", anywhere_3s)
 
+    def test_known_product_ids_are_unique(self):
+        product_ids = {}
+        for device in KNOWN_LOGI_DEVICES:
+            for product_id in device.product_ids:
+                with self.subTest(product_id=f"0x{product_id:04X}"):
+                    self.assertNotIn(product_id, product_ids)
+                    product_ids[product_id] = device.key
+
+    def test_all_known_product_ids_resolve_to_their_device(self):
+        for device in KNOWN_LOGI_DEVICES:
+            for product_id in device.product_ids:
+                with self.subTest(device=device.key, product_id=f"0x{product_id:04X}"):
+                    self.assertEqual(resolve_device(product_id=product_id), device)
+
+    def test_all_exact_layout_keys_resolve_to_button_sets(self):
+        for device in KNOWN_LOGI_DEVICES:
+            with self.subTest(device=device.key, ui_layout=device.ui_layout):
+                self.assertEqual(
+                    get_buttons_for_layout(device.ui_layout),
+                    device.supported_buttons,
+                )
+
     def test_build_connected_device_info_uses_registry_defaults(self):
         info = build_connected_device_info(
             product_id=0xB023,
@@ -108,11 +134,31 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.transport, "Bluetooth Low Energy")
         self.assertEqual(info.gesture_cids, DEFAULT_GESTURE_CIDS)
         self.assertEqual(info.ui_layout, "mx_master_3")
+        self.assertIn("mode_shift", info.supported_buttons)
+
+    def test_build_connected_device_info_filters_runtime_hid_buttons(self):
+        info = build_connected_device_info(
+            product_id=0xB023,
+            reprog_controls=[
+                {"cid": 0x0052},
+                {"cid": 0x0053},
+                {"cid": 0x0056},
+                {"cid": 0x00C3},
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertIn("gesture", info.supported_buttons)
+        self.assertNotIn("mode_shift", info.supported_buttons)
+        self.assertIn("hscroll_left", info.supported_buttons)
 
     def test_build_connected_device_info_falls_back_to_runtime_name(self):
         info = build_connected_device_info(
             product_id=0xB999,
             product_name="Mystery Logitech Mouse",
+            reprog_controls=[
+                {"cid": 0x00C3},
+            ],
             gesture_cids=(0x00F1,),
         )
 
@@ -131,6 +177,211 @@ class LogiDeviceRegistryTests(unittest.TestCase):
     def test_clamp_dpi_defaults_without_device(self):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
+
+
+class RuntimeSupportedButtonTests(unittest.TestCase):
+    @staticmethod
+    def _control(cid, flags=None, mapping_flags=None):
+        control = {"cid": cid}
+        if flags is not None:
+            control["flags"] = flags
+        if mapping_flags is not None:
+            control["mapping_flags"] = mapping_flags
+        return control
+
+    def test_reprog_control_filter_keeps_static_buttons_without_controls(self):
+        self.assertEqual(
+            derive_supported_buttons_from_reprog_controls(
+                MX_MASTER_BUTTONS,
+                [],
+                gesture_cids=(0x00C3,),
+            ),
+            MX_MASTER_BUTTONS,
+        )
+
+    def test_reprog_control_filter_removes_missing_gesture_group(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x0052),
+                self._control(0x0053),
+                self._control(0x0056),
+                self._control(0x00C4),
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertNotIn("gesture", buttons)
+        self.assertNotIn("gesture_left", buttons)
+        self.assertNotIn("gesture_right", buttons)
+
+    def test_reprog_control_filter_keeps_selected_gesture_cid(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00D7, flags=0x03B0),
+                self._control(0x00C4, flags=0x0130),
+            ],
+            gesture_cids=(0x00D7,),
+            active_gesture_cid=0x00D7,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertIn("gesture", buttons)
+        self.assertIn("gesture_up", buttons)
+
+    def test_reprog_control_filter_removes_directional_gestures_without_rawxy(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3, flags=0x0030),
+                self._control(0x00C4, flags=0x0130),
+            ],
+            gesture_cids=(0x00C3,),
+            active_gesture_cid=0x00C3,
+            gesture_rawxy_enabled=False,
+        )
+
+        self.assertIn("gesture", buttons)
+        self.assertNotIn("gesture_left", buttons)
+        self.assertNotIn("gesture_right", buttons)
+        self.assertNotIn("gesture_up", buttons)
+        self.assertNotIn("gesture_down", buttons)
+
+    def test_reprog_control_filter_removes_missing_mode_shift(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3, flags=0x0130),
+                self._control(0x0052),
+            ],
+            gesture_cids=(0x00C3,),
+            active_gesture_cid=0x00C3,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertNotIn("mode_shift", buttons)
+
+    def test_reprog_control_filter_removes_non_divertable_mode_shift(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3, flags=0x0130),
+                self._control(0x00C4, flags=0x0110),
+            ],
+            gesture_cids=(0x00C3,),
+            active_gesture_cid=0x00C3,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertNotIn("mode_shift", buttons)
+
+    def test_reprog_control_filter_removes_missing_dpi_switch(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_VERTICAL_BUTTONS,
+            [
+                self._control(0x0052),
+                self._control(0x0053),
+                self._control(0x0056),
+            ],
+        )
+
+        self.assertNotIn("dpi_switch", buttons)
+
+    def test_reprog_control_filter_preserves_hscroll_without_hscroll_cids(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control(0x00C3, flags=0x0130),
+                self._control(0x00C4, flags=0x0130),
+            ],
+            gesture_cids=(0x00C3,),
+            active_gesture_cid=0x00C3,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertIn("hscroll_left", buttons)
+        self.assertIn("hscroll_right", buttons)
+
+    def test_reprog_control_filter_ignores_unknown_cids_and_preserves_order(self):
+        buttons = derive_supported_buttons_from_reprog_controls(
+            MX_MASTER_BUTTONS,
+            [
+                self._control("0x01A0", flags="0x0130"),
+                self._control("0x00C3", flags="0x0130"),
+                self._control("0x00C4", flags="0x0130"),
+            ],
+            gesture_cids=(0x00C3,),
+            active_gesture_cid="0x00C3",
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertNotIn("0x01A0", buttons)
+        self.assertEqual(buttons, tuple(button for button in MX_MASTER_BUTTONS))
+
+    def test_mx_anywhere_2s_solaar_controls_keep_tilt_hscroll_without_mode_shift(self):
+        info = build_connected_device_info(
+            product_id=0xB01A,
+            reprog_controls=[
+                self._control(0x0052, flags=0x0130),
+                self._control(0x0053, flags=0x0130),
+                self._control(0x0056, flags=0x0130),
+                self._control(0x005B, flags=0x0130),
+                self._control(0x005D, flags=0x0130),
+                self._control(0x00D7, flags=0x03A0),
+            ],
+            gesture_cids=(0x00D7,),
+            active_gesture_cid=0x00D7,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertIn("gesture_left", info.supported_buttons)
+        self.assertIn("gesture_right", info.supported_buttons)
+        self.assertIn("hscroll_left", info.supported_buttons)
+        self.assertIn("hscroll_right", info.supported_buttons)
+        self.assertNotIn("mode_shift", info.supported_buttons)
+
+    def test_mx_anywhere_3s_solaar_controls_keep_mode_shift_and_catalog_hscroll(self):
+        info = build_connected_device_info(
+            product_id=0xB037,
+            reprog_controls=[
+                self._control(0x0052, flags=0x0130),
+                self._control(0x0053, flags=0x0130),
+                self._control(0x0056, flags=0x0130),
+                self._control(0x00C4, flags=0x0130),
+                self._control(0x00D7, flags=0x03A0),
+            ],
+            gesture_cids=(0x00D7,),
+            active_gesture_cid=0x00D7,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertIn("mode_shift", info.supported_buttons)
+        self.assertIn("gesture_up", info.supported_buttons)
+        self.assertIn("hscroll_left", info.supported_buttons)
+        self.assertIn("hscroll_right", info.supported_buttons)
+
+    def test_mx_master_4_haptic_control_does_not_create_supported_button(self):
+        info = build_connected_device_info(
+            product_id=0xB042,
+            reprog_controls=[
+                self._control(0x0052, flags=0x0130),
+                self._control(0x0053, flags=0x0130),
+                self._control(0x0056, flags=0x0130),
+                self._control(0x00C3, flags=0x0130),
+                self._control(0x00C4, flags=0x0130),
+                self._control(0x01A0, flags=0x0130),
+                self._control(0x00D7, flags=0x03A0),
+            ],
+            gesture_cids=(0x00C3, 0x00D7),
+            active_gesture_cid=0x00C3,
+            gesture_rawxy_enabled=True,
+        )
+
+        self.assertIn("mode_shift", info.supported_buttons)
+        self.assertIn("gesture_down", info.supported_buttons)
+        self.assertNotIn("action_ring", info.supported_buttons)
+        self.assertNotIn("haptic", info.supported_buttons)
 
 
 if __name__ == "__main__":

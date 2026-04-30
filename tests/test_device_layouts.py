@@ -1,9 +1,29 @@
 import unittest
+from pathlib import Path
 
 from core.device_layouts import get_device_layout, get_manual_layout_choices
+from core.logi_devices import KNOWN_LOGI_DEVICES
 
 
 class DeviceLayoutTests(unittest.TestCase):
+    def test_known_devices_have_interactive_layouts_and_assets(self):
+        image_root = Path(__file__).resolve().parents[1] / "images"
+        for device in KNOWN_LOGI_DEVICES:
+            with self.subTest(device=device.key, ui_layout=device.ui_layout):
+                layout = get_device_layout(device.ui_layout)
+
+                self.assertTrue(layout["interactive"])
+                self.assertEqual(layout["key"], device.ui_layout)
+                self.assertTrue((image_root / layout["image_asset"]).is_file())
+
+    def test_known_device_hotspots_are_supported_buttons(self):
+        for device in KNOWN_LOGI_DEVICES:
+            layout = get_device_layout(device.ui_layout)
+            supported_buttons = set(device.supported_buttons)
+            for hotspot in layout["hotspots"]:
+                with self.subTest(device=device.key, button=hotspot["buttonKey"]):
+                    self.assertIn(hotspot["buttonKey"], supported_buttons)
+
     def test_master_layout_is_interactive(self):
         layout = get_device_layout("mx_master")
 

@@ -556,6 +556,104 @@ class HidBoltReceiverTests(unittest.TestCase):
         # devIdx 0xFF (first tried) = Bluetooth
         self.assertEqual(listener.connected_device.transport, "Bluetooth")
 
+    def test_try_connect_applies_runtime_supported_buttons(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB034,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 3S",
+            "path": b"/dev/hidraw-test",
+        }
+        controls = [
+            {"cid": 0x0052, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x0053, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x0056, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x00C3, "flags": 0x0130, "mapping_flags": 0x0011},
+        ]
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=controls),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertIn("gesture", listener.connected_device.supported_buttons)
+        self.assertNotIn("gesture_up", listener.connected_device.supported_buttons)
+        self.assertNotIn("mode_shift", listener.connected_device.supported_buttons)
+
+    def test_try_connect_preserves_directional_gestures_after_rawxy_divert(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB034,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 3S",
+            "path": b"/dev/hidraw-test",
+        }
+        controls = [
+            {"cid": 0x0052, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x0053, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x0056, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x00C3, "flags": 0x0130, "mapping_flags": 0x0011},
+            {"cid": 0x00C4, "flags": 0x0130, "mapping_flags": 0x0001},
+        ]
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        def fake_divert():
+            listener._gesture_cid = 0x00C3
+            listener._rawxy_enabled = True
+            return True
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=controls),
+            patch.object(listener, "_divert", side_effect=fake_divert),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertIn("gesture", listener.connected_device.supported_buttons)
+        self.assertIn("gesture_up", listener.connected_device.supported_buttons)
+        self.assertIn("mode_shift", listener.connected_device.supported_buttons)
+
     def test_transport_label_logi_bolt_for_bolt_receiver(self):
         """devIdx 1-6 with Bolt PID 0xC548 should produce 'Logi Bolt'."""
         listener = hid_gesture.HidGestureListener()
