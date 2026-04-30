@@ -2,6 +2,7 @@ import unittest
 
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
+    KNOWN_LOGI_DEVICES,
     build_connected_device_info,
     clamp_dpi,
     get_buttons_for_layout,
@@ -94,6 +95,28 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertNotIn("mode_shift", anywhere_2s)
         self.assertIn("mode_shift", anywhere_3)
         self.assertIn("mode_shift", anywhere_3s)
+
+    def test_known_product_ids_are_unique(self):
+        product_ids = {}
+        for device in KNOWN_LOGI_DEVICES:
+            for product_id in device.product_ids:
+                with self.subTest(product_id=f"0x{product_id:04X}"):
+                    self.assertNotIn(product_id, product_ids)
+                    product_ids[product_id] = device.key
+
+    def test_all_known_product_ids_resolve_to_their_device(self):
+        for device in KNOWN_LOGI_DEVICES:
+            for product_id in device.product_ids:
+                with self.subTest(device=device.key, product_id=f"0x{product_id:04X}"):
+                    self.assertEqual(resolve_device(product_id=product_id), device)
+
+    def test_all_exact_layout_keys_resolve_to_button_sets(self):
+        for device in KNOWN_LOGI_DEVICES:
+            with self.subTest(device=device.key, ui_layout=device.ui_layout):
+                self.assertEqual(
+                    get_buttons_for_layout(device.ui_layout),
+                    device.supported_buttons,
+                )
 
     def test_build_connected_device_info_uses_registry_defaults(self):
         info = build_connected_device_info(
