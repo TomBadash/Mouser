@@ -40,12 +40,18 @@ jobs:
           python-version: "3.12"
           architecture: ${{ matrix.python_architecture }}
 
-      - name: Install dependencies
+      - name: Use short pip temp path for ARM64 source builds
+        if: matrix.python_architecture == 'arm64'
         shell: pwsh
         run: |
+          # hidapi does not publish Windows ARM64 wheels yet, so pip builds it
+          # from source. Keep MSVC's generated files under a short/simple path.
           New-Item -ItemType Directory -Force C:/pip-tmp | Out-Null
-          $env:TEMP = "C:/pip-tmp"
-          $env:TMP = "C:/pip-tmp"
+          "TEMP=C:/pip-tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:/pip-tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install dependencies
+        run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r requirements.txt
 
