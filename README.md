@@ -8,7 +8,8 @@ English | [中文文档](README_CN.md)
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
 remapping Logitech HID++ mice. The current best experience is on the **MX Master**
-family, with detection and fallback UI support for additional Logitech models.
+and **MX Anywhere** families, with detection and fallback UI support for additional
+Logitech models.
 
 **No telemetry. No cloud. No Logitech account required.**
 
@@ -128,7 +129,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Bluetooth and Logi Bolt** — both transports are supported on all three platforms; the UI labels the live connection (`Logi Bolt` only when the receiver PID is positively identified).
 - **Auto-reconnection** — Mouser watches for power-off / on cycles and rebinds HID++ + the OS mouse hook without a restart; SmartShift settings are replayed on every reconnect (including wake-from-sleep).
 - **Live connection status** — real-time Connected / Not Connected badge, model name, and active layout in the UI.
-- **Device-aware UI** — interactive MX Master diagram with clickable hotspots; generic fallback card for other models, with an experimental layout-override picker.
+- **Device-aware UI** — interactive MX Master and MX Anywhere diagrams with clickable hotspots; generic fallback card for other models, with an experimental layout-override picker.
 
 ### Multi-language UI
 
@@ -148,12 +149,12 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 | Family / model | Detection + HID++ probing | UI support |
 |---|---|---|
-| MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive `mx_master` layout |
-| MX Anywhere 3S / 3 / 2S | Yes | Generic fallback card, experimental manual override |
+| MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive per-model layouts |
+| MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive per-model layouts |
 | MX Vertical | Yes | Generic fallback card (with DPI switch button support) |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> Only the MX Master family currently has a dedicated visual overlay. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
+> MX Master and MX Anywhere devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
 
 ---
 
@@ -300,7 +301,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 
 ## Roadmap
 
-- [ ] **Dedicated overlays for more devices** — real hotspot maps and artwork for MX Anywhere, MX Vertical, and other Logitech families
+- [ ] **Dedicated overlays for more devices** — real hotspot maps and artwork for MX Vertical and other Logitech families
 - [ ] **True per-device config** — separate mappings cleanly when multiple Logitech mice are used on the same machine
 - [ ] **Dynamic button inventory** — build button lists from discovered `REPROG_CONTROLS_V4` controls instead of the current fixed sets
 - [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches

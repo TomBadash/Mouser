@@ -111,13 +111,35 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         overrides = backend._cfg.get("settings", {}).get("device_layout_overrides", {})
         self.assertEqual(overrides, {})
 
+    def test_connected_device_can_override_exact_layout_with_family_layout(self):
+        device = SimpleNamespace(
+            key="mx_master_4",
+            display_name="MX Master 4",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_4",
+            supported_buttons=("middle", "xbutton1", "xbutton2"),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+            backend.setDeviceLayoutOverride("mx_master")
+
+        overrides = backend._cfg.get("settings", {}).get("device_layout_overrides", {})
+        self.assertEqual(overrides, {"mx_master_4": "mx_master"})
+        self.assertEqual(backend.effectiveDeviceLayoutKey, "mx_master")
+
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
         device = SimpleNamespace(
             key="mx_master_3",
             display_name="MX Master 3S",
             dpi_min=200,
             dpi_max=8000,
-            ui_layout="mx_master",
+            ui_layout="mx_master_3",
         )
 
         def fake_layout(key):
@@ -132,7 +154,7 @@ class BackendDeviceLayoutTests(unittest.TestCase):
             backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
             self.assertTrue(backend.mouseConnected)
             self.assertEqual(backend.connectedDeviceKey, "mx_master_3")
-            self.assertEqual(backend.effectiveDeviceLayoutKey, "mx_master")
+            self.assertEqual(backend.effectiveDeviceLayoutKey, "mx_master_3")
             backend._battery_level = 42
 
             backend._handleConnectionChange(False)
@@ -148,7 +170,7 @@ class BackendDeviceLayoutTests(unittest.TestCase):
             display_name="MX Master 3S",
             dpi_min=200,
             dpi_max=8000,
-            ui_layout="mx_master",
+            ui_layout="mx_master_3",
         )
 
         def fake_layout(key):

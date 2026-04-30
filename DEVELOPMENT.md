@@ -132,8 +132,9 @@ Intercepted events are either **blocked** (hook returns `1`) and replaced with a
 
 ### Device catalog & layout registry
 
-- [`core/logi_devices.py`](core/logi_devices.py) resolves known product IDs and model aliases into a `ConnectedDeviceInfo` record with display name, DPI range, preferred gesture CIDs, and default UI layout key.
-- [`core/device_layouts.py`](core/device_layouts.py) stores image assets, hotspot coordinates, layout notes, and whether a layout is interactive or only a generic fallback. `_FAMILY_FALLBACKS` maps per-model keys (`mx_master_4`, `mx_anywhere_3s`, …) to family layout keys until a dedicated overlay exists.
+- [`core/logi_device_catalog.py`](core/logi_device_catalog.py) holds Mouser's curated per-device Logitech specs, image assets, and hotspot coordinates for dedicated control surfaces.
+- [`core/logi_devices.py`](core/logi_devices.py) resolves known product IDs and model aliases into a `ConnectedDeviceInfo` record with display name, DPI range, preferred gesture CIDs, supported buttons, and default UI layout key.
+- [`core/device_layouts.py`](core/device_layouts.py) stores built-in family layouts plus catalog layouts, layout notes, and whether a layout is interactive or only a generic fallback. `_FAMILY_FALLBACKS` maps per-model keys to family layout keys until a dedicated overlay exists.
 - [`ui/backend.py`](ui/backend.py) combines auto-detected device info with any persisted per-device layout override and exposes the effective layout to QML.
 
 ### Gesture button detection
@@ -185,7 +186,7 @@ Two pages accessible from a slim sidebar in [`ui/qml/Main.qml`](ui/qml/Main.qml)
 ### Mouse & profiles
 
 - **Left panel** — list of profiles. The "Default (All Apps)" profile is always present. Per-app profiles show the app icon and name. Selecting a profile binds it as the active editing target.
-- **Right panel** — device-aware mouse view. MX Master family devices get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
+- **Right panel** — device-aware mouse view. MX Master and MX Anywhere family devices get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
 - **Add profile** — combo box at the bottom lists known apps (Chrome, Edge, VS Code, VLC, etc.). Click `+` to create a per-app profile.
 
 ### Point & scroll
@@ -225,6 +226,7 @@ mouser/
 │   ├── key_simulator.py         # Platform-specific action simulator
 │   ├── linux_permissions.py     # hidraw / event / uinput permission report
 │   ├── log_setup.py             # Rotating file log + stdout redirection
+│   ├── logi_device_catalog.py   # Curated Logitech specs, assets, and hotspots
 │   ├── logi_devices.py          # Known Logitech device catalog + connected-device metadata
 │   ├── mouse_hook.py            # Platform dispatcher façade
 │   ├── mouse_hook_base.py       # Shared base class

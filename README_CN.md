@@ -6,7 +6,7 @@
 
 中文文档｜[English README](README.md)
 
-一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标进行按键 / 手势重映射。当前对 **MX Master** 系列体验最佳，并对更多罗技型号提供识别与通用回退 UI。
+一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标进行按键 / 手势重映射。当前对 **MX Master** 与 **MX Anywhere** 系列体验最佳，并对更多罗技型号提供识别与通用回退 UI。
 
 **零遥测，零云端，无需罗技账号。**
 
@@ -126,7 +126,7 @@
 - **蓝牙与 Logi Bolt** — 三个平台都支持两种连接方式；UI 实时显示当前连接类型（仅在确认接收器 PID 时才显示 `Logi Bolt`）。
 - **自动重连** — Mouser 监听断电 / 上电循环，无需重启即可重新绑定 HID++ 与系统鼠标 hook；每次重连（包括从睡眠唤醒）都会回放 SmartShift 设置。
 - **实时连接状态** — UI 显示 Connected / Not Connected 徽标、设备型号和当前布局。
-- **设备感知 UI** — MX Master 系列提供带可点击热区的交互示意图；其他型号使用通用回退卡片，并支持实验性的布局覆盖选择器。
+- **设备感知 UI** — MX Master 与 MX Anywhere 系列提供带可点击热区的交互示意图；其他型号使用通用回退卡片，并支持实验性的布局覆盖选择器。
 
 ### 多语言 UI
 
@@ -146,12 +146,12 @@
 
 | 系列 / 型号 | 识别 + HID++ 探测 | UI 支持 |
 |---|---|---|
-| MX Master 4 / 3S / 3 / 2S / MX Master | 是 | 专用交互布局 `mx_master` |
-| MX Anywhere 3S / 3 / 2S | 是 | 通用回退卡片，支持实验性手动覆盖 |
+| MX Master 4 / 3S / 3 / 2S / MX Master | 是 | 专用的逐型号交互布局 |
+| MX Anywhere 3S / 3 / 2S | 是 | 专用的逐型号交互布局 |
 | MX Vertical | 是 | 通用回退卡片（含 DPI 切换按键支持） |
 | 其他罗技 HID++ 鼠标 | 按 PID / 名称尽力识别 | 通用回退卡片 |
 
-> 目前只有 MX Master 系列拥有专用的可视化覆盖层。其他设备同样可被识别、显示型号名，并可启用实验性布局覆盖；但在专用覆盖层加入前，按键热区位置可能不够精确。要为你的设备添加支持，请见 [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md)。
+> MX Master 与 MX Anywhere 系列拥有专用的可视化覆盖层。其他设备同样可被识别、显示型号名，并可启用实验性布局覆盖；但在专用覆盖层加入前，按键热区位置可能不够精确。要为你的设备添加支持，请见 [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md)。
 
 ---
 
@@ -298,7 +298,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 
 ## 路线图
 
-- [ ] **更多设备的专用覆盖层** — 为 MX Anywhere、MX Vertical 及其他罗技系列添加真实热区图与示意图素材
+- [ ] **更多设备的专用覆盖层** — 为 MX Vertical 及其他罗技系列添加真实热区图与示意图素材
 - [ ] **真正的每设备配置** — 当一台机器接入多只罗技鼠标时，干净地分离各自的映射
 - [ ] **动态按键清单** — 基于发现的 `REPROG_CONTROLS_V4` 控件构建按键列表，而不是依赖当前的固定按键集合
 - [ ] **更好的滚动反转** — 探索驱动级或拦截驱动方案

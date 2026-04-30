@@ -54,7 +54,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 migrated["profiles"]["default"]["mappings"][key], "none"
             )
         # v7→v8 migration promotes the physical SmartShift button from "none" to
-        # "switch_scroll_mode" (ratchet ↔ free-spin, matching Logi Options+ default).
+        # "switch_scroll_mode" (ratchet ↔ free-spin).
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
