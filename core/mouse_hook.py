@@ -1063,6 +1063,7 @@ elif sys.platform == "darwin":
     _BTN_MIDDLE = 2
     _BTN_BACK = 3
     _BTN_FORWARD = 4
+    _BTN_GESTURE = 6
     _SCROLL_INVERT_MARKER = 0x4D4F5553
     _INJECTED_EVENT_MARKER = 0x4D4F5554
     _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
@@ -1516,6 +1517,9 @@ elif sys.platform == "darwin":
                     elif btn == _BTN_FORWARD:
                         mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
                         should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                    elif btn == _BTN_GESTURE:
+                        self._on_hid_gesture_down()
+                        should_block = True
 
                 elif event_type == Quartz.kCGEventOtherMouseUp:
                     btn = Quartz.CGEventGetIntegerValueField(
@@ -1534,6 +1538,9 @@ elif sys.platform == "darwin":
                     elif btn == _BTN_FORWARD:
                         mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
                         should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                    elif btn == _BTN_GESTURE:
+                        self._on_hid_gesture_up()
+                        should_block = True
 
                 elif event_type == Quartz.kCGEventScrollWheel:
                     if (
