@@ -6,6 +6,10 @@
 
 中文文档｜[English README](README.md)
 
+> **⚠️ 翻译滞后提示 / Translation out-of-sync notice**
+>
+> 此中文文档当前与 v3.5.x 英文 README 同步，**尚未反映 v3.6.0 的全部新内容**（Intel Mac 构建、可调窗口大小、新增的 Switch Scroll Mode / Toggle SmartShift / Cycle DPI / 鼠标按键互映 等动作、SmartShift 灵敏度、macOS Logi Bolt 支持、滚动日志等）。如需获取完整的最新功能列表，请暂时参考 [English README](README.md)。欢迎 PR 翻译更新。
+
 一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标进行按键/手势重映射。当前对 **MX Master** 系列体验最佳，同时也对更多罗技型号提供早期识别与通用回退 UI。
 
 无需云端、无需罗技账号、纯本地运行。
@@ -225,7 +229,7 @@ python main_qml.py --start-hidden
 # 方式 C：使用批处理（会显示控制台窗口）
 Mouser.bat
 
-# 方式 D：使用桌面快捷方式（不显示控制台）
+# 方式 D：创建后使用桌面快捷方式（不显示控制台）
 # 双击 Mouser.lnk
 ```
 
@@ -244,7 +248,7 @@ python main_qml.py --hid-backend=auto
 
 ### 创建桌面快捷方式
 
-仓库自带 `Mouser.lnk`。也可手动创建：
+如需不显示控制台窗口，可手动创建 `Mouser.lnk`：
 
 ```powershell
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Mouser.lnk")
