@@ -329,23 +329,35 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
 
 ### Architecture
 
-```
-┌────────────────┐     ┌──────────┐     ┌────────────────┐
-│ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
-│ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └──────────┘     └───────┬────────┘
-                         ▲                    │
-                    block/pass           ┌────▼────────┐
-                                         │ Key         │
-┌─────────────┐     ┌──────────┐        │ Simulator   │
-│ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
-│ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └──────────┘
-                         ▲
-                    ┌────┴────────┐
-                    │ App         │
-                    │ Detector    │
-                    └─────────────┘
+```mermaid
+graph LR
+    %% Nodes
+    Mouse["Logitech Mouse / HID++ Device"]
+    Hook["Mouse Hook"]
+    Engine["Engine (Orchestrator)"]
+    Simulator["Key Simulator (SendInput)"]
+    Backend["Backend (QObject)"]
+    UI["QML UI (PySide6)"]
+    Detector["App Detector"]
+
+    %% Connections
+    Mouse --> Hook
+    Hook --> Engine
+    Engine -- "block/pass" --> Hook
+    Engine --> Simulator
+    
+    Engine <--> Backend
+    Backend <--> UI
+    Detector --> Backend
+
+    %% Styling for better readability
+    style Engine fill:#e8eaff,stroke:#4f46e5,stroke-width:2px,color:#000
+    style UI fill:#e1f9f0,stroke:#059669,stroke-width:2px,color:#000
+    style Mouse fill:#fff7ed,stroke:#d97706,stroke-width:2px,color:#000
+    style Hook fill:#f3f4f6,stroke:#374151,color:#000
+    style Simulator fill:#f3f4f6,stroke:#374151,color:#000
+    style Backend fill:#f3f4f6,stroke:#374151,color:#000
+    style Detector fill:#f3f4f6,stroke:#374151,color:#000
 ```
 
 ### Mouse Hook (`mouse_hook.py` + `mouse_hook_*.py`)
