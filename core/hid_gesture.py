@@ -1801,6 +1801,7 @@ class HidGestureListener:
                             transport=actual_transport,
                             source=source,
                             gesture_cids=self._gesture_candidates,
+                            reprog_controls=controls,
                         )
                         return True
                     continue     # divert failed — try next receiver slot

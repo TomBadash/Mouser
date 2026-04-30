@@ -233,10 +233,12 @@ def build_connected_device_info(
     transport=None,
     source=None,
     gesture_cids=None,
+    reprog_controls=None,
 ) -> ConnectedDeviceInfo:
     spec = resolve_device(product_id=product_id, product_name=product_name)
     pid = int(product_id) if product_id not in (None, "") else None
     if spec:
+        resolved_gesture_cids = tuple(gesture_cids or spec.gesture_cids)
         return ConnectedDeviceInfo(
             key=spec.key,
             display_name=spec.display_name,
@@ -246,8 +248,12 @@ def build_connected_device_info(
             source=source,
             ui_layout=spec.ui_layout,
             image_asset=spec.image_asset,
-            supported_buttons=spec.supported_buttons,
-            gesture_cids=tuple(gesture_cids or spec.gesture_cids),
+            supported_buttons=derive_supported_buttons_from_reprog_controls(
+                spec.supported_buttons,
+                reprog_controls,
+                gesture_cids=resolved_gesture_cids,
+            ),
+            gesture_cids=resolved_gesture_cids,
             dpi_min=spec.dpi_min,
             dpi_max=spec.dpi_max,
         )

@@ -134,11 +134,31 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.transport, "Bluetooth Low Energy")
         self.assertEqual(info.gesture_cids, DEFAULT_GESTURE_CIDS)
         self.assertEqual(info.ui_layout, "mx_master_3")
+        self.assertIn("mode_shift", info.supported_buttons)
+
+    def test_build_connected_device_info_filters_runtime_hid_buttons(self):
+        info = build_connected_device_info(
+            product_id=0xB023,
+            reprog_controls=[
+                {"cid": 0x0052},
+                {"cid": 0x0053},
+                {"cid": 0x0056},
+                {"cid": 0x00C3},
+            ],
+            gesture_cids=(0x00C3,),
+        )
+
+        self.assertIn("gesture", info.supported_buttons)
+        self.assertNotIn("mode_shift", info.supported_buttons)
+        self.assertIn("hscroll_left", info.supported_buttons)
 
     def test_build_connected_device_info_falls_back_to_runtime_name(self):
         info = build_connected_device_info(
             product_id=0xB999,
             product_name="Mystery Logitech Mouse",
+            reprog_controls=[
+                {"cid": 0x00C3},
+            ],
             gesture_cids=(0x00F1,),
         )
 
