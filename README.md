@@ -348,9 +348,11 @@ The output is in `dist/Mouser/`. Zip that entire folder and distribute it.
                     └─────────────┘
 ```
 
-### Mouse Hook (`mouse_hook.py`)
+### Mouse Hook (`mouse_hook.py` + `mouse_hook_*.py`)
 
-Mouser uses a platform-specific mouse hook behind a shared `MouseHook` abstraction:
+Mouser uses a shared `MouseHook` façade in `core/mouse_hook.py`, with the
+platform implementations split into dedicated modules behind the same
+abstraction:
 
 - **Windows** — `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data
 - **macOS** — `CGEventTap` for mouse interception and Quartz events for key simulation
@@ -410,95 +412,53 @@ All settings are stored in `%APPDATA%\Mouser\config.json` (Windows) or `~/Librar
 
 ```
 mouser/
-├── build_macos_app.sh             # macOS bundle build + icon/signing flow
-├── build.bat                      # Windows build helper with optional venv activation
-├── CONTRIBUTING_DEVICES.md        # Guide for adding/testing new device definitions
-├── core                           # Backend logic
-│   ├── __init__.py                # Core package marker
-│   ├── accessibility.py           # macOS Accessibility trust checks
-│   ├── app_catalog.py             # Installed-app resolution + alias catalog helpers
-│   ├── app_detector.py            # Foreground app polling
-│   ├── config_validation.py       # Schema-first config normalization + validation helpers
-│   ├── config.py                  # Config manager (JSON load/save/migrate)
-│   ├── device_layouts.py          # Device-family layout registry for QML overlays
-│   ├── engine.py                  # Core engine — wires hook ↔ simulator ↔ config
-│   ├── hid_gesture.py             # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
-│   ├── key_simulator.py           # Platform-specific action simulator
-│   ├── log_setup.py               # Application logging setup
-│   ├── logi_devices.py            # Known Logitech device catalog + connected-device metadata
-│   ├── mouse_hook.py              # Low-level mouse hook + HID++ gesture listener
-│   ├── startup.py                 # Cross-platform login startup (Windows registry + macOS LaunchAgent)
-│   └── version.py                 # Build/version metadata helpers
-├── DEVELOPMENT.md                 # Developer-oriented architecture and workflow notes
-├── images                         # Raster/vector UI assets and app icons
-│   ├── AppIcon.icns               # Committed macOS app-bundle icon
-│   ├── chrom.png                  # App icon: Chrome
-│   ├── icons                      # Small reusable UI glyphs
-│   │   ├── battery-high.svg       # Battery status icon
-│   │   ├── circle.svg             # Generic circular indicator icon
-│   │   ├── info.svg               # Informational icon
-│   │   ├── mouse-simple.svg       # Generic fallback device card artwork
-│   │   ├── plus.svg               # Add/create icon
-│   │   ├── sliders-horizontal.svg   # Settings/sliders icon
-│   │   ├── trash.svg              # Delete icon
-│   │   ├── warning.svg            # Warning icon
-│   │   └── x.svg                  # Close/remove icon
-│   ├── logo_icon.png              # Square icon with background
-│   ├── logo.icns                  # Alternate macOS icon asset
-│   ├── logo.ico                   # Multi-size icon for shortcuts
-│   ├── logo.png                   # Mouser logo (source)
-│   ├── media.webp                 # App icon: Windows Media Player
-│   ├── mouse_mx_anywhere_3s.png   # MX Anywhere family diagram
-│   ├── mouse.png                  # MX Master 3S top-down diagram
-│   ├── mx_vertical.png            # MX Vertical diagram
-│   ├── Screenshot_mouse.png       # Documentation screenshot: Mouse page
-│   ├── Screenshot_settings.png    # Documentation screenshot: Settings page
-│   ├── Screenshot.png             # Documentation screenshot: app overview
-│   ├── VLC.png                    # App icon: VLC
-│   └── VSCODE.png                 # App icon: VS Code
-├── LICENSE                        # Project license
-├── main_cli.py                    # CLI entry point for config import/export + headless service control
-├── main_qml.py                    # Application entry point (PySide6 + QML)
-├── Mouser-linux.spec              # Linux PyInstaller spec
-├── Mouser-mac.spec                # Native macOS app-bundle spec
-├── Mouser.bat                     # Quick-launch batch file
-├── Mouser.spec                    # Cross-platform/default PyInstaller spec
-├── README_CN.md                   # Chinese-language project README
-├── readme_mac_osx.md              # macOS-specific setup and usage notes
-├── README.md                      # Primary project documentation
-├── requirements.txt               # Python dependency list
-├── test_config.json               # Example/test JSON config input
-├── test_config.yaml               # Example/test YAML config input
-├── tests                          # Automated test suite
-│   ├── test_accessibility.py      # Tests for macOS accessibility helpers
-│   ├── test_app_detector.py       # Tests for foreground-app detection
-│   ├── test_backend.py            # Tests for QML backend bridge behavior
-│   ├── test_cli.py                # Tests for CLI import/export and service commands
-│   ├── test_config_validation.py  # Tests for standalone core config validation
-│   ├── test_config.py             # Tests for config migration/load/save helpers
-│   ├── test_device_layouts.py     # Tests for device-layout registry lookups
-│   ├── test_engine.py             # Tests for engine dispatch and scroll behavior
-│   ├── test_hid_gesture.py        # Tests for HID++ gesture listener logic
-│   ├── test_key_simulator.py      # Tests for action simulation and custom shortcuts
-│   ├── test_log_setup.py          # Tests for logging setup
-│   ├── test_logi_devices.py       # Tests for Logitech device catalog helpers
-│   ├── test_mouse_hook.py         # Tests for low-level mouse hook + gesture detection
-│   ├── test_single_instance.py    # Tests for single-instance behavior
-│   ├── test_smart_shift.py        # Tests for Smart Shift config/engine/backend behavior
-│   └── test_startup.py            # Tests for login-startup integration
-└── ui                             # UI layer
-    ├── __init__.py                # UI package marker
-    ├── backend.py                 # QML ↔ Python bridge (QObject with properties/slots)
-    ├── locale_manager.py          # UI string catalog + localization helpers
-    └── qml                        # QML component tree
-        ├── ActionChip.qml         # Selectable action pill
-        ├── AppIcon.qml            # Reusable app icon component
-        ├── HotspotDot.qml         # Interactive button overlay on mouse image
-        ├── KeyCaptureDialog.qml   # Custom shortcut capture dialog
-        ├── Main.qml               # App shell (sidebar + page stack + tray toast)
-        ├── MousePage.qml          # Merged mouse diagram + profile manager
-        ├── ScrollPage.qml         # DPI slider + scroll inversion toggles
-        └── Theme.js               # Shared colors and constants
+├── main_qml.py              # Application entry point (PySide6 + QML)
+├── Mouser.bat               # Quick-launch batch file
+├── Mouser-mac.spec          # Native macOS app-bundle spec
+├── Mouser-linux.spec        # Linux PyInstaller spec
+├── build_macos_app.sh       # macOS bundle build + icon/signing flow
+├── .github/workflows/
+│   ├── ci.yml               # CI checks (compile, tests, QML lint)
+│   └── release.yml          # Automated release builds (Win/macOS/Linux)
+├── README.md
+├── readme_mac_osx.md
+├── requirements.txt
+├── .gitignore
+│
+├── core/                    # Backend logic
+│   ├── accessibility.py     # macOS Accessibility trust checks
+│   ├── engine.py            # Core engine — wires hook ↔ simulator ↔ config
+│   ├── mouse_hook.py        # Platform dispatcher shim for MouseHook
+│   ├── mouse_hook_*.py      # Platform-specific MouseHook implementations
+│   ├── hid_gesture.py       # HID++ 2.0 gesture button divert (Bluetooth + Logi Bolt)
+│   ├── logi_devices.py      # Known Logitech device catalog + connected-device metadata
+│   ├── device_layouts.py    # Device-family layout registry for QML overlays
+│   ├── key_simulator.py     # Platform-specific action simulator
+│   ├── startup.py           # Cross-platform login startup (Windows registry + macOS LaunchAgent)
+│   ├── config.py            # Config manager (JSON load/save/migrate)
+│   └── app_detector.py      # Foreground app polling
+│
+├── ui/                      # UI layer
+│   ├── backend.py           # QML ↔ Python bridge (QObject with properties/slots)
+│   └── qml/
+│       ├── Main.qml         # App shell (sidebar + page stack + tray toast)
+│       ├── MousePage.qml    # Merged mouse diagram + profile manager
+│       ├── ScrollPage.qml   # DPI slider + scroll inversion toggles
+│       ├── HotspotDot.qml   # Interactive button overlay on mouse image
+│       ├── ActionChip.qml   # Selectable action pill
+│       └── Theme.js         # Shared colors and constants
+│
+└── images/
+    ├── AppIcon.icns        # Committed macOS app-bundle icon
+    ├── mouse.png            # MX Master 3S top-down diagram
+    ├── icons/mouse-simple.svg # Generic fallback device card artwork
+    ├── logo.png             # Mouser logo (source)
+    ├── logo.ico             # Multi-size icon for shortcuts
+    ├── logo_icon.png        # Square icon with background
+    ├── chrom.png            # App icon: Chrome
+    ├── VSCODE.png           # App icon: VS Code
+    ├── VLC.png              # App icon: VLC
+    └── media.webp           # App icon: Windows Media Player
 ```
 
 ## UI Overview
