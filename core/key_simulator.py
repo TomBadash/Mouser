@@ -678,6 +678,8 @@ elif sys.platform == "darwin":
     kVK_ANSI_C = 0x08
     kVK_ANSI_V = 0x09
     kVK_ANSI_Z = 0x06
+    kVK_ANSI_Equal = 0x18
+    kVK_ANSI_Minus = 0x1B
 
     kVK_F1  = 0x7A
     kVK_F2  = 0x78
@@ -928,7 +930,17 @@ elif sys.platform == "darwin":
             if not was_enabled:
                 _APP_SERVICES.CGSSetSymbolicHotKeyEnabled(hotkey, False)
 
+    _ZOOM_REPEAT = 3  # key presses per gesture trigger
+
     def _execute_mac_action(action_id):
+        if action_id == "zoom_in":
+            for _ in range(_ZOOM_REPEAT):
+                send_key_combo([kVK_Command, kVK_ANSI_Equal], hold_ms=0)
+            return True
+        if action_id == "zoom_out":
+            for _ in range(_ZOOM_REPEAT):
+                send_key_combo([kVK_Command, kVK_ANSI_Minus], hold_ms=0)
+            return True
         if action_id == "mission_control":
             return _dock_notification("com.apple.expose.awake")
         if action_id == "app_expose":
@@ -1094,6 +1106,16 @@ elif sys.platform == "darwin":
             "keys": [],
             "mac_fn": _NX_PREV,
             "category": "Media",
+        },
+        "zoom_in": {
+            "label": "Zoom In",
+            "keys": [],
+            "category": "Navigation",
+        },
+        "zoom_out": {
+            "label": "Zoom Out",
+            "keys": [],
+            "category": "Navigation",
         },
         "page_up": {
             "label": "Page Up",
