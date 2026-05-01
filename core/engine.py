@@ -331,7 +331,11 @@ class Engine:
             threshold = self._hscroll_threshold()
             now = getattr(event, "timestamp", None) or time.time()
 
-            cooldown = HSCROLL_VOLUME_COOLDOWN_S if action_id in _VOLUME_ACTIONS else HSCROLL_ACTION_COOLDOWN_S
+            cooldown = (
+                HSCROLL_VOLUME_COOLDOWN_S
+                if action_id in _VOLUME_ACTIONS
+                else self._hscroll_action_cooldown()
+            )
             if now - state["last_fire_at"] < cooldown:
                 state["accum"] = 0.0
                 return
@@ -361,6 +365,12 @@ class Engine:
         return max(
             0.1,
             float(self.cfg.get("settings", {}).get("hscroll_threshold", 1)),
+        )
+
+    def _hscroll_action_cooldown(self):
+        return max(
+            0.0,
+            float(self.cfg.get("settings", {}).get("hscroll_cooldown_ms", 350)) / 1000.0,
         )
 
     # ------------------------------------------------------------------

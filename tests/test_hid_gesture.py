@@ -103,7 +103,8 @@ class GestureCandidateSelectionTests(unittest.TestCase):
             device_spec=device_spec,
         )
 
-        self.assertEqual(candidates[:2], [0x00C3, 0x00D7])
+        expected = [0x00D7, 0x00C3] if sys.platform == "darwin" else [0x00C3, 0x00D7]
+        self.assertEqual(candidates[:2], expected)
 
     def test_choose_gesture_candidates_uses_capability_heuristic(self):
         listener = hid_gesture.HidGestureListener()
@@ -117,12 +118,26 @@ class GestureCandidateSelectionTests(unittest.TestCase):
 
         self.assertEqual(candidates[0], 0x00F1)
 
+    def test_choose_gesture_candidates_prefers_virtual_gesture_button_on_macos(self):
+        listener = hid_gesture.HidGestureListener()
+
+        with patch.object(sys, "platform", "darwin"):
+            candidates = listener._choose_gesture_candidates(
+                [
+                    {"cid": 0x00D7, "flags": 0x03B0, "mapping_flags": 0x0051},
+                    {"cid": 0x00C3, "flags": 0x0130, "mapping_flags": 0x0011},
+                ],
+            )
+
+        self.assertEqual(candidates[:2], [0x00D7, 0x00C3])
+
     def test_choose_gesture_candidates_falls_back_to_defaults(self):
         listener = hid_gesture.HidGestureListener()
 
         self.assertEqual(
             listener._choose_gesture_candidates([]),
-            list(hid_gesture.DEFAULT_GESTURE_CIDS),
+            ([0x00D7, 0x00C3] if sys.platform == "darwin"
+             else list(hid_gesture.DEFAULT_GESTURE_CIDS)),
         )
 
 
