@@ -29,6 +29,12 @@ def valid_custom_key_names():
         return []
 
 
+WINDOWS_FUNCTION_KEY_CODES = {
+    f"f{n}": 0x6F + n
+    for n in range(1, 25)
+}
+
+
 def normalize_captured_shortcut_parts(modifier_names, key_name="", platform_name=None):
     """Normalize captured modifier/key names into stored shortcut syntax."""
     platform_name = platform_name or sys.platform
@@ -581,9 +587,7 @@ if sys.platform == "win32":
         "p": 0x50, "q": 0x51, "r": 0x52, "s": 0x53, "t": 0x54,
         "u": 0x55, "v": 0x56, "w": 0x57, "x": 0x58, "y": 0x59,
         "z": 0x5A,
-        "f1": VK_F1, "f2": VK_F2, "f3": VK_F3, "f4": VK_F4,
-        "f5": VK_F5, "f6": VK_F6, "f7": VK_F7, "f8": VK_F8,
-        "f9": VK_F9, "f10": VK_F10, "f11": VK_F11, "f12": VK_F12,
+        **WINDOWS_FUNCTION_KEY_CODES,
         "volumeup": VK_VOLUME_UP, "volumedown": VK_VOLUME_DOWN,
         "mute": VK_VOLUME_MUTE, "playpause": VK_MEDIA_PLAY_PAUSE,
         "nexttrack": VK_MEDIA_NEXT_TRACK, "prevtrack": VK_MEDIA_PREV_TRACK,

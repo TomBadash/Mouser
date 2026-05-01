@@ -347,6 +347,27 @@ class BackendDeviceLayoutTests(unittest.TestCase):
             "esc",
         )
 
+    def test_shortcut_capture_accepts_extended_function_keys(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.sys.platform", "win32"):
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_F13,
+                    Qt.NoModifier,
+                    "",
+                ),
+                "f13",
+            )
+            self.assertEqual(
+                backend.shortcutComboFromQtEvent(
+                    Qt.Key_F24,
+                    Qt.ControlModifier,
+                    "",
+                ),
+                "ctrl+f24",
+            )
+
     def test_add_profile_stores_catalog_id_for_linux_app(self):
         backend = self._make_backend()
         fake_catalog = [

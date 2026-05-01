@@ -98,8 +98,9 @@ def _qt_shortcut_key_name(key, text=""):
     if key == _qt_enum_int(Qt.Key_PageDown):
         return "pagedown"
 
-    for n in range(1, 13):
-        if key == _qt_enum_int(getattr(Qt, f"Key_F{n}")):
+    for n in range(1, 25):
+        qt_key = getattr(Qt, f"Key_F{n}", None)
+        if qt_key is not None and key == _qt_enum_int(qt_key):
             return f"f{n}"
 
     if _qt_enum_int(Qt.Key_A) <= key <= _qt_enum_int(Qt.Key_Z):

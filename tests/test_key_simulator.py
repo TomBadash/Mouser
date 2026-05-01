@@ -53,6 +53,12 @@ class CustomShortcutParsingTests(unittest.TestCase):
         )
         self.assertEqual(keys, [17, 52])
 
+    def test_windows_custom_shortcut_codes_include_f13_through_f24(self):
+        self.assertEqual(key_simulator.WINDOWS_FUNCTION_KEY_CODES["f1"], 0x70)
+        self.assertEqual(key_simulator.WINDOWS_FUNCTION_KEY_CODES["f12"], 0x7B)
+        self.assertEqual(key_simulator.WINDOWS_FUNCTION_KEY_CODES["f13"], 0x7C)
+        self.assertEqual(key_simulator.WINDOWS_FUNCTION_KEY_CODES["f24"], 0x87)
+
 
 class LinuxDesktopShortcutTests(unittest.TestCase):
     def _reload_for_linux(self, desktop: str):
