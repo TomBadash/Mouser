@@ -208,8 +208,89 @@ cd Mouser
 python -m venv .venv
 ```
 
-<details>
-<summary><strong>Windows</strong></summary>
+### Dependencies
+
+| Package | Purpose |
+|---|---|
+| `PySide6` | Qt Quick / QML UI framework |
+| `hidapi` | HID++ communication with the mouse (gesture button, DPI) |
+| `Pillow` | Image processing for icon generation |
+| `pyobjc-framework-Quartz` | macOS CGEventTap / Quartz event support |
+| `pyobjc-framework-Cocoa` | macOS app detection and media-key support |
+| `evdev` | Linux mouse grab and virtual device forwarding (uinput) |
+| `pyobjc-core` | Core PyObjC runtime required by the macOS framework bindings |
+| `PyYAML` | YAML parsing for CLI config import |
+| `jsonschema` | JSON Schema validation for imported CLI configs |
+| `jsonschema-specifications` | Bundled JSON Schema metaschemas used by `jsonschema` |
+| `referencing` | Reference resolution support used by `jsonschema` |
+| `rpds-py` | Performance-oriented data structures used by `jsonschema` |
+| `attrs` | Shared utility dependency used by the schema-validation stack |
+| `typing-extensions` | Backported typing helpers required by some dependencies |
+| `pyinstaller` | Build-time dependency for packaging standalone app bundles |
+
+### Linux Device Permissions
+
+Mouser's Linux portable build runs as a normal user. HID++ features need
+Logitech `hidraw` access, while button remapping needs readable
+`/dev/input/event*` nodes and writable `/dev/uinput`. If Mouser sees the mouse
+only when launched with `sudo`, install the bundled udev rule instead of
+running the app as root:
+
+```bash
+cd /path/to/extracted/Mouser
+./install-linux-permissions.sh
+```
+
+When running from source, use the same helper from the checkout:
+
+```bash
+./packaging/linux/install-linux-permissions.sh
+```
+
+The helper installs `69-mouser-logitech.rules`, reloads udev, and tries to load
+`uinput`. Reconnect the mouse, fully quit Mouser, and launch it normally. If a
+desktop launcher or autostart entry still cannot access the devices, log out and
+back in once so the session receives fresh device ACLs. On systems without
+logind/uaccess support, adding the user to the `input` group may still be
+required as a distro-specific fallback.
+
+### Running
+
+```bash
+# Option A: Run directly
+python main_qml.py
+
+# Option B: Start directly in the tray / menu bar
+python main_qml.py --start-hidden
+
+# Option C: Use the batch file (shows a console window)
+Mouser.bat
+
+# Option D: Use the desktop shortcut (no console window)
+# Double-click Mouser.lnk
+
+# Option E: Use the CLI
+python main_cli.py [...args]
+```
+
+> **Tip:** To run without a console window, use `pythonw.exe main_qml.py` or the `.lnk` shortcut.
+> On macOS, `--start-hidden` is the same tray-first startup path used when you launch Mouser directly in the background. The login item uses your saved startup settings.
+
+Temporary macOS transport override for debugging:
+
+```bash
+python main_qml.py --hid-backend=iokit
+python main_qml.py --hid-backend=hidapi
+python main_qml.py --hid-backend=auto
+```
+
+Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`;
+`hidapi` and `auto` remain available as manual overrides for debugging. Other
+platforms continue to default to `auto`.
+
+### Creating a Desktop Shortcut
+
+A `Mouser.lnk` shortcut is included. To create one manually:
 
 ```powershell
 .\.venv\Scripts\activate
@@ -306,9 +387,10 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 - [ ] **Improved scroll inversion** — explore driver-level or interception-driver approaches
 - [ ] **Gesture swipe tuning** — improve swipe reliability and defaults across more devices
 - [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
-- [ ] **Export / import config** — share configurations between machines
-- [ ] **Tray icon badge** — show the active profile name in the tray tooltip
-- [ ] **Broader Wayland support** — extend app detection beyond X11 / KDE and validate across more distros
+- [x] **Export/import config** — share configurations between machines (CLI only for now)
+- [ ] **Tray icon badge** — show active profile name in tray tooltip
+- [x] **macOS support** — added via CGEventTap, Quartz CGEvent, and NSWorkspace
+- [ ] **Broader Wayland support and Linux validation** — extend app detection beyond KDE Wayland / X11 and validate across more distros and desktop environments
 - [ ] **Plugin system** — allow third-party action providers
 
 ---

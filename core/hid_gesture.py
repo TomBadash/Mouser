@@ -684,6 +684,11 @@ def _parse(raw):
     return dev, feat, func, sw, params
 
 
+def _decode_s8(value):
+    value = int(value) & 0xFF
+    return value - 0x100 if value & 0x80 else value
+
+
 def _hex_bytes(data):
     if not data:
         return "-"
@@ -745,6 +750,13 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        self._last_reported_cids = None
+        self._last_rawxy_diag = None
+        self._last_feat_report_diag = None
+        self._rx_sequence = 0
+        self._last_short_report_diag = None
+        self._short_report_prev_xy = None
+        self._short_report_origin_xy = None
 
     # ── public API ────────────────────────────────────────────────
 
@@ -943,6 +955,11 @@ class HidGestureListener:
         for i, b in enumerate(params):
             if 4 + i < LONG_LEN:
                 buf[4 + i] = b & 0xFF
+        print(
+            "[HidGesture] TX "
+            f"rid=0x{LONG_ID:02X} dev=0x{self._dev_idx:02X} feat=0x{feat:02X} "
+            f"func=0x{func:X} params=[{_hex_bytes(params)}] raw=[{_hex_bytes(buf)}]"
+        )
         self._dev.write(buf)
 
     def _rx(self, timeout_ms=2000):
@@ -953,7 +970,16 @@ class HidGestureListener:
         if dev is None:
             return None
         d = dev.read(64, timeout_ms)
-        return list(d) if d else None
+        if not d:
+            return None
+        raw = list(d)
+        self._rx_sequence += 1
+        print(
+            "[HidGesture] RX "
+            f"#{self._rx_sequence} timeout_ms={timeout_ms} "
+            f"bytes=[{_hex_bytes(raw)}]"
+        )
+        return raw
 
     def _request(self, feat, func, params, timeout_ms=2000):
         """Send a long HID++ request, wait for matching response."""
@@ -1169,7 +1195,16 @@ class HidGestureListener:
             if raw_xy_capable and virtual_or_named and flags & 0x0020:
                 add_candidate(cid)
 
-        return ordered or list(preferred)
+        ordered = ordered or list(preferred)
+
+        # On macOS, some devices expose both the physical gesture button
+        # (0x00C3) and a virtual gesture button (0x00D7). Prefer the
+        # virtual CID first when both are present; it tends to provide a
+        # cleaner logical press/release stream for gesture handling.
+        if sys.platform == "darwin" and 0x00D7 in ordered and 0x00C3 in ordered:
+            ordered = [0x00D7] + [cid for cid in ordered if cid != 0x00D7]
+
+        return ordered
 
     def _divert(self):
         """Divert the selected gesture control and enable raw XY when supported."""
@@ -1180,13 +1215,19 @@ class HidGestureListener:
             resp = self._set_cid_reporting(cid, 0x33)
             if resp is not None:
                 self._rawxy_enabled = True
-                print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
+                print(
+                    f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK "
+                    f"(selected gesture CID={_format_cid(self._gesture_cid)})"
+                )
                 return True
             self._rawxy_enabled = False
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
-            print(f"[HidGesture] Divert {_format_cid(cid)}: "
-                  f"{'OK' if ok else 'FAILED'}")
+            print(
+                f"[HidGesture] Divert {_format_cid(cid)}: "
+                f"{'OK' if ok else 'FAILED'} "
+                f"(selected gesture CID={_format_cid(self._gesture_cid)})"
+            )
             if ok:
                 return True
         self._gesture_cid = DEFAULT_GESTURE_CID
@@ -1521,6 +1562,8 @@ class HidGestureListener:
         if self._held:
             self._held = False
             print("[HidGesture] Gesture force-released (stale hold)")
+            self._short_report_prev_xy = None
+            self._short_report_origin_xy = None
             if self._on_up:
                 try:
                     self._on_up()
@@ -1539,21 +1582,50 @@ class HidGestureListener:
 
     def _on_report(self, raw):
         """Inspect an incoming HID++ report for diverted button / raw XY events."""
+        if self._on_short_report(raw):
+            return
         msg = _parse(raw)
         if msg is None:
+            print(f"[HidGesture] Unparsed report raw=[{_hex_bytes(raw)}]")
             return
-        _, feat, func, _sw, params = msg
+        report_id, feat, func, sw, params = msg
 
         if feat != self._feat_idx:
             return
 
+        feat_diag = (report_id, feat, func, sw, tuple(params))
+        self._last_feat_report_diag = feat_diag
+        print(
+            "[HidGesture] Feature report "
+            f"rid=0x{report_id:02X} feat=0x{feat:02X} "
+            f"func=0x{func:X} sw=0x{sw:01X} "
+            f"params=[{_hex_bytes(params)}] raw=[{_hex_bytes(raw)}]"
+        )
+
         if func == 1:
             if not self._rawxy_enabled:
+                print(
+                    "[HidGesture] Ignoring func=0x1 report because RawXY "
+                    "is not enabled"
+                )
                 return
-            if len(params) < 4 or not self._held:
+            if len(params) < 4:
+                print(
+                    "[HidGesture] Ignoring short RawXY report "
+                    f"params=[{_hex_bytes(params)}]"
+                )
                 return
             dx = self._decode_s16(params[0], params[1])
             dy = self._decode_s16(params[2], params[3])
+            rawxy_diag = (dx, dy, self._held)
+            self._last_rawxy_diag = rawxy_diag
+            print(
+                "[HidGesture] RawXY report "
+                f"dx={dx} dy={dy} held={self._held} "
+                f"selected gesture CID={_format_cid(self._gesture_cid)}"
+            )
+            if not self._held:
+                return
             if (dx or dy) and self._on_move:
                 try:
                     self._on_move(dx, dy)
@@ -1562,6 +1634,10 @@ class HidGestureListener:
             return
 
         if func != 0:
+            print(
+                "[HidGesture] Unhandled feature report "
+                f"func=0x{func:X} params=[{_hex_bytes(params)}]"
+            )
             return
 
         # Params: sequential CID pairs terminated by 0x0000
@@ -1573,6 +1649,15 @@ class HidGestureListener:
                 break
             cids.add(c)
             i += 2
+
+        reported_cids = tuple(sorted(cids))
+        self._last_reported_cids = reported_cids
+        formatted = ", ".join(_format_cid(cid) for cid in reported_cids) or "-"
+        print(
+            "[HidGesture] Button CID report "
+            f"selected={_format_cid(self._gesture_cid)} "
+            f"reported=[{formatted}] held={self._held}"
+        )
 
         gesture_now = self._gesture_cid in cids
 
@@ -1615,6 +1700,80 @@ class HidGestureListener:
                         cb()
                     except Exception as e:
                         print(f"[HidGesture] extra up callback error: {e}")
+
+    def _on_short_report(self, raw):
+        """Handle the short 8-byte report shape seen on some macOS devices.
+
+        Observed pattern:
+        - byte0 == 0x02
+        - byte1 bit 0x20 reflects gesture-button held state
+        - bytes3/4 appear to carry small signed movement deltas while held
+        """
+        if len(raw) != 8 or raw[0] != 0x02:
+            return False
+
+        held_now = bool(raw[1] & 0x20)
+        x = _decode_s8(raw[3])
+        # The short 0x02 macOS report stream appears to encode vertical
+        # movement with the opposite sign from the long RawXY path.
+        y = -_decode_s8(raw[4])
+        diag = (held_now, x, y, tuple(raw))
+        self._last_short_report_diag = diag
+        print(
+            "[HidGesture] Short report "
+            f"held={held_now} x={x} y={y} bytes=[{_hex_bytes(raw)}]"
+        )
+        if held_now and not self._held:
+            self._held = True
+            self._short_report_prev_xy = (x, y)
+            self._short_report_origin_xy = (x, y)
+            print("[HidGesture] Gesture DOWN (short report)")
+            if self._on_down:
+                try:
+                    self._on_down()
+                except Exception as e:
+                    print(f"[HidGesture] down callback error: {e}")
+        elif not held_now and self._held:
+            self._held = False
+            self._short_report_prev_xy = None
+            self._short_report_origin_xy = None
+            print("[HidGesture] Gesture UP (short report)")
+            if self._on_up:
+                try:
+                    self._on_up()
+                except Exception as e:
+                    print(f"[HidGesture] up callback error: {e}")
+
+        rel_x = 0
+        rel_y = 0
+        if held_now:
+            prev = self._short_report_prev_xy
+            origin = self._short_report_origin_xy
+            if prev is None:
+                self._short_report_prev_xy = (x, y)
+            elif abs(x - prev[0]) > 48 or abs(y - prev[1]) > 48:
+                print(
+                    "[HidGesture] Short report outlier ignored "
+                    f"x={x} y={y} prev_x={prev[0]} prev_y={prev[1]} held={held_now}"
+                )
+            else:
+                self._short_report_prev_xy = (x, y)
+                if origin is None:
+                    self._short_report_origin_xy = (x, y)
+                    origin = self._short_report_origin_xy
+                rel_x = x - origin[0]
+                rel_y = y - origin[1]
+
+        if held_now and (rel_x or rel_y) and self._on_move:
+            print(
+                "[HidGesture] Short report move "
+                f"rel_x={rel_x} rel_y={rel_y} held={held_now}"
+            )
+            try:
+                self._on_move(rel_x, rel_y, {"mode": "absolute"})
+            except Exception as e:
+                print(f"[HidGesture] move callback error: {e}")
+        return True
 
     # ── connect / main loop ───────────────────────────────────────
 
@@ -1903,6 +2062,7 @@ class HidGestureListener:
             self._consecutive_request_timeouts = 0
             if self._held:
                 self._held = False
+                self._short_report_prev_xy = None
                 print("[HidGesture] Gesture force-released on disconnect")
                 if self._on_up:
                     try:

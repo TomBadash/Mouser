@@ -1,7 +1,15 @@
-pyinstaller>=6.0
-hidapi>=0.14
-PySide6>=6.6
 Pillow>=10.0
-pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
-pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+PySide6>=6.6
+attrs==26.1.0
 evdev>=1.6; sys_platform == "linux"
+hidapi>=0.14
+jsonschema-specifications==2025.9.1
+jsonschema==4.26.0
+pyinstaller>=6.0
+pyobjc-core==12.1
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyyaml==6.0.3
+referencing==0.37.0
+rpds-py==0.30.0
+typing-extensions==4.15.0
