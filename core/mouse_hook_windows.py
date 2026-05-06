@@ -241,7 +241,7 @@ class MouseHook(BaseMouseHook):
         self._startup_ok = False
         self._prev_raw_buttons = {}
         self._last_rehook_time = 0
-        self._dispatch_queue = queue.Queue()
+        self._init_dispatch_queue(maxsize=512)
         self._dispatch_worker_thread = None
 
     def _accumulate_gesture_delta(self, delta_x, delta_y, source):
@@ -466,7 +466,7 @@ class MouseHook(BaseMouseHook):
                         )
 
             if event:
-                self._dispatch_queue.put(event)
+                self._enqueue_dispatch_event(event)
                 if should_block:
                     return 1
 
