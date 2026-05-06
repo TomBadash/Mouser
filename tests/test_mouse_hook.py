@@ -1,4 +1,5 @@
 import importlib
+import queue
 import sys
 import unittest
 from types import SimpleNamespace
@@ -81,6 +82,37 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
         self.assertTrue(state.input_ready)
         self.assertTrue(state.hid_ready)
         self.assertIs(state.connected_device, device)
+
+
+
+class BaseMouseHookDispatchQueueTests(unittest.TestCase):
+    def test_enqueue_keeps_queue_bounded_and_drops_oldest(self):
+        hook = BaseMouseHook()
+        hook._init_dispatch_queue(maxsize=2)
+
+        hook._enqueue_dispatch_event(SimpleNamespace(event_type="e1", raw_data=None))
+        hook._enqueue_dispatch_event(SimpleNamespace(event_type="e2", raw_data=None))
+        hook._enqueue_dispatch_event(SimpleNamespace(event_type="e3", raw_data=None))
+
+        self.assertEqual(hook._dispatch_queue.qsize(), 2)
+        first = hook._dispatch_queue.get_nowait()
+        second = hook._dispatch_queue.get_nowait()
+        self.assertEqual(first.event_type, "e2")
+        self.assertEqual(second.event_type, "e3")
+
+    def test_enqueue_drops_and_emits_debug_when_still_full(self):
+        hook = BaseMouseHook()
+        hook._init_dispatch_queue(maxsize=1)
+        hook.debug_mode = True
+        hook.set_debug_callback(Mock())
+
+        hook._dispatch_queue.put_nowait(SimpleNamespace(event_type="old", raw_data=None))
+        with patch.object(hook._dispatch_queue, "get_nowait", side_effect=queue.Empty):
+            with patch.object(hook._dispatch_queue, "put_nowait", side_effect=[queue.Full, queue.Full]):
+                hook._enqueue_dispatch_event(SimpleNamespace(event_type="new", raw_data=None))
+
+        hook._debug_callback.assert_called_once()
+        self.assertIn("Dropped event due to full dispatch queue", hook._debug_callback.call_args[0][0])
 
 
 class LinuxMouseHookReconnectTests(unittest.TestCase):
