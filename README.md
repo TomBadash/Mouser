@@ -120,7 +120,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Windows, macOS, and Linux** — native hooks per platform (`WH_MOUSE_LL`, `CGEventTap`, `evdev` + `uinput`).
 - **Native Intel and Apple Silicon macOS builds** — separate `Mouser-macOS-intel.zip` and `Mouser-macOS.zip` artifacts; the menu-bar app runs as `LSUIElement` (no Dock icon).
 - **Resizable UI** — main window starts at 1060 × 700 with a 920 × 620 minimum; the mouse diagram and controls reflow as you resize.
-- **Start at login** — Windows registry key on Windows, per-user LaunchAgent on macOS, with an independent **Start minimized** option that boots straight into the tray.
+- **Start at login** — Windows registry key, macOS LaunchAgent, and Linux XDG autostart, with an independent **Start minimized** option that boots straight into the tray.
 - **Single-instance guard** — launching a second copy brings the existing window to the front instead of starting a duplicate.
 
 ### Smart connectivity
@@ -276,6 +276,18 @@ pyinstaller Mouser-linux.spec --noconfirm
 ```
 
 The helper installs `69-mouser-logitech.rules`, reloads `udev`, and tries to `modprobe uinput`. After a successful run, reconnect the mouse, fully quit Mouser, and launch normally — no `sudo`. On systems without logind / `uaccess`, adding the user to the `input` group is the distro-specific fallback.
+
+The first normal Linux launch creates or refreshes:
+
+```text
+~/.local/share/applications/io.github.tombadash.mouser.desktop
+```
+
+The generated launcher uses absolute paths for the current portable app or source checkout. If you move the checkout, launch Mouser once from the new path to refresh the app-menu entry. Enabling **Start at login** also manages:
+
+```text
+~/.config/autostart/io.github.tombadash.mouser.desktop
+```
 
 `xdotool` enables per-app profile switching on X11; `kdotool` adds KDE Wayland support. Other Wayland compositors fall back to the default profile.
 

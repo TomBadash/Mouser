@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=@APP_NAME@
+Comment=Logitech mouse remapper
+Exec=@EXEC@
+TryExec=@TRY_EXEC@
+Path=@WORKDIR@
+Icon=@ICON@
+Terminal=false
+StartupNotify=false
+Categories=Settings;Utility;
+Keywords=mouse;logitech;buttons;remap;
+StartupWMClass=Mouser
+X-Mouser-Generated=true
+X-Mouser-SourcePath=@SOURCE_PATH@
+@AUTOSTART_LINES@

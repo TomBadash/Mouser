@@ -238,7 +238,10 @@ class Backend(QObject):
                 getattr(engine, "hid_features_ready", False)
             )
         if supports_login_startup():
-            sync_login_startup_from_config(self.startAtLogin)
+            try:
+                sync_login_startup_from_config(self.startAtLogin)
+            except Exception as exc:
+                print(f"[startup] Failed to sync desktop integration: {exc}", file=sys.stderr)
         else:
             self._cfg.setdefault("settings", {})["start_at_login"] = False
         self._sync_connected_device_info()
@@ -664,9 +667,7 @@ class Backend(QObject):
     def setStartAtLogin(self, value):
         enabled = bool(value)
         if not supports_login_startup():
-            self.statusMessage.emit(
-                "Start at login is only available on Windows and macOS"
-            )
+            self.statusMessage.emit("Start at login is not available on this platform")
             return
         if self.startAtLogin == enabled:
             return

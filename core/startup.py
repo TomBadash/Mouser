@@ -1,4 +1,4 @@
-"""Cross-platform login startup: Windows HKCU Run and macOS LaunchAgent."""
+"""Cross-platform login startup helpers for Windows, macOS, and Linux."""
 
 import os
 import plistlib
@@ -13,9 +13,14 @@ RUN_VALUE_NAME = "Mouser"
 MACOS_LAUNCH_AGENT_LABEL = "io.github.tombadash.mouser"
 MACOS_PLIST_NAME = f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
 
+# Linux
+LINUX_DESKTOP_ENTRY_NAME = "io.github.tombadash.mouser.desktop"
+LINUX_DESKTOP_TEMPLATE_NAME = f"{LINUX_DESKTOP_ENTRY_NAME}.in"
+APP_DISPLAY_NAME = "Mouser"
+
 
 def supports_login_startup():
-    return sys.platform in ("win32", "darwin")
+    return sys.platform in ("win32", "darwin", "linux")
 
 
 def _quote_arg(s: str) -> str:
@@ -42,6 +47,124 @@ def _program_arguments():
     if getattr(sys, "frozen", False):
         return [exe]
     return [exe, os.path.abspath(sys.argv[0])]
+
+
+def _runtime_root_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    script_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath(__file__)
+    return os.path.dirname(script_path)
+
+
+def _desktop_exec_parts():
+    exe = os.path.abspath(sys.executable)
+    if getattr(sys, "frozen", False):
+        return [exe]
+    script_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath(__file__)
+    return [exe, script_path]
+
+
+def _desktop_exec_arg(arg: str) -> str:
+    if not arg:
+        return '""'
+    if all(ch not in arg for ch in ' \t\n"\\`$'):
+        return arg
+    escaped = (
+        arg.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("`", "\\`")
+        .replace("$", "\\$")
+    )
+    return f'"{escaped}"'
+
+
+def _desktop_exec_string(args: list[str]) -> str:
+    return " ".join(_desktop_exec_arg(arg) for arg in args)
+
+
+def _repo_root_dir() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _linux_template_path() -> str:
+    return os.path.join(
+        _repo_root_dir(),
+        "packaging",
+        "linux",
+        LINUX_DESKTOP_TEMPLATE_NAME,
+    )
+
+
+def _linux_desktop_path() -> str:
+    return os.path.expanduser(
+        os.path.join("~", ".local", "share", "applications", LINUX_DESKTOP_ENTRY_NAME)
+    )
+
+
+def _linux_autostart_path() -> str:
+    return os.path.expanduser(
+        os.path.join("~", ".config", "autostart", LINUX_DESKTOP_ENTRY_NAME)
+    )
+
+
+def _linux_icon_path() -> str:
+    runtime_icon = os.path.join(_runtime_root_dir(), "images", "logo_icon.png")
+    if os.path.isfile(runtime_icon):
+        return runtime_icon
+    return os.path.join(_repo_root_dir(), "images", "logo_icon.png")
+
+
+def _linux_source_path() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable)
+    if sys.argv:
+        return os.path.abspath(sys.argv[0])
+    return os.path.join(_repo_root_dir(), "main_qml.py")
+
+
+def _linux_template_text() -> str:
+    with open(_linux_template_path(), "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _render_linux_desktop_entry(*, autostart: bool) -> str:
+    autostart_lines = ""
+    if autostart:
+        autostart_lines = "\n".join(
+            [
+                "X-GNOME-Autostart-enabled=true",
+                "Hidden=false",
+            ]
+        )
+    entry = _linux_template_text()
+    replacements = {
+        "@APP_NAME@": APP_DISPLAY_NAME,
+        "@EXEC@": _desktop_exec_string(_desktop_exec_parts()),
+        "@TRY_EXEC@": _desktop_exec_parts()[0],
+        "@WORKDIR@": _runtime_root_dir(),
+        "@ICON@": _linux_icon_path(),
+        "@SOURCE_PATH@": _linux_source_path(),
+        "@AUTOSTART_LINES@": autostart_lines,
+    }
+    for placeholder, value in replacements.items():
+        entry = entry.replace(placeholder, value)
+    return entry.rstrip() + "\n"
+
+
+def _write_linux_desktop_entry(path: str, *, autostart: bool) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(_render_linux_desktop_entry(autostart=autostart))
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
+
+
+def ensure_linux_launcher() -> str:
+    launcher_path = _linux_desktop_path()
+    _write_linux_desktop_entry(launcher_path, autostart=False)
+    return launcher_path
 
 
 def _get_winreg():
@@ -126,6 +249,22 @@ def _apply_macos(enabled: bool) -> None:
             )
 
 
+def _apply_linux(enabled: bool) -> None:
+    if sys.platform != "linux":
+        return
+    ensure_linux_launcher()
+    autostart_path = _linux_autostart_path()
+    if enabled:
+        _write_linux_desktop_entry(autostart_path, autostart=True)
+        return
+    try:
+        os.remove(autostart_path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def apply_login_startup(enabled: bool) -> None:
     if not supports_login_startup():
         return
@@ -133,6 +272,8 @@ def apply_login_startup(enabled: bool) -> None:
         _apply_windows(enabled)
     elif sys.platform == "darwin":
         _apply_macos(enabled)
+    elif sys.platform == "linux":
+        _apply_linux(enabled)
 
 
 def sync_from_config(enabled: bool) -> None:

@@ -75,6 +75,7 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         with (
             patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
             patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
         ):
             return Backend(engine=engine, root_dir=root_dir)
 
