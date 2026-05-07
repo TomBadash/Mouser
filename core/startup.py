@@ -16,6 +16,7 @@ MACOS_PLIST_NAME = f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
 # Linux
 LINUX_DESKTOP_ENTRY_NAME = "io.github.tombadash.mouser.desktop"
 LINUX_DESKTOP_TEMPLATE_NAME = f"{LINUX_DESKTOP_ENTRY_NAME}.in"
+LINUX_AUTOSTART_DELAY_SECONDS = 15
 APP_DISPLAY_NAME = "Mouser"
 
 
@@ -150,6 +151,7 @@ def _render_linux_desktop_entry(*, autostart: bool) -> str:
         autostart_lines = "\n".join(
             [
                 "X-GNOME-Autostart-enabled=true",
+                f"X-GNOME-Autostart-Delay={LINUX_AUTOSTART_DELAY_SECONDS}",
                 "Hidden=false",
             ]
         )

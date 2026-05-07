@@ -326,6 +326,10 @@ X-Mouser-SourcePath=@SOURCE_PATH@
         self.assertIn("X-Mouser-SourcePath=/tmp/Mouser Build/main_qml.py", launcher_text)
         self.assertNotIn("X-GNOME-Autostart-enabled=true", launcher_text)
         self.assertIn("X-GNOME-Autostart-enabled=true", autostart_text)
+        self.assertIn(
+            f"X-GNOME-Autostart-Delay={st.LINUX_AUTOSTART_DELAY_SECONDS}",
+            autostart_text,
+        )
         self.assertIn("Hidden=false", autostart_text)
 
     def test_linux_disable_removes_autostart_but_keeps_launcher(self):

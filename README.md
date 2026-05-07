@@ -120,7 +120,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Windows, macOS, and Linux** — native hooks per platform (`WH_MOUSE_LL`, `CGEventTap`, `evdev` + `uinput`).
 - **Native Intel and Apple Silicon macOS builds** — separate `Mouser-macOS-intel.zip` and `Mouser-macOS.zip` artifacts; the menu-bar app runs as `LSUIElement` (no Dock icon).
 - **Resizable UI** — main window starts at 1060 × 700 with a 920 × 620 minimum; the mouse diagram and controls reflow as you resize.
-- **Start at login** — Windows registry key, macOS LaunchAgent, and Linux XDG autostart, with an independent **Start minimized** option that boots straight into the tray.
+- **Start at login** — Windows registry key, macOS LaunchAgent, and Linux XDG autostart, with an independent **Start minimized** option that boots straight into the tray. Linux autostart intentionally waits about 15 seconds after login so Bluetooth / HID devices are usually ready before Mouser restores device settings.
 - **Single-instance guard** — launching a second copy brings the existing window to the front instead of starting a duplicate.
 
 ### Smart connectivity
@@ -288,6 +288,8 @@ The generated launcher uses absolute paths for the current portable app or sourc
 ```text
 ~/.config/autostart/io.github.tombadash.mouser.desktop
 ```
+
+That Linux autostart entry includes a short GNOME startup delay so Mouser does not race Bluetooth / HID initialization immediately after login.
 
 `xdotool` enables per-app profile switching on X11; `kdotool` adds KDE Wayland support. Other Wayland compositors fall back to the default profile.
 
