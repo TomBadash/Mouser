@@ -56,11 +56,22 @@ def _runtime_root_dir() -> str:
     return os.path.dirname(script_path)
 
 
+def _source_checkout_python() -> str | None:
+    root_dir = _runtime_root_dir()
+    if sys.platform == "win32":
+        candidate = os.path.join(root_dir, ".venv", "Scripts", "python.exe")
+    else:
+        candidate = os.path.join(root_dir, ".venv", "bin", "python")
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 def _desktop_exec_parts():
-    exe = os.path.abspath(sys.executable)
     if getattr(sys, "frozen", False):
-        return [exe]
+        return [os.path.abspath(sys.executable)]
     script_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath(__file__)
+    exe = _source_checkout_python() or os.path.abspath(sys.executable)
     return [exe, script_path]
 
 
