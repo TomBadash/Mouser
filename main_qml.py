@@ -82,6 +82,7 @@ def _parse_cli_args(argv):
     qt_argv = [argv[0]]
     hid_backend = None
     start_hidden = False
+    force_show = False
     i = 1
     while i < len(argv):
         arg = argv[i]
@@ -99,9 +100,13 @@ def _parse_cli_args(argv):
             start_hidden = True
             i += 1
             continue
+        if arg == "--show-window":
+            force_show = True
+            i += 1
+            continue
         qt_argv.append(arg)
         i += 1
-    return qt_argv, hid_backend, start_hidden
+    return qt_argv, hid_backend, start_hidden, force_show
 
 
 _SINGLE_INSTANCE_ACTIVATE_MSG = b"show"
@@ -387,10 +392,13 @@ def _runtime_launch_path() -> str:
 def main():
     _print_startup_times()
     _t5 = _time.perf_counter()
-    argv, hid_backend, start_hidden = _parse_cli_args(sys.argv)
+    argv, hid_backend, start_hidden, force_show = _parse_cli_args(sys.argv)
     cfg = load_config()
     cfg_settings = cfg.get("settings", {})
-    launch_hidden = start_hidden or bool(cfg_settings.get("start_minimized", False))
+    launch_hidden = (
+        not force_show
+        and (start_hidden or bool(cfg_settings.get("start_minimized", False)))
+    )
     if hid_backend:
         try:
             set_hid_backend_preference(hid_backend)
@@ -470,8 +478,18 @@ def main():
 
     root_window = qml_engine.rootObjects()[0]
 
+    def _sync_linux_ui_passthrough(*_args):
+        if sys.platform != "linux":
+            return
+        engine.set_ui_passthrough(bool(root_window.isVisible()))
+
+    root_window.activeChanged.connect(_sync_linux_ui_passthrough)
+    root_window.visibilityChanged.connect(_sync_linux_ui_passthrough)
+    app.applicationStateChanged.connect(_sync_linux_ui_passthrough)
+    _sync_linux_ui_passthrough()
+
     def show_main_window():
-        root_window.show()
+        root_window.showNormal()
         root_window.raise_()
         root_window.requestActivate()
         _activate_macos_window()
@@ -489,6 +507,9 @@ def main():
 
     # ── Accessibility check (macOS) ──────────────────────────────
     _check_accessibility(locale_mgr)
+
+    if sys.platform == "linux":
+        engine.set_ui_passthrough(not launch_hidden)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
     from PySide6.QtCore import QTimer

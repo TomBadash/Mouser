@@ -766,6 +766,10 @@ class Engine:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
+    def set_ui_passthrough(self, enabled):
+        if hasattr(self.hook, "set_ui_passthrough"):
+            self.hook.set_ui_passthrough(enabled)
+
     def _emit_linux_permission_warning(self):
         report = linux_permission_report()
         log_message = linux_permission_log_message(report)

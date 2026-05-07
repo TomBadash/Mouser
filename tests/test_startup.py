@@ -261,6 +261,22 @@ class ApplyLoginStartupLinuxTests(unittest.TestCase):
             ["/tmp/Mouser/.venv/bin/python", "/tmp/Mouser/main_qml.py"],
         )
 
+    def test_linux_desktop_exec_can_force_visible_window(self):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.object(sys, "frozen", False, create=True),
+            patch.object(sys, "executable", "/usr/bin/python"),
+            patch.object(sys, "argv", ["/tmp/Mouser/main_qml.py"]),
+            patch("os.path.abspath", side_effect=lambda p: p),
+            patch("os.path.isfile", return_value=False),
+        ):
+            args = st._desktop_exec_parts(force_show=True)
+
+        self.assertEqual(
+            args,
+            ["/usr/bin/python", "/tmp/Mouser/main_qml.py", "--show-window"],
+        )
+
     def test_linux_enable_writes_launcher_and_autostart_entries(self):
         template = """[Desktop Entry]
 Name=@APP_NAME@

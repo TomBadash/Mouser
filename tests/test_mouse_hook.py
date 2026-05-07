@@ -14,7 +14,12 @@ class _FakeEvdevDevice:
         self.name = name
         self.path = path
         self.fd = fd
-        self.info = SimpleNamespace(vendor=vendor, product=product)
+        self.info = SimpleNamespace(
+            vendor=vendor,
+            product=product,
+            version=1,
+            bustype=0x03,
+        )
         self._capabilities = capabilities
         self.grab = Mock()
         self.ungrab = Mock()
@@ -47,10 +52,13 @@ class _CapturingListener:
 
 
 class _FakeLinuxEcodes:
+    EV_SYN = 0x00
     EV_REL = 0x02
     EV_KEY = 0x01
     REL_X = 0x00
     REL_Y = 0x01
+    REL_WHEEL = 0x08
+    REL_HWHEEL = 0x06
     BTN_LEFT = 0x110
     BTN_RIGHT = 0x111
     BTN_MIDDLE = 0x112
@@ -59,9 +67,12 @@ class _FakeLinuxEcodes:
 
 
 class _FakeLinuxUInput:
-    @staticmethod
-    def from_device(*_args, **_kwargs):
-        return Mock()
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.write_event = Mock()
+        self.write = Mock()
+        self.close = Mock()
 
 
 class BaseMouseHookRuntimeStateTests(unittest.TestCase):
@@ -94,8 +105,11 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch.object(sys, "platform", "linux"),
             patch.dict(sys.modules, {"evdev": fake_evdev}),
         ):
+            from core import mouse_hook_linux
+            importlib.reload(mouse_hook_linux)
             importlib.reload(mouse_hook)
         self.addCleanup(importlib.reload, mouse_hook)
+        self.addCleanup(importlib.reload, mouse_hook_linux)
         return mouse_hook
 
     def _fake_caps(self, module, *, include_side=True):
@@ -357,7 +371,6 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
         with (
             patch.object(hook, "_find_mouse_device", return_value=logi),
-            patch.object(module._UInput, "from_device", return_value=Mock()),
         ):
             self.assertTrue(hook._setup_evdev())
 
@@ -369,6 +382,49 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertEqual(
             getattr(hook.hid_runtime_state.connected_device, "source", None),
             "evdev",
+        )
+
+    def test_filtered_uinput_events_drop_hi_res_wheel_codes(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        module._ecodes.EV_FF = 0x15
+        module._ecodes.REL_WHEEL_HI_RES = 0x0B
+        module._ecodes.REL_HWHEEL_HI_RES = 0x0C
+        dev = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event1",
+            vendor=module._LOGI_VENDOR,
+            capabilities={
+                module._ecodes.EV_SYN: [0, 1, 2],
+                module._ecodes.EV_REL: [
+                    module._ecodes.REL_X,
+                    module._ecodes.REL_Y,
+                    module._ecodes.REL_WHEEL,
+                    module._ecodes.REL_HWHEEL,
+                    module._ecodes.REL_WHEEL_HI_RES,
+                    module._ecodes.REL_HWHEEL_HI_RES,
+                ],
+                module._ecodes.EV_KEY: [
+                    module._ecodes.BTN_LEFT,
+                    module._ecodes.BTN_RIGHT,
+                    module._ecodes.BTN_MIDDLE,
+                ],
+                module._ecodes.EV_FF: [80],
+            },
+        )
+
+        events = hook._filtered_uinput_events(dev)
+
+        self.assertNotIn(module._ecodes.EV_SYN, events)
+        self.assertNotIn(module._ecodes.EV_FF, events)
+        self.assertEqual(
+            events[module._ecodes.EV_REL],
+            [
+                module._ecodes.REL_X,
+                module._ecodes.REL_Y,
+                module._ecodes.REL_WHEEL,
+                module._ecodes.REL_HWHEEL,
+            ],
         )
 
     def test_listen_loop_exits_when_rescan_is_requested(self):
@@ -447,6 +503,46 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             seen,
             [module.MouseEvent.GESTURE_CLICK, module.MouseEvent.GESTURE_CLICK],
         )
+
+    def test_ui_passthrough_does_not_mirror_ungrabbed_events(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        forwarded = Mock()
+        hook._uinput = SimpleNamespace(write_event=forwarded, write=Mock())
+        hook._dispatch = Mock()
+        hook.invert_vscroll = True
+        hook.set_ui_passthrough(True)
+
+        event = SimpleNamespace(
+            type=module._ecodes.EV_REL,
+            code=module._ecodes.REL_WHEEL,
+            value=1,
+        )
+
+        hook._handle_rel(event)
+
+        forwarded.assert_not_called()
+        hook._uinput.write.assert_not_called()
+        hook._dispatch.assert_not_called()
+
+    def test_ui_passthrough_releases_grab_and_wakes_evdev_loop(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        dev = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event1",
+            vendor=module._LOGI_VENDOR,
+            capabilities=self._fake_caps(module),
+        )
+        hook._evdev_device = dev
+        hook._evdev_grabbed = True
+
+        hook.set_ui_passthrough(True)
+        hook.set_ui_passthrough(False)
+
+        dev.ungrab.assert_called_once()
+        dev.grab.assert_called_once()
+        self.assertFalse(hook._rescan_requested.is_set())
 
     def test_mode_shift_callbacks_fire_again_after_reconnect(self):
         module = self._reload_for_linux()

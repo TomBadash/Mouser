@@ -1402,14 +1402,16 @@ Item {
                                     }
                                 }
 
-                                Slider {
+                                WheelSafeSlider {
                                     id: gestureThresholdSlider
                                     width: parent.width
                                     from: 20
                                     to: 400
                                     stepSize: 5
                                     value: backend.gestureThreshold
-                                    Material.accent: theme.accent
+                                    accentColor: theme.accent
+                                    accentDimColor: theme.accentDim
+                                    trackColor: theme.border
                                     onMoved: gestureThresholdSave.restart()
                                     onPressedChanged: {
                                         if (!pressed) {
@@ -1723,7 +1725,7 @@ Item {
                                             }
                                         }
 
-                                        Slider {
+                                        WheelSafeSlider {
                                             id: dpiPresetSlider
                                             width: parent.width
                                             from: backend.deviceDpiMin
@@ -1734,7 +1736,9 @@ Item {
                                                 var idx = dpiPresetsCard.activeSlot
                                                 return presets[idx] !== undefined ? presets[idx] : 1000
                                             }
-                                            Material.accent: dpiPresetsCard.slotColors[dpiPresetsCard.activeSlot]
+                                            accentColor: dpiPresetsCard.slotColors[dpiPresetsCard.activeSlot]
+                                            accentDimColor: Qt.rgba(0.5, 0.5, 0.5, 0.12)
+                                            trackColor: theme.border
                                             onMoved: {
                                                 backend.setDpiPreset(dpiPresetsCard.activeSlot, Math.round(value))
                                             }

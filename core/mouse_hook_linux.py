@@ -103,6 +103,8 @@ class MouseHook(BaseMouseHook):
         self._rescan_requested = threading.Event()
         self._evdev_wakeup = threading.Event()
         self._ignored_non_logitech = set()
+        self._ui_passthrough = False
+        self._evdev_grabbed = False
 
     @property
     def evdev_ready(self):
@@ -121,6 +123,42 @@ class MouseHook(BaseMouseHook):
             hid_ready=bool(self._hid_ready and hid_device is not None),
             connected_device=self._connected_device,
         )
+
+    def set_ui_passthrough(self, enabled):
+        enabled = bool(enabled)
+        if self._ui_passthrough == enabled:
+            return
+        self._ui_passthrough = enabled
+        if enabled:
+            self._release_evdev_grab()
+            self._rescan_requested.set()
+            self._evdev_wakeup.set()
+        else:
+            self._rescan_requested.clear()
+            self._acquire_evdev_grab()
+            self._evdev_wakeup.set()
+
+    def _acquire_evdev_grab(self):
+        dev = self._evdev_device
+        if dev is None or self._evdev_grabbed:
+            return
+        try:
+            dev.grab()
+            self._evdev_grabbed = True
+            print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
+        except Exception as exc:
+            print(f"[MouseHook] Failed to grab {getattr(dev, 'path', '?')}: {exc}")
+
+    def _release_evdev_grab(self):
+        dev = self._evdev_device
+        if dev is None or not self._evdev_grabbed:
+            return
+        try:
+            dev.ungrab()
+            self._evdev_grabbed = False
+            print(f"[MouseHook] Released grab for {dev.name} ({dev.path})")
+        except Exception as exc:
+            print(f"[MouseHook] Failed to ungrab {getattr(dev, 'path', '?')}: {exc}")
 
     def _set_evdev_ready(self, ready):
         if ready == self._evdev_ready:
@@ -290,6 +328,8 @@ class MouseHook(BaseMouseHook):
             self._dispatch(dispatch_event)
 
     def _on_hid_gesture_down(self):
+        if self._ui_passthrough:
+            return
         with self._gesture_lock:
             if not self._gesture_active:
                 self._gesture_active = True
@@ -303,6 +343,8 @@ class MouseHook(BaseMouseHook):
                     self._gesture_triggered = False
 
     def _on_hid_gesture_up(self):
+        if self._ui_passthrough:
+            return
         dispatch_click = False
         with self._gesture_lock:
             if self._gesture_active:
@@ -324,22 +366,32 @@ class MouseHook(BaseMouseHook):
             self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
+        if self._ui_passthrough:
+            return
         self._emit_debug("HID mode shift button down")
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
+        if self._ui_passthrough:
+            return
         self._emit_debug("HID mode shift button up")
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
+        if self._ui_passthrough:
+            return
         self._emit_debug("HID DPI switch button down")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
+        if self._ui_passthrough:
+            return
         self._emit_debug("HID DPI switch button up")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
+        if self._ui_passthrough:
+            return
         self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
         self._emit_gesture_event(
             {
@@ -528,12 +580,20 @@ class MouseHook(BaseMouseHook):
         if not dev:
             return False
         try:
-            self._uinput = _UInput.from_device(dev, name="Mouser Virtual Mouse")
-            dev.grab()
+            self._uinput = _UInput(
+                events=self._filtered_uinput_events(dev),
+                name="Mouser Virtual Mouse",
+                vendor=getattr(dev.info, "vendor", 1),
+                product=getattr(dev.info, "product", 1),
+                version=getattr(dev.info, "version", 1),
+                bustype=getattr(dev.info, "bustype", 0x03),
+            )
             self._evdev_device = dev
+            self._evdev_grabbed = False
+            if not self._ui_passthrough:
+                self._acquire_evdev_grab()
             self._evdev_connected_device = self._build_evdev_connected_device(dev)
             self._set_evdev_ready(True)
-            print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
             return True
         except PermissionError:
             print(
@@ -546,17 +606,41 @@ class MouseHook(BaseMouseHook):
             dev.close()
         return False
 
+    def _filtered_uinput_events(self, dev):
+        caps = dict(dev.capabilities(absinfo=False))
+        for filtered_type in (_ecodes.EV_SYN, getattr(_ecodes, "EV_FF", None)):
+            if filtered_type is not None:
+                caps.pop(filtered_type, None)
+        rel_type = _ecodes.EV_REL
+        rel_caps = list(caps.get(rel_type, []))
+        if not rel_caps:
+            return caps
+        hi_res_codes = {
+            getattr(_ecodes, "REL_WHEEL_HI_RES", None),
+            getattr(_ecodes, "REL_HWHEEL_HI_RES", None),
+        }
+        filtered_rel_caps = [code for code in rel_caps if code not in hi_res_codes]
+        if filtered_rel_caps == rel_caps:
+            return caps
+        if filtered_rel_caps:
+            caps[rel_type] = filtered_rel_caps
+        else:
+            caps.pop(rel_type, None)
+        print(
+            "[MouseHook] Filtering REL_WHEEL_HI_RES / "
+            "REL_HWHEEL_HI_RES from Mouser Virtual Mouse"
+        )
+        return caps
+
     def _cleanup_evdev(self):
         if self._evdev_device:
-            try:
-                self._evdev_device.ungrab()
-            except Exception:
-                pass
+            self._release_evdev_grab()
             try:
                 self._evdev_device.close()
             except Exception:
                 pass
             self._evdev_device = None
+            self._evdev_grabbed = False
             print("[MouseHook] evdev device released")
         if self._uinput:
             try:
@@ -605,6 +689,8 @@ class MouseHook(BaseMouseHook):
             for event in self._evdev_device.read():
                 if not self._running:
                     return
+                if self._ui_passthrough:
+                    continue
                 if event.type == _ecodes.EV_SYN:
                     self._uinput.write_event(event)
                 elif event.type == _ecodes.EV_KEY:
@@ -615,6 +701,8 @@ class MouseHook(BaseMouseHook):
                     self._uinput.write_event(event)
 
     def _handle_button(self, event):
+        if self._ui_passthrough:
+            return
         mouse_event = None
         should_block = False
 
@@ -649,6 +737,8 @@ class MouseHook(BaseMouseHook):
             self._uinput.write_event(event)
 
     def _handle_rel(self, event):
+        if self._ui_passthrough:
+            return
         code = event.code
         value = event.value
 

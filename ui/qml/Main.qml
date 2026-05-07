@@ -33,6 +33,13 @@ ApplicationWindow {
     property real hoveredNavCenterX: 0
     property real hoveredNavCenterY: 0
 
+    function openPage(page) {
+        if (root.currentPage === page)
+            return
+        root.currentPage = page
+        root.forceActiveFocus(Qt.OtherFocusReason)
+    }
+
     color: theme.bg
 
     Material.theme: darkMode ? Material.Dark : Material.Light
@@ -102,9 +109,9 @@ ApplicationWindow {
                             Accessible.name: lm.strings[modelData.tipKey] || modelData.tipKey
                             Accessible.description: "Open " + (lm.strings[modelData.tipKey] || modelData.tipKey)
 
-                            Keys.onReturnPressed: root.currentPage = modelData.page
-                            Keys.onEnterPressed: root.currentPage = modelData.page
-                            Keys.onSpacePressed: root.currentPage = modelData.page
+                            Keys.onReturnPressed: root.openPage(modelData.page)
+                            Keys.onEnterPressed: root.openPage(modelData.page)
+                            Keys.onSpacePressed: root.openPage(modelData.page)
 
                             Rectangle {
                                 anchors.centerIn: parent
@@ -152,7 +159,7 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentPage = modelData.page
+                                onClicked: root.openPage(modelData.page)
                                 onContainsMouseChanged: {
                                     if (containsMouse) {
                                         var p = navItem.mapToItem(overlayLayer, navItem.width, navItem.height / 2)

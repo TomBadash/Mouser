@@ -67,12 +67,18 @@ def _source_checkout_python() -> str | None:
     return None
 
 
-def _desktop_exec_parts():
+def _desktop_exec_parts(*, force_show: bool = False):
     if getattr(sys, "frozen", False):
-        return [os.path.abspath(sys.executable)]
+        args = [os.path.abspath(sys.executable)]
+        if force_show:
+            args.append("--show-window")
+        return args
     script_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath(__file__)
     exe = _source_checkout_python() or os.path.abspath(sys.executable)
-    return [exe, script_path]
+    args = [exe, script_path]
+    if force_show:
+        args.append("--show-window")
+    return args
 
 
 def _desktop_exec_arg(arg: str) -> str:
@@ -148,10 +154,11 @@ def _render_linux_desktop_entry(*, autostart: bool) -> str:
             ]
         )
     entry = _linux_template_text()
+    exec_parts = _desktop_exec_parts(force_show=not autostart)
     replacements = {
         "@APP_NAME@": APP_DISPLAY_NAME,
-        "@EXEC@": _desktop_exec_string(_desktop_exec_parts()),
-        "@TRY_EXEC@": _desktop_exec_parts()[0],
+        "@EXEC@": _desktop_exec_string(exec_parts),
+        "@TRY_EXEC@": exec_parts[0],
         "@WORKDIR@": _runtime_root_dir(),
         "@ICON@": _linux_icon_path(),
         "@SOURCE_PATH@": _linux_source_path(),

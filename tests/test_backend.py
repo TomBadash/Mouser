@@ -186,6 +186,35 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(mouse_notifications, [])
         self.assertEqual(hid_notifications, [True])
 
+    def test_retry_refresh_promotes_late_hid_features_ready(self):
+        device = SimpleNamespace(
+            key="mx_master_3",
+            display_name="MX Master 3S",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master",
+        )
+        engine = _FakeEngine(
+            device_connected=True,
+            connected_device=None,
+            hid_features_ready=False,
+            smart_shift_supported=False,
+        )
+        backend = self._make_backend(engine=engine)
+        backend._mouse_connected = True
+        hid_notifications = []
+        backend.hidFeaturesReadyChanged.connect(lambda: hid_notifications.append(True))
+
+        engine.connected_device = device
+        engine.hid_features_ready = True
+        engine.smart_shift_supported = True
+        backend._refresh_connected_device_info()
+
+        self.assertTrue(backend.hidFeaturesReady)
+        self.assertTrue(backend.smartShiftSupported)
+        self.assertEqual(backend.connectedDeviceKey, "mx_master_3")
+        self.assertEqual(hid_notifications, [True])
+
     def test_init_wires_engine_status_callback_into_backend(self):
         engine = _FakeEngine()
 

@@ -140,15 +140,16 @@ Item {
                             color: scrollPage.theme.textDim
                         }
 
-                        Slider {
+                        WheelSafeSlider {
                             id: dpiSlider
                             Layout.fillWidth: true
                             from: backend.deviceDpiMin
                             to: backend.deviceDpiMax
                             stepSize: 50
                             value: backend.dpi
-                            Material.accent: scrollPage.theme.accent
-                            Accessible.name: s["scroll.pointer_speed"]
+                            accentColor: scrollPage.theme.accent
+                            accentDimColor: scrollPage.theme.accentDim
+                            trackColor: scrollPage.theme.border
 
                             onMoved: {
                                 dpiLabel.text = Math.round(value) + " DPI"
@@ -310,9 +311,10 @@ Item {
                         Switch {
                             id: smartShiftToggle
                             checked: backend.smartShiftEnabled
+                            focusPolicy: Qt.StrongFocus
                             Material.accent: scrollPage.theme.accent
                             Accessible.name: "SmartShift"
-                            onToggled: backend.setSmartShiftEnabled(checked)
+                            onClicked: backend.setSmartShiftEnabled(checked)
                         }
                     }
 
@@ -343,15 +345,16 @@ Item {
                                 color: scrollPage.theme.textDim
                             }
 
-                            Slider {
+                            WheelSafeSlider {
                                 id: smartShiftSlider
                                 Layout.fillWidth: true
                                 from: 1
                                 to: 50
                                 stepSize: 1
                                 value: backend.smartShiftThreshold
-                                Material.accent: scrollPage.theme.accent
-                                Accessible.name: "SmartShift sensitivity"
+                                accentColor: scrollPage.theme.accent
+                                accentDimColor: scrollPage.theme.accentDim
+                                trackColor: scrollPage.theme.border
 
                                 onMoved: {
                                     smartShiftLabel.text = Math.round(value * 2) + "%"
@@ -716,9 +719,10 @@ Item {
                             Switch {
                                 id: startAtLoginSwitch
                                 checked: backend.startAtLogin
+                                focusPolicy: Qt.StrongFocus
                                 Material.accent: scrollPage.theme.accent
                                 Accessible.name: s["scroll.start_at_login"]
-                                onToggled: backend.setStartAtLogin(checked)
+                                onClicked: backend.setStartAtLogin(checked)
                             }
                         }
                     }
@@ -749,9 +753,10 @@ Item {
                             Switch {
                                 id: startMinimizedSwitch
                                 checked: backend.startMinimized
+                                focusPolicy: Qt.StrongFocus
                                 Material.accent: scrollPage.theme.accent
                                 Accessible.name: s["scroll.start_minimized"]
-                                onToggled: backend.setStartMinimized(checked)
+                                onClicked: backend.setStartMinimized(checked)
                             }
                         }
                     }
@@ -828,9 +833,10 @@ Item {
                             Switch {
                                 id: vscrollSwitch
                                 checked: backend.invertVScroll
+                                focusPolicy: Qt.StrongFocus
                                 Material.accent: scrollPage.theme.accent
                                 Accessible.name: s["scroll.invert_vertical"]
-                                onToggled: backend.setInvertVScroll(checked)
+                                onClicked: backend.setInvertVScroll(checked)
                             }
                         }
                     }
@@ -861,9 +867,10 @@ Item {
                             Switch {
                                 id: hscrollSwitch
                                 checked: backend.invertHScroll
+                                focusPolicy: Qt.StrongFocus
                                 Material.accent: scrollPage.theme.accent
                                 Accessible.name: s["scroll.invert_horizontal"]
-                                onToggled: backend.setInvertHScroll(checked)
+                                onClicked: backend.setInvertHScroll(checked)
                             }
                         }
                     }

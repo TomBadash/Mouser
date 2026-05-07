@@ -697,6 +697,18 @@ class Backend(QObject):
     def _applySmartShift(self, mode=None, enabled=None, threshold=None):
         """Update one or more SmartShift settings, persist config, and push to device."""
         settings = self._cfg.setdefault("settings", {})
+        current_mode = settings.get("smart_shift_mode", "ratchet")
+        current_enabled = settings.get("smart_shift_enabled", False)
+        current_threshold = settings.get("smart_shift_threshold", 25)
+        next_mode = current_mode if mode is None else mode
+        next_enabled = current_enabled if enabled is None else enabled
+        next_threshold = current_threshold if threshold is None else threshold
+        if (
+            next_mode == current_mode
+            and next_enabled == current_enabled
+            and next_threshold == current_threshold
+        ):
+            return
         if mode is not None:
             settings["smart_shift_mode"] = mode
         if enabled is not None:
@@ -726,6 +738,9 @@ class Backend(QObject):
 
     @Slot(bool)
     def setInvertVScroll(self, value):
+        value = bool(value)
+        if self.invertVScroll == value:
+            return
         self._cfg.setdefault("settings", {})["invert_vscroll"] = value
         save_config(self._cfg)
         if self._engine:
@@ -734,6 +749,9 @@ class Backend(QObject):
 
     @Slot(bool)
     def setInvertHScroll(self, value):
+        value = bool(value)
+        if self.invertHScroll == value:
+            return
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
         save_config(self._cfg)
         if self._engine:
@@ -1138,6 +1156,12 @@ class Backend(QObject):
         self._connected_device_refresh_pending = False
         if not self._mouse_connected:
             return
+        previous_hid_features_ready = self._hid_features_ready
+        self._hid_features_ready = bool(
+            getattr(self._engine, "hid_features_ready", False)
+        ) if self._engine else False
+        if self._hid_features_ready != previous_hid_features_ready:
+            self.hidFeaturesReadyChanged.emit()
         self._connected_device_refresh_attempts += 1
         self._sync_connected_device_info()
 
