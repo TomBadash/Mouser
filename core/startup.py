@@ -105,12 +105,26 @@ def _repo_root_dir() -> str:
 
 
 def _linux_template_path() -> str:
-    return os.path.join(
-        _repo_root_dir(),
-        "packaging",
-        "linux",
-        LINUX_DESKTOP_TEMPLATE_NAME,
+    candidates = []
+    if getattr(sys, "frozen", False):
+        bundle_root = getattr(sys, "_MEIPASS", "")
+        if bundle_root:
+            candidates.append(os.path.join(bundle_root, "linux", LINUX_DESKTOP_TEMPLATE_NAME))
+        candidates.append(
+            os.path.join(_runtime_root_dir(), "linux", LINUX_DESKTOP_TEMPLATE_NAME)
+        )
+    candidates.append(
+        os.path.join(
+            _repo_root_dir(),
+            "packaging",
+            "linux",
+            LINUX_DESKTOP_TEMPLATE_NAME,
+        )
     )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return candidates[0]
 
 
 def _linux_desktop_path() -> str:
@@ -172,9 +186,10 @@ def _render_linux_desktop_entry(*, autostart: bool) -> str:
 
 
 def _write_linux_desktop_entry(path: str, *, autostart: bool) -> None:
+    entry = _render_linux_desktop_entry(autostart=autostart)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(_render_linux_desktop_entry(autostart=autostart))
+        fh.write(entry)
     try:
         os.chmod(path, 0o644)
     except OSError:
@@ -272,17 +287,21 @@ def _apply_macos(enabled: bool) -> None:
 def _apply_linux(enabled: bool) -> None:
     if sys.platform != "linux":
         return
-    ensure_linux_launcher()
     autostart_path = _linux_autostart_path()
     if enabled:
+        ensure_linux_launcher()
         _write_linux_desktop_entry(autostart_path, autostart=True)
         return
     try:
         os.remove(autostart_path)
     except FileNotFoundError:
         pass
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"[startup] failed to remove Linux autostart entry: {exc}", file=sys.stderr)
+    try:
+        ensure_linux_launcher()
+    except Exception as exc:
+        print(f"[startup] failed to refresh Linux launcher on disable: {exc}", file=sys.stderr)
 
 
 def apply_login_startup(enabled: bool) -> None:

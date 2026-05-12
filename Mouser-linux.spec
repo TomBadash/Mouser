@@ -98,6 +98,10 @@ a = Analysis(
             os.path.join(ROOT, "packaging", "linux", "install-linux-permissions.sh"),
             os.path.join("linux", "install-linux-permissions.sh"),
         ),
+        (
+            os.path.join(ROOT, "packaging", "linux", "io.github.tombadash.mouser.desktop.in"),
+            os.path.join("linux", "io.github.tombadash.mouser.desktop.in"),
+        ),
         (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[

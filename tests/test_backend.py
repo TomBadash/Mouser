@@ -511,6 +511,63 @@ class BackendLoginStartupTests(unittest.TestCase):
         apply_mock.assert_called_once_with(True)
         self.assertTrue(backend.startAtLogin)
 
+    def test_set_start_at_login_keeps_config_when_os_apply_fails(self):
+        status_messages = []
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config") as save_mock,
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config"),
+            patch("ui.backend.apply_login_startup", side_effect=RuntimeError("denied")),
+        ):
+            backend = Backend(engine=None)
+            backend.statusMessage.connect(status_messages.append)
+            backend.setStartAtLogin(True)
+
+        save_mock.assert_not_called()
+        self.assertFalse(backend.startAtLogin)
+        self.assertEqual(status_messages, ["Failed to update login item: denied"])
+
+    def test_set_start_at_login_rolls_back_os_when_config_save_fails(self):
+        status_messages = []
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config", side_effect=RuntimeError("disk full")),
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config"),
+            patch("ui.backend.apply_login_startup") as apply_mock,
+        ):
+            backend = Backend(engine=None)
+            backend.statusMessage.connect(status_messages.append)
+            backend.setStartAtLogin(True)
+
+        self.assertEqual([c.args for c in apply_mock.call_args_list], [(True,), (False,)])
+        self.assertFalse(backend.startAtLogin)
+        self.assertEqual(status_messages, ["Failed to save login item setting: disk full"])
+
+    def test_set_start_at_login_reports_inconsistent_state_when_rollback_fails(self):
+        status_messages = []
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config", side_effect=RuntimeError("disk full")),
+            patch("ui.backend.supports_login_startup", return_value=True),
+            patch("ui.backend.sync_login_startup_from_config"),
+            patch(
+                "ui.backend.apply_login_startup",
+                side_effect=[None, RuntimeError("rollback failed")],
+            ) as apply_mock,
+        ):
+            backend = Backend(engine=None)
+            backend.statusMessage.connect(status_messages.append)
+            backend.setStartAtLogin(True)
+
+        self.assertEqual([c.args for c in apply_mock.call_args_list], [(True,), (False,)])
+        self.assertFalse(backend.startAtLogin)
+        self.assertEqual(
+            status_messages,
+            ["Start-at-login state is inconsistent; please restart Mouser to recover."],
+        )
+
     def test_set_start_minimized_does_not_call_apply_login_startup(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["settings"]["start_at_login"] = True

@@ -669,15 +669,37 @@ class Backend(QObject):
         if not supports_login_startup():
             self.statusMessage.emit("Start at login is not available on this platform")
             return
-        if self.startAtLogin == enabled:
+        settings = self._cfg.setdefault("settings", {})
+        old_enabled = bool(settings.get("start_at_login", False))
+        if old_enabled == enabled:
             return
-        self._cfg.setdefault("settings", {})["start_at_login"] = enabled
-        save_config(self._cfg)
         try:
             apply_login_startup(enabled)
         except Exception as exc:
             self.settingsChanged.emit()
             self.statusMessage.emit(f"Failed to update login item: {exc}")
+            return
+        settings["start_at_login"] = enabled
+        try:
+            save_config(self._cfg)
+        except Exception as exc:
+            settings["start_at_login"] = old_enabled
+            rollback_error = None
+            try:
+                apply_login_startup(old_enabled)
+            except Exception as rollback_exc:
+                rollback_error = rollback_exc
+                print(
+                    "[Backend] Failed to roll back start-at-login OS state "
+                    f"after config save failure: {rollback_exc}"
+                )
+            self.settingsChanged.emit()
+            if rollback_error is not None:
+                self.statusMessage.emit(
+                    "Start-at-login state is inconsistent; please restart Mouser to recover."
+                )
+            else:
+                self.statusMessage.emit(f"Failed to save login item setting: {exc}")
             return
         self.settingsChanged.emit()
         self.statusMessage.emit(

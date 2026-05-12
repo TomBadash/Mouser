@@ -332,6 +332,21 @@ X-Mouser-SourcePath=@SOURCE_PATH@
         )
         self.assertIn("Hidden=false", autostart_text)
 
+    def test_linux_template_path_prefers_pyinstaller_bundle_resource(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundled_dir = os.path.join(tmpdir, "linux")
+            os.makedirs(bundled_dir)
+            bundled_template = os.path.join(bundled_dir, st.LINUX_DESKTOP_TEMPLATE_NAME)
+            with open(bundled_template, "w", encoding="utf-8") as fh:
+                fh.write("[Desktop Entry]\n")
+
+            with (
+                patch.object(sys, "platform", "linux"),
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "_MEIPASS", tmpdir, create=True),
+            ):
+                self.assertEqual(st._linux_template_path(), bundled_template)
+
     def test_linux_disable_removes_autostart_but_keeps_launcher(self):
         template = """[Desktop Entry]
 Name=@APP_NAME@
@@ -368,6 +383,31 @@ X-Mouser-SourcePath=@SOURCE_PATH@
 
             self.assertTrue(os.path.isfile(launcher_path))
             self.assertFalse(os.path.exists(autostart_path))
+
+    def test_linux_disable_removes_autostart_even_when_launcher_template_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            launcher_path = os.path.join(tmpdir, "applications", st.LINUX_DESKTOP_ENTRY_NAME)
+            autostart_path = os.path.join(tmpdir, "autostart", st.LINUX_DESKTOP_ENTRY_NAME)
+            missing_template = os.path.join(tmpdir, "missing.desktop.in")
+            os.makedirs(os.path.dirname(autostart_path), exist_ok=True)
+            with open(autostart_path, "w", encoding="utf-8") as fh:
+                fh.write("stale")
+
+            with (
+                patch.object(sys, "platform", "linux"),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_desktop_exec_parts", return_value=["/tmp/Mouser/python"]),
+                patch.object(st, "_runtime_root_dir", return_value="/tmp/Mouser"),
+                patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+                patch.object(st, "_linux_source_path", return_value="/tmp/Mouser"),
+                patch.object(st, "_linux_template_path", return_value=missing_template),
+                patch.object(st, "_linux_desktop_path", return_value=launcher_path),
+                patch.object(st, "_linux_autostart_path", return_value=autostart_path),
+            ):
+                st.apply_login_startup(False)
+
+            self.assertFalse(os.path.exists(autostart_path))
+            self.assertFalse(os.path.exists(launcher_path))
 
 
 if __name__ == "__main__":
