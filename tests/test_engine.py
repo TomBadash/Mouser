@@ -25,6 +25,9 @@ class _FakeMouseHook:
     def set_gesture_callback(self, cb):
         self._gesture_callback = cb
 
+    def set_status_callback(self, cb):
+        self._status_callback = cb
+
     def set_connection_change_callback(self, cb):
         self._connection_change_callback = cb
 

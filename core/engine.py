@@ -69,6 +69,7 @@ class Engine:
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
+        self.hook.set_status_callback(self._emit_status)
         self._setup_hooks()
         self.hook.set_connection_change_callback(self._on_connection_change)
         # Apply persisted DPI setting

@@ -30,6 +30,21 @@ from core.mouse_hook_types import HidRuntimeState, MouseEvent
 
 _LOGI_VENDOR = 0x046D
 _LOG_ONCE_KEYS = set()
+_REMAP_REASON_UINPUT_FAILED = "uinput_failed"
+_REMAP_REASON_GRAB_FAILED = "grab_failed"
+_REMAP_STATUS_MESSAGES = {
+    _REMAP_REASON_UINPUT_FAILED: (
+        "Linux evdev remapping is degraded: the virtual input device could not "
+        "be created. Physical button/wheel interception is unavailable, but "
+        "HID++ controls may still work."
+    ),
+    _REMAP_REASON_GRAB_FAILED: (
+        "Linux evdev remapping is degraded: the mouse could not be grabbed. "
+        "Physical button/wheel interception is unavailable, but HID++ controls "
+        "may still work."
+    ),
+}
+_REMAP_RECOVERY_STATUS = "Linux evdev remapping restored."
 
 
 def _log_once(key, message):
@@ -105,6 +120,8 @@ class MouseHook(BaseMouseHook):
         self._ignored_non_logitech = set()
         self._ui_passthrough = False
         self._evdev_grabbed = False
+        self._evdev_remap_ready = False
+        self._evdev_remap_status_state = (False, None)
 
     @property
     def evdev_ready(self):
@@ -113,6 +130,10 @@ class MouseHook(BaseMouseHook):
     @property
     def hid_ready(self):
         return self._hid_ready
+
+    @property
+    def evdev_remap_ready(self):
+        return self._evdev_remap_ready
 
     @property
     def hid_runtime_state(self):
@@ -130,24 +151,27 @@ class MouseHook(BaseMouseHook):
             return
         self._ui_passthrough = enabled
         if enabled:
-            self._release_evdev_grab()
+            self._disable_evdev_remapping()
             self._rescan_requested.set()
             self._evdev_wakeup.set()
         else:
             self._rescan_requested.clear()
-            self._acquire_evdev_grab()
+            if self._evdev_device is not None:
+                self._enable_evdev_remapping()
             self._evdev_wakeup.set()
 
     def _acquire_evdev_grab(self):
         dev = self._evdev_device
         if dev is None or self._evdev_grabbed:
-            return
+            return self._evdev_grabbed
         try:
             dev.grab()
             self._evdev_grabbed = True
             print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
+            return True
         except Exception as exc:
             print(f"[MouseHook] Failed to grab {getattr(dev, 'path', '?')}: {exc}")
+            return False
 
     def _release_evdev_grab(self):
         dev = self._evdev_device
@@ -159,6 +183,76 @@ class MouseHook(BaseMouseHook):
             print(f"[MouseHook] Released grab for {dev.name} ({dev.path})")
         except Exception as exc:
             print(f"[MouseHook] Failed to ungrab {getattr(dev, 'path', '?')}: {exc}")
+
+    def _set_evdev_remap_ready(self, ready, reason=None):
+        ready = bool(ready)
+        reason = None if ready else reason
+        if reason not in (_REMAP_REASON_UINPUT_FAILED, _REMAP_REASON_GRAB_FAILED):
+            reason = None
+        next_state = (ready, reason)
+        if next_state == self._evdev_remap_status_state:
+            self._evdev_remap_ready = ready
+            return
+        previous_state = self._evdev_remap_status_state
+        self._evdev_remap_status_state = next_state
+        self._evdev_remap_ready = ready
+        if ready:
+            if previous_state[1] in (
+                _REMAP_REASON_UINPUT_FAILED,
+                _REMAP_REASON_GRAB_FAILED,
+            ):
+                self._emit_status(_REMAP_RECOVERY_STATUS)
+            return
+        message = _REMAP_STATUS_MESSAGES.get(reason)
+        if message:
+            self._emit_status(message)
+
+    def _close_uinput(self):
+        if self._uinput:
+            try:
+                self._uinput.close()
+            except Exception:
+                pass
+            self._uinput = None
+
+    def _disable_evdev_remapping(self, reason=None):
+        self._set_evdev_remap_ready(False, reason)
+        self._release_evdev_grab()
+        self._close_uinput()
+
+    def _enable_evdev_remapping(self):
+        dev = self._evdev_device
+        if dev is None or self._ui_passthrough:
+            self._disable_evdev_remapping()
+            return False
+        if self._evdev_remap_ready:
+            return True
+        if self._uinput is None:
+            try:
+                self._uinput = _UInput(
+                    events=self._filtered_uinput_events(dev),
+                    name="Mouser Virtual Mouse",
+                    vendor=getattr(dev.info, "vendor", 1),
+                    product=getattr(dev.info, "product", 1),
+                    version=getattr(dev.info, "version", 1),
+                    bustype=getattr(dev.info, "bustype", 0x03),
+                )
+            except PermissionError:
+                print(
+                    "[MouseHook] Permission denied — add user to 'input' group "
+                    "and ensure /dev/uinput is writable"
+                )
+                self._set_evdev_remap_ready(False, _REMAP_REASON_UINPUT_FAILED)
+                return False
+            except Exception as exc:
+                print(f"[MouseHook] Failed to setup uinput: {exc}")
+                self._set_evdev_remap_ready(False, _REMAP_REASON_UINPUT_FAILED)
+                return False
+        if not self._acquire_evdev_grab():
+            self._disable_evdev_remapping(_REMAP_REASON_GRAB_FAILED)
+            return False
+        self._set_evdev_remap_ready(True)
+        return True
 
     def _set_evdev_ready(self, ready):
         if ready == self._evdev_ready:
@@ -580,27 +674,15 @@ class MouseHook(BaseMouseHook):
         if not dev:
             return False
         try:
-            self._uinput = _UInput(
-                events=self._filtered_uinput_events(dev),
-                name="Mouser Virtual Mouse",
-                vendor=getattr(dev.info, "vendor", 1),
-                product=getattr(dev.info, "product", 1),
-                version=getattr(dev.info, "version", 1),
-                bustype=getattr(dev.info, "bustype", 0x03),
-            )
             self._evdev_device = dev
             self._evdev_grabbed = False
-            if not self._ui_passthrough:
-                self._acquire_evdev_grab()
             self._evdev_connected_device = self._build_evdev_connected_device(dev)
             self._set_evdev_ready(True)
+            if self._ui_passthrough:
+                self._disable_evdev_remapping()
+            else:
+                self._enable_evdev_remapping()
             return True
-        except PermissionError:
-            print(
-                "[MouseHook] Permission denied — add user to 'input' group "
-                "and ensure /dev/uinput is writable"
-            )
-            dev.close()
         except Exception as exc:
             print(f"[MouseHook] Failed to setup evdev: {exc}")
             dev.close()
@@ -633,8 +715,8 @@ class MouseHook(BaseMouseHook):
         return caps
 
     def _cleanup_evdev(self):
+        self._disable_evdev_remapping()
         if self._evdev_device:
-            self._release_evdev_grab()
             try:
                 self._evdev_device.close()
             except Exception:
@@ -642,12 +724,6 @@ class MouseHook(BaseMouseHook):
             self._evdev_device = None
             self._evdev_grabbed = False
             print("[MouseHook] evdev device released")
-        if self._uinput:
-            try:
-                self._uinput.close()
-            except Exception:
-                pass
-            self._uinput = None
         self._evdev_connected_device = None
         self._set_evdev_ready(False)
 
@@ -659,7 +735,22 @@ class MouseHook(BaseMouseHook):
                     self._wait_for_evdev_wakeup(2)
                 continue
             try:
-                self._listen_loop()
+                while self._running:
+                    if self._rescan_requested.is_set():
+                        break
+                    if not self._evdev_remap_ready:
+                        self._wait_for_evdev_wakeup(None)
+                        if self._rescan_requested.is_set():
+                            break
+                        if (
+                            self._running
+                            and not self._ui_passthrough
+                            and not self._evdev_remap_ready
+                        ):
+                            self._enable_evdev_remapping()
+                        continue
+                    self._listen_loop()
+                    break
             except OSError as exc:
                 if self._running:
                     print(f"[MouseHook] Device disconnected: {exc}")
@@ -673,7 +764,7 @@ class MouseHook(BaseMouseHook):
                     continue
                 self._wait_for_evdev_wakeup(1)
 
-    def _wait_for_evdev_wakeup(self, timeout):
+    def _wait_for_evdev_wakeup(self, timeout=None):
         self._evdev_wakeup.wait(timeout)
         self._evdev_wakeup.clear()
 
@@ -683,6 +774,9 @@ class MouseHook(BaseMouseHook):
             if self._rescan_requested.is_set():
                 print("[MouseHook] Rescan requested; leaving listen loop")
                 return
+            if not self._evdev_remap_ready:
+                self._wait_for_evdev_wakeup(None)
+                continue
             readable, _, _ = _select_mod.select([fd], [], [], 0.5)
             if not readable:
                 continue
@@ -701,7 +795,7 @@ class MouseHook(BaseMouseHook):
                     self._uinput.write_event(event)
 
     def _handle_button(self, event):
-        if self._ui_passthrough:
+        if self._ui_passthrough or not self._evdev_remap_ready:
             return
         mouse_event = None
         should_block = False
@@ -737,7 +831,7 @@ class MouseHook(BaseMouseHook):
             self._uinput.write_event(event)
 
     def _handle_rel(self, event):
-        if self._ui_passthrough:
+        if self._ui_passthrough or not self._evdev_remap_ready:
             return
         code = event.code
         value = event.value

@@ -18,6 +18,7 @@ class BaseMouseHook:
         self._blocked_events = set()
         self._debug_callback = None
         self._gesture_callback = None
+        self._status_callback = None
         self.debug_mode = False
         self.invert_vscroll = False
         self.invert_hscroll = False
@@ -118,10 +119,20 @@ class BaseMouseHook:
     def set_gesture_callback(self, callback):
         self._gesture_callback = callback
 
+    def set_status_callback(self, callback):
+        self._status_callback = callback
+
     def _emit_debug(self, message):
         if self.debug_mode and self._debug_callback:
             try:
                 self._debug_callback(message)
+            except Exception:
+                pass
+
+    def _emit_status(self, message):
+        if self._status_callback:
+            try:
+                self._status_callback(message)
             except Exception:
                 pass
 
