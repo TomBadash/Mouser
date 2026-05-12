@@ -153,8 +153,8 @@ MX_ANYWHERE_LAYOUT = {
 }
 
 MX_ANYWHERE_2S_LAYOUT = {
-    "key": "mx_anywhere",
-    "label": "MX Anywhere family",
+    "key": "mx_anywhere_2s",
+    "label": "MX Anywhere 2S",
     "image_asset": "mouse_mx_anywhere_3s.png",
     "image_width": 400,
     "image_height": 320,
@@ -163,9 +163,10 @@ MX_ANYWHERE_2S_LAYOUT = {
     "note": "",
     "hotspots": [
         {
-            "buttonKey": "gesture_up",
-            "label": "Back button",
-            "summaryType": "mapping",
+            "buttonKey": "hscroll_left",
+            "label": "Wheel Left",
+            "summaryType": "hscroll",
+            "isHScroll": True,
             "normX": 0.39,
             "normY": 0.57,
             "labelSide": "left",
@@ -173,9 +174,10 @@ MX_ANYWHERE_2S_LAYOUT = {
             "labelOffY": 80,
         },
         {
-            "buttonKey": "gesture_down",
-            "label": "Forward button",
-            "summaryType": "mapping",
+            "buttonKey": "hscroll_right",
+            "label": "Wheel Right",
+            "summaryType": "hscroll",
+            "isHScroll": True,
             "normX": 0.26,
             "normY": 0.44,
             "labelSide": "left",
@@ -287,7 +289,6 @@ _FAMILY_FALLBACKS = {
     "mx_master_2s": "mx_master",
     "mx_anywhere_3s": "mx_anywhere",
     "mx_anywhere_3": "mx_anywhere",
-    "mx_anywhere_2s": "mx_anywhere_2s",
 }
 
 

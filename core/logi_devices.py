@@ -47,6 +47,12 @@ MX_ANYWHERE_BUTTONS = (
     "xbutton2",
 )
 
+MX_ANYWHERE_2S_BUTTONS = (
+    *MX_ANYWHERE_BUTTONS,
+    "hscroll_left",
+    "hscroll_right",
+)
+
 # MX Vertical has no gesture button, no horizontal scroll, no mode-shift,
 # but has a dedicated DPI switch button on top.
 MX_VERTICAL_BUTTONS = (
@@ -188,7 +194,7 @@ KNOWN_LOGI_DEVICES = (
         aliases=("Wireless Mobile Mouse MX Anywhere 2S",),
         ui_layout="mx_anywhere_2s",
         image_asset="mouse_mx_anywhere_3s.png",
-        supported_buttons=MX_ANYWHERE_BUTTONS,
+        supported_buttons=MX_ANYWHERE_2S_BUTTONS,
         dpi_max=4000,
     ),
 )
@@ -223,6 +229,7 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
+    "mx_anywhere_2s": MX_ANYWHERE_2S_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
 }

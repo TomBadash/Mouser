@@ -29,7 +29,8 @@ Item {
     property real cx: imgItem.x + imgItem.offX + normX * imgItem.paintedWidth
     property real cy: imgItem.y + imgItem.offY + normY * imgItem.paintedHeight
 
-    property bool isSelected: mousePage.selectedButton === buttonKey
+    property bool isSelected: isHScroll ? mousePage.selectedButton === "hscroll_left"
+                                        : mousePage.selectedButton === buttonKey
     property bool isHovered: dotMa.containsMouse
     property real labelWidth: labelCol.implicitWidth + 20
     property real labelHeight: labelCol.implicitHeight + 14

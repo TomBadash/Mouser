@@ -3,6 +3,7 @@ import unittest
 from core.device_layouts import get_device_layout
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
+    MX_ANYWHERE_2S_BUTTONS,
     build_connected_device_info,
     clamp_dpi,
     get_buttons_for_layout,
@@ -102,6 +103,18 @@ class LogiDeviceRegistryTests(unittest.TestCase):
     def test_clamp_dpi_defaults_without_device(self):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
+
+    def test_mx_anywhere_2s_supported_buttons_include_middle_and_hscroll(self):
+        device = resolve_device(product_id=0xB01A)
+
+        self.assertIsNotNone(device)
+        self.assertIs(device.supported_buttons, MX_ANYWHERE_2S_BUTTONS)
+        self.assertIn("middle", device.supported_buttons)
+        self.assertIn("hscroll_left", device.supported_buttons)
+        self.assertIn("hscroll_right", device.supported_buttons)
+
+    def test_get_buttons_for_mx_anywhere_2s_layout_uses_specific_tuple(self):
+        self.assertIs(get_buttons_for_layout("mx_anywhere_2s"), MX_ANYWHERE_2S_BUTTONS)
 
 
 if __name__ == "__main__":
