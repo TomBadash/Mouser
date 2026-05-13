@@ -249,7 +249,14 @@ pip install pyinstaller
 ./build_macos_app.sh
 ```
 
-The output is `dist/Mouser.app`. The script reuses `images/AppIcon.icns` when present, otherwise generates one from `images/logo_icon.png`, then ad-hoc signs the bundle with `codesign --sign -`.
+The output is `dist/Mouser.app`. The script reuses `images/AppIcon.icns` when present, otherwise generates one from `images/logo_icon.png`. Signing depends on whether `MOUSER_SIGN_IDENTITY` is set in the environment:
+
+- **Unset (default)**: ad-hoc signs with `codesign --sign -`. Convenient for one-off builds, but the bundle's `cdhash` changes on every rebuild, so macOS resets Accessibility / Input Monitoring grants each time.
+- **Set to a codesigning identity** (`security find-identity -v -p codesigning` to list them — SHA-1 form preferred): signs the bundle and every nested `.dylib` / `.so` / `.framework` with `--options runtime` and the entitlements at `build_resources/Mouser.entitlements`. The `cdhash` stays stable across rebuilds, so TCC grants survive. A failing `codesign --verify --deep --strict` check aborts the build.
+
+```sh
+MOUSER_SIGN_IDENTITY="ABCD1234..." ./build_macos_app.sh   # stable cdhash, hardened runtime
+```
 
 - Build on the architecture you want to ship: an `arm64` Python produces an Apple Silicon bundle, an `x86_64` Python produces an Intel bundle. Set `PYINSTALLER_TARGET_ARCH=arm64|x86_64|universal2` to override.
 - Release CI publishes both `Mouser-macOS.zip` (Apple Silicon) and `Mouser-macOS-intel.zip` (Intel) automatically on tag pushes.

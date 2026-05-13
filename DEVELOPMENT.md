@@ -294,7 +294,16 @@ pip install -r requirements.txt pyinstaller
 ./build_macos_app.sh
 ```
 
-The script reuses `images/AppIcon.icns` when present, otherwise generates one from `images/logo_icon.png`, runs PyInstaller with `Mouser-mac.spec`, and ad-hoc signs the bundle (`codesign --sign -`). Output: `dist/Mouser.app`. The bundle runs as `LSUIElement`.
+The script reuses `images/AppIcon.icns` when present, otherwise generates one from `images/logo_icon.png`, then runs PyInstaller with `Mouser-mac.spec`. Output: `dist/Mouser.app`. The bundle runs as `LSUIElement`.
+
+Signing is driven by `MOUSER_SIGN_IDENTITY`:
+
+- Unset: the bundle is ad-hoc signed (`codesign --sign -`). The `cdhash` changes on every rebuild, so macOS Accessibility / Input Monitoring grants reset each build. Fine for one-off builds.
+- Set to a codesigning identity SHA-1 (list with `security find-identity -v -p codesigning`): the script signs nested `.dylib` / `.so` / `.framework` files bottom-up with `--options runtime`, then signs the outer bundle with the entitlements at `build_resources/Mouser.entitlements` (`allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`), then runs `codesign --verify --deep --strict --verbose=2` and aborts the build if verification fails. The resulting `cdhash` stays stable across rebuilds, so TCC grants persist.
+
+The script picks the Python interpreter in this order: `MOUSER_PYTHON` env override → `./.venv/bin/python3` if present → `pyenv which python3` → `python3` on `PATH`. It fails fast with an explicit error if PyInstaller is not installed in the resolved interpreter, so a half-set-up environment can't silently produce a different bundle layout (and therefore a different `cdhash`).
+
+`PYTHONHASHSEED=0` is pinned for the PyInstaller invocation so set iteration during the analysis stage produces byte-identical `base_library.zip` output across rebuilds (otherwise the outer `cdhash` drifts even with a stable signing identity).
 
 - Build on the architecture you want to ship. `arm64` Python → Apple Silicon, `x86_64` Python → Intel.
 - Set `PYINSTALLER_TARGET_ARCH=arm64|x86_64|universal2` to override (when your Python supports the target).

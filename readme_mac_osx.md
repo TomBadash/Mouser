@@ -96,7 +96,8 @@ Notes:
 
 - Build on the target architecture. On an M1/M2/M3 Mac, use an `arm64` Python to produce an Apple Silicon app; on an Intel Mac, use an `x86_64` Python to produce an Intel app.
 - You can also set `PYINSTALLER_TARGET_ARCH=arm64` or `PYINSTALLER_TARGET_ARCH=x86_64` before running `./build_macos_app.sh` when your macOS Python environment supports that target.
-- The build flow uses the committed `images/AppIcon.icns` when present; otherwise the script generates an `.icns` icon from `images/logo_icon.png`, runs PyInstaller with `Mouser-mac.spec`, and applies ad-hoc signing via `codesign --sign -`.
+- The build flow uses the committed `images/AppIcon.icns` when present; otherwise the script generates an `.icns` icon from `images/logo_icon.png`, then runs PyInstaller with `Mouser-mac.spec`.
+- Signing path depends on `MOUSER_SIGN_IDENTITY`. Unset: the bundle is ad-hoc signed (`codesign --sign -`), which is fine for one-off builds but rotates the `cdhash` on every rebuild, so macOS Accessibility / Input Monitoring grants reset each time. Set to a codesigning identity (list with `security find-identity -v -p codesigning`, SHA-1 form preferred): the script signs nested `.dylib` / `.so` / `.framework` files bottom-up with `--options runtime`, then signs the outer bundle with `build_resources/Mouser.entitlements`, then runs `codesign --verify --deep --strict` and aborts the build if it fails. The resulting `cdhash` stays stable across rebuilds.
 - The app can then be moved to `/Applications/Mouser.app` and launched directly from Finder, Spotlight, or Dock.
 - `pyinstaller Mouser.spec` remains available as a simpler cross-platform build path, but the dedicated macOS script is the preferred bundle flow.
 - Release builds publish `Mouser-macOS.zip` for Apple Silicon and `Mouser-macOS-intel.zip` for Intel Macs.
