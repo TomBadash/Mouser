@@ -549,6 +549,26 @@ if sys.platform == "win32":
             "keys": [],
             "category": "Mouse",
         },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [VK_LWIN, VK_SHIFT, VK_S],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [VK_LWIN, VK_SHIFT, VK_S],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [0x2C],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [VK_LWIN, 0x2C],
+            "category": "Screenshot",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1165,6 +1185,26 @@ elif sys.platform == "darwin":
             "keys": [],
             "category": "Mouse",
         },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_4],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_4],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_3],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_3],
+            "category": "Screenshot",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1276,6 +1316,7 @@ elif sys.platform == "linux":
     KEY_F10 = 68
     KEY_F11 = 87
     KEY_F12 = 88
+    KEY_SYSRQ = 99  # Print Screen
 
     _ALL_KEY_CODES = [
         KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_LEFTMETA,
@@ -1583,6 +1624,26 @@ elif sys.platform == "linux":
             "label": "Forward (Mouse Button 5)",
             "keys": [],
             "category": "Mouse",
+        },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_SYSRQ],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [KEY_LEFTSHIFT, KEY_SYSRQ],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [KEY_LEFTCTRL, KEY_SYSRQ],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [KEY_SYSRQ],
+            "category": "Screenshot",
         },
         "none": {
             "label": "Do Nothing (Pass-through)",
