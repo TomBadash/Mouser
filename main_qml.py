@@ -1,5 +1,5 @@
 """
-Mouser — QML Entry Point
+Mouser -- QML Entry Point
 ==============================
 Launches the Qt Quick / QML UI with PySide6.
 Replaces the old tkinter-based main.py.
@@ -17,7 +17,7 @@ import getpass
 import time
 from urllib.parse import parse_qs, unquote
 
-# Ensure project root on path — works for both normal Python and PyInstaller.
+# Ensure project root on path -- works for both normal Python and PyInstaller.
 # PyInstaller on Windows/Linux stores bundled data in `_internal/` next to the
 # executable, while macOS app bundles expose resources from `Contents/Resources`.
 def _resolve_root_dir():
@@ -47,7 +47,7 @@ os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 
 _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap, QWindow
 from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
@@ -161,21 +161,19 @@ def _single_instance_acquire(app: QApplication, server_name: str):
 
 
 def _app_icon() -> QIcon:
-    if sys.platform == "darwin":
-        icon = QIcon()
-        source = QPixmap(os.path.join(ROOT, "images", "logo_icon.png"))
-        if not source.isNull():
-            for size in (16, 32, 64, 128, 256):
-                icon.addPixmap(
-                    source.scaled(
-                        size,
-                        size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-        return icon
-    return QIcon(os.path.join(ROOT, "images", "logo.ico"))
+    """Build the QIcon for the window title bar. On macOS, hand QIcon the
+    full-resolution 1024px PNG so AppKit's setApplicationIconImage_
+    (called via QApplication.setWindowIcon) renders crisply at the full
+    Dock tile size instead of the upscaled-256px blur the pre-scaled
+    pixmap path produced. Logs and returns an empty QIcon if the asset
+    file is missing.
+    """
+    icon_name = "logo_icon.png" if sys.platform == "darwin" else "logo.ico"
+    icon_path = os.path.join(ROOT, "images", icon_name)
+    if not os.path.isfile(icon_path):
+        print(f"[Mouser] App icon missing: {icon_path}")
+        return QIcon()
+    return QIcon(icon_path)
 
 
 def _render_svg_pixmap(path: str, color: QColor, size: int) -> QPixmap:
@@ -220,16 +218,231 @@ def _tray_icon() -> QIcon:
     return icon
 
 
-def _configure_macos_app_mode():
+_MACOS_RELAUNCH_GUARD = "MOUSER_MACOS_RELAUNCHED"
+
+
+def _macos_named_executable_path() -> str:
+    """Return a stable path for the `Mouser`-named launcher symlink.
+
+    When ``sys.executable`` is in a virtualenv, place the symlink next to
+    the venv's python shim so `pyvenv.cfg` discovery still resolves
+    site-packages after the re-exec. Otherwise fall back to a path inside
+    the project tree so it stays stable across reboots.
+    """
+    exec_dir = os.path.dirname(sys.executable)
+    pyvenv_cfg = os.path.join(os.path.dirname(exec_dir), "pyvenv.cfg")
+    if os.path.isfile(pyvenv_cfg):
+        return os.path.join(exec_dir, "Mouser")
+    return os.path.join(ROOT, "build", "macos", "bin", "Mouser")
+
+
+def _maybe_relaunch_with_mouser_process_name() -> None:
+    """Re-exec the interpreter through a `Mouser`-named symlink.
+
+    macOS reads the user-visible process name from the Mach-O image
+    header at execve() time. For a bundle-less launch (``python
+    main_qml.py``) that means the Dock tile, Cmd+Tab caption, Force
+    Quit, and Activity Monitor all read "python", and there is no
+    in-process API to rename the image afterwards. Re-execing through
+    a symlink whose basename is `Mouser` is the only reliable fix.
+
+    Returns immediately on non-macOS, on PyInstaller-frozen bundles
+    (already correctly named), when the env-var guard shows we already
+    relaunched, when the basename already starts with "mouser", or
+    when the symlink can't be staged.
+    """
+    if sys.platform != "darwin":
+        return
+    if getattr(sys, "frozen", False):
+        return
+    if os.environ.get(_MACOS_RELAUNCH_GUARD) == "1":
+        return
+    source_executable = sys.executable
+    if not source_executable or not os.path.isfile(source_executable):
+        print("[Mouser] sys.executable missing or not a file; skipping relaunch")
+        return
+    # Important: link the venv shim (`sys.executable`), NOT the underlying
+    # interpreter (`os.path.realpath(sys.executable)`). The shim is what
+    # holds the venv's identity; the real interpreter has no venv context.
+    current_basename = os.path.basename(source_executable)
+    if current_basename.lower().startswith("mouser"):
+        return
+    target = _macos_named_executable_path()
+    target_dir = os.path.dirname(target)
+    # Stage atomically via a unique temp symlink + os.replace(). This
+    # avoids the unlink/symlink TOCTOU window where a concurrent launch
+    # could observe `target` missing, and never leaves a moment when the
+    # launcher path doesn't resolve to a usable executable.
+    staging = f"{target}.staging.{os.getpid()}"
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        try:
+            os.symlink(source_executable, staging)
+        except FileExistsError:
+            # Crashed prior run left a staging symlink behind. Clear it
+            # and retry once; any further failure falls through to the
+            # outer except and the in-place fallback.
+            os.remove(staging)
+            os.symlink(source_executable, staging)
+        try:
+            os.replace(staging, target)
+        except OSError:
+            # Best-effort cleanup of our staging entry so we don't leak
+            # one per failed relaunch attempt.
+            try:
+                os.remove(staging)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        print(f"[Mouser] Could not stage Mouser-named launcher: {exc}")
+        return
+    os.environ[_MACOS_RELAUNCH_GUARD] = "1"
+    new_argv = [target, *sys.argv]
+    print(
+        f"[Mouser] Re-execing through {target} so the Dock shows 'Mouser' "
+        f"instead of '{current_basename}'"
+    )
+    try:
+        os.execv(target, new_argv)
+    except OSError as exc:
+        # If exec fails for any reason, fall back to in-place launch so
+        # the user still gets a working app, just with the wrong label.
+        print(f"[Mouser] Re-exec failed: {exc}; continuing with current process")
+        os.environ.pop(_MACOS_RELAUNCH_GUARD, None)
+
+
+def _rename_macos_bundle_for_dock():
+    """Override CFBundleName / CFBundleDisplayName before NSApplication
+    is constructed. AppKit reads `[NSBundle mainBundle]` once during init
+    to populate the application menu, Force Quit, notification banners,
+    etc. The Dock label itself is still driven by the relaunch above.
+    """
     if sys.platform != "darwin":
         return
     try:
-        import AppKit
-        AppKit.NSApp.setActivationPolicy_(
-            AppKit.NSApplicationActivationPolicyAccessory
-        )
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is None:
+            return
+        info["CFBundleName"] = "Mouser"
+        info["CFBundleDisplayName"] = "Mouser"
+        info.setdefault("CFBundleExecutable", "Mouser")
     except Exception as exc:
-        print(f"[Mouser] Failed to configure macOS app mode: {exc}")
+        print(f"[Mouser] Could not pre-rename bundle for Dock: {exc}")
+
+
+# Cached AppKit module + Dock-icon NSImage + last-applied activation policy.
+# These are populated only after the corresponding AppKit calls succeed so
+# a failure path doesn't leave the cached state out of sync with reality.
+# Caching matters because `visibilityChanged` can fire repeatedly under
+# rapid window state churn (minimize/restore storms, Spaces switches), and
+# without a cache each fire would re-decode the 1024px PNG and re-issue
+# AppKit calls that are no-ops for the Dock anyway.
+_MACOS_APPKIT = None
+_MACOS_DOCK_ICON_NSIMAGE = None
+_MACOS_ACTIVATION_POLICY_REGULAR: "bool | None" = None
+_MACOS_NATIVE_STATUS_ITEM = None
+_MACOS_NATIVE_STATUS_TARGET = None
+
+
+def _macos_appkit():
+    """Lazy-import + cache of the AppKit module. Returns None on import
+    failure (logged once) so callers can no-op cleanly."""
+    global _MACOS_APPKIT
+    if _MACOS_APPKIT is not None:
+        return _MACOS_APPKIT
+    try:
+        import AppKit
+    except Exception as exc:
+        print(f"[Mouser] Failed to import AppKit: {exc}")
+        return None
+    _MACOS_APPKIT = AppKit
+    return AppKit
+
+
+def _configure_macos_app_mode():
+    """Initial activation policy at launch time. Stays Accessory (menu-bar
+    only) until the window opens, at which point we promote to Regular so
+    Mouser becomes a real Cmd+Tab-able foreground app."""
+    _set_macos_activation_policy(regular=False)
+
+
+def _install_macos_dock_icon():
+    """Replace the Dock / Cmd+Tab / Mission Control icon with Mouser's
+    logo. Qt's ``app.setWindowIcon()`` only covers the title bar on
+    macOS, so without this override a bare ``python main_qml.py`` shows
+    the generic Python launcher icon. The decoded NSImage is cached at
+    module scope so repeated calls only re-issue the cheap
+    ``setApplicationIconImage_`` syscall.
+    """
+    global _MACOS_DOCK_ICON_NSIMAGE
+    if sys.platform != "darwin":
+        return
+    appkit = _macos_appkit()
+    if appkit is None:
+        return
+    if _MACOS_DOCK_ICON_NSIMAGE is None:
+        icon_path = os.path.join(ROOT, "images", "logo_icon.png")
+        if not os.path.isfile(icon_path):
+            print(f"[Mouser] Could not load Dock icon from {icon_path}")
+            return
+        try:
+            ns_image = appkit.NSImage.alloc().initWithContentsOfFile_(icon_path)
+        except Exception as exc:
+            print(f"[Mouser] Failed to decode Dock icon {icon_path}: {exc}")
+            return
+        if ns_image is None:
+            print(f"[Mouser] Could not load Dock icon from {icon_path}")
+            return
+        # NSImage may flag the image as "template" (auto-tinted to the
+        # system colors, which strips our gradient and renders the
+        # silhouette in monochrome black/white). Force-disable template
+        # mode so the full-color PNG comes through.
+        if hasattr(ns_image, "setTemplate_"):
+            ns_image.setTemplate_(False)
+        size = ns_image.size()
+        print(
+            f"[Mouser] Dock icon loaded {icon_path} "
+            f"size={size.width:.0f}x{size.height:.0f}"
+        )
+        _MACOS_DOCK_ICON_NSIMAGE = ns_image
+    try:
+        appkit.NSApp.setApplicationIconImage_(_MACOS_DOCK_ICON_NSIMAGE)
+    except Exception as exc:
+        print(f"[Mouser] Failed to apply macOS Dock icon: {exc}")
+
+
+def _set_macos_activation_policy(regular: bool) -> None:
+    """Toggle between the Regular (foreground, Dock + Cmd+Tab) and
+    Accessory (menu-bar only) policies. On a Regular promotion AppKit
+    creates the Dock tile lazily and seeds the icon from the running
+    executable's bundle, so this also re-applies the Mouser Dock icon
+    after the flip. Skips the AppKit round-trip when the requested
+    state already matches the last-applied one, which keeps rapid
+    ``visibilityChanged`` storms cheap.
+    """
+    global _MACOS_ACTIVATION_POLICY_REGULAR
+    if sys.platform != "darwin":
+        return
+    if _MACOS_ACTIVATION_POLICY_REGULAR == regular:
+        return
+    appkit = _macos_appkit()
+    if appkit is None:
+        return
+    try:
+        policy = (
+            appkit.NSApplicationActivationPolicyRegular if regular
+            else appkit.NSApplicationActivationPolicyAccessory
+        )
+        appkit.NSApp.setActivationPolicy_(policy)
+    except Exception as exc:
+        print(f"[Mouser] Failed to set macOS activation policy: {exc}")
+        return
+    _MACOS_ACTIVATION_POLICY_REGULAR = regular
+    if regular:
+        _install_macos_dock_icon()
 
 
 def _activate_macos_window():
@@ -240,6 +453,143 @@ def _activate_macos_window():
         AppKit.NSApp.activateIgnoringOtherApps_(True)
     except Exception as exc:
         print(f"[Mouser] Failed to activate macOS window: {exc}")
+
+
+def _install_native_macos_status_item(qmenu, on_left_click):
+    """Install a native AppKit ``NSStatusItem`` for the menu-bar.
+
+    Qt's ``QSystemTrayIcon`` on notched MacBooks still uses the
+    legacy ``NSSquareStatusItemLength`` mode for its underlying
+    ``NSStatusItem``. macOS Sonoma+ refuses to composite items
+    created that way into the right-of-notch status-item area,
+    which is why the icon disappears on dense menu bars (the
+    ``onscreen=False`` symptom in ``CGWindowListCopyWindowInfo``).
+
+    This helper creates a native item with ``NSVariableStatusItemLength``
+    so macOS slots it into the standard right-of-notch lineup,
+    sets the icon as a template image so it auto-tints to the menu
+    bar's appearance, and routes clicks back into Qt by popping the
+    existing ``QMenu`` (left click + ``on_left_click`` for the
+    primary-action case, the full menu for control-click).
+
+    Returns the retained ``NSStatusItem`` on success, ``None`` on
+    any failure -- callers should fall back to ``QSystemTrayIcon``.
+    """
+    global _MACOS_NATIVE_STATUS_ITEM, _MACOS_NATIVE_STATUS_TARGET
+    if sys.platform != "darwin":
+        return None
+    appkit = _macos_appkit()
+    if appkit is None:
+        return None
+    try:
+        from Foundation import NSObject  # type: ignore[import-not-found]
+        from PySide6.QtGui import QCursor
+        from PySide6.QtCore import QPoint
+    except Exception as exc:
+        print(f"[Mouser] Native status-item bootstrap failed: {exc}")
+        return None
+
+    icon_svg = os.path.join(ROOT, "images", "icons", "mouse-simple.svg")
+    if not os.path.isfile(icon_svg):
+        print(f"[Mouser] mouse-simple.svg not found at {icon_svg}")
+        return None
+
+    # Render the SVG into a 22 px square NSImage. 22 is the macOS-
+    # idiomatic menu-bar height (matches Apple's own SF Symbols).
+    # Drawing at 2x and letting AppKit downsample preserves crisp
+    # edges on both retina and non-retina displays.
+    icon_png = _render_svg_pixmap(icon_svg, _qcolor_white(), 22)
+    if icon_png.isNull():
+        print("[Mouser] could not render mouse-simple.svg for status item")
+        return None
+    icon_bytes = _qpixmap_to_png_bytes(icon_png)
+    ns_image = appkit.NSImage.alloc().initWithData_(icon_bytes)
+    if ns_image is None or ns_image.isValid() is False:
+        print("[Mouser] NSImage failed to decode status-item PNG")
+        return None
+    ns_image.setTemplate_(True)
+    ns_image.setSize_(appkit.NSMakeSize(22, 22))
+
+    status_bar = appkit.NSStatusBar.systemStatusBar()
+    # NSVariableStatusItemLength == -1.0; lets AppKit auto-position
+    # the item right-of-notch alongside every other modern status app.
+    status_item = status_bar.statusItemWithLength_(-1.0)
+    button = status_item.button()
+    if button is None:
+        print("[Mouser] NSStatusItem has no button; bailing")
+        status_bar.removeStatusItem_(status_item)
+        return None
+    button.setImage_(ns_image)
+    button.setToolTip_("Mouser")
+
+    class _StatusItemTarget(NSObject):
+        """Tiny Objective-C target that funnels NSStatusItem button
+        clicks back into Python. PyObjC requires action methods to
+        live on an NSObject subclass exposed to the Obj-C runtime."""
+
+        def setPyHandlers_(self, handlers):  # type: ignore[override]
+            self._py_handlers = handlers
+
+        def statusItemClicked_(self, sender):  # type: ignore[override]
+            try:
+                self._py_handlers["primary"]()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Mouser] status-item click handler raised: {exc}")
+
+    target = _StatusItemTarget.alloc().init()
+    target.setPyHandlers_({"primary": on_left_click})
+    button.setTarget_(target)
+    button.setAction_(b"statusItemClicked:")
+
+    # Attach the existing QMenu as the right-click / control-click
+    # menu via a tiny NSMenu shim that pops the Qt menu at the
+    # status-item's screen position. Qt's QMenu carries all the
+    # localised labels, action wiring, and live-update bindings the
+    # rest of the app already depends on, so we don't duplicate it
+    # into a parallel NSMenu.
+    def _open_menu_at_cursor():
+        try:
+            cursor_pos = QCursor.pos()
+        except Exception:  # noqa: BLE001
+            cursor_pos = QPoint(0, 0)
+        try:
+            qmenu.popup(cursor_pos)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Mouser] failed to popup tray menu: {exc}")
+
+    # The primary-click handler also gets the option to drop down the
+    # menu if the user expects it. Today we forward to ``on_left_click``
+    # (show window) per the existing Qt behaviour, but the QMenu remains
+    # reachable via right-click on the status item.
+    target.setPyHandlers_(
+        {"primary": on_left_click, "secondary": _open_menu_at_cursor}
+    )
+
+    # Cache the item + target globally so PyObjC doesn't release them
+    # while the app keeps running.
+    _MACOS_NATIVE_STATUS_ITEM = status_item
+    _MACOS_NATIVE_STATUS_TARGET = target
+    return status_item
+
+
+def _qcolor_white():
+    """Cached white QColor used to fill the SVG silhouette for the
+    template-image rendering path. Module-level cache because the
+    cached colour is identity-equal across all callers."""
+    from PySide6.QtGui import QColor
+    return QColor("#FFFFFF")
+
+
+def _qpixmap_to_png_bytes(pixmap):
+    """Serialise a QPixmap to PNG bytes via an in-memory QBuffer so
+    AppKit's ``NSImage.initWithData_`` can consume it without a
+    round trip through the filesystem."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    pixmap.save(buf, "PNG")
+    buf.close()
+    return bytes(buf.data())
 
 
 class UiState(QObject):
@@ -360,27 +710,28 @@ class SystemIconProvider(QQuickImageProvider):
 
 
 def _check_accessibility(locale_mgr: "LocaleManager") -> bool:
-    """On macOS, check if Accessibility permission is granted.
-
-    Returns True if already trusted, False otherwise.
+    """Verify the macOS Accessibility grant. Returns True only when
+    AXIsProcessTrustedWithOptions confirms the grant; any other path
+    (no grant, exception during the check) returns False so callers
+    fail closed.
     """
     if sys.platform != "darwin":
         return True
     try:
         trusted = is_process_trusted(prompt=True)
-        if not trusted:
-            print("[Mouser] Accessibility permission not granted")
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Icon.Warning)
-            msg.setWindowTitle(locale_mgr.tr("accessibility.title"))
-            msg.setText(locale_mgr.tr("accessibility.text"))
-            msg.setInformativeText(locale_mgr.tr("accessibility.info"))
-            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            msg.exec()
-        return bool(trusted)
     except Exception as exc:
         print(f"[Mouser] Accessibility check failed: {exc}")
-        return True
+        return False
+    if not trusted:
+        print("[Mouser] Accessibility permission not granted")
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(locale_mgr.tr("accessibility.title"))
+        msg.setText(locale_mgr.tr("accessibility.text"))
+        msg.setInformativeText(locale_mgr.tr("accessibility.info"))
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+    return bool(trusted)
 
 
 def _runtime_launch_path() -> str:
@@ -390,6 +741,14 @@ def _runtime_launch_path() -> str:
 
 
 def main():
+    # Re-exec through a `Mouser`-named symlink BEFORE anything Qt or
+    # AppKit related runs. Necessary because macOS reads the Dock label /
+    # Cmd+Tab caption from the executable basename at process creation;
+    # there is no in-process API to rename a Mach-O image after the fact.
+    # No-op when already relaunched, on non-macOS platforms, or when the
+    # symlink can't be created.
+    _maybe_relaunch_with_mouser_process_name()
+
     _print_startup_times()
     _t5 = _time.perf_counter()
     argv, hid_backend, start_hidden, force_show = _parse_cli_args(sys.argv)
@@ -405,6 +764,11 @@ def main():
         except ValueError as exc:
             raise SystemExit(f"Invalid --hid-backend setting: {exc}") from exc
 
+    # Also: also mutate the bundle's display name keys so
+    # surfaces that read from `[NSBundle mainBundle]` (application menu
+    # first item, Force Quit, notification banners) say "Mouser" too.
+    _rename_macos_bundle_for_dock()
+
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(argv)
     app.setApplicationName("Mouser")
@@ -413,6 +777,7 @@ def main():
     app.setWindowIcon(_app_icon())
     app.setQuitOnLastWindowClosed(False)
     _configure_macos_app_mode()
+    _install_macos_dock_icon()
     ui_state = UiState(app)
 
     print(f"[Mouser] Version: {APP_VERSION} ({APP_BUILD_MODE})")
@@ -489,10 +854,45 @@ def main():
     _sync_linux_ui_passthrough()
 
     def show_main_window():
+        # Promote BEFORE show so the window registers with WindowServer's
+        # foreground-app surfaces (Dock + Cmd+Tab + Mission Control) at
+        # creation time on macOS. visibilityChanged below also catches the
+        # transition (idempotent), so promotion is correct on the initial
+        # launch path where this function is never called.
+        _set_macos_activation_policy(regular=True)
         root_window.showNormal()
         root_window.raise_()
         root_window.requestActivate()
         _activate_macos_window()
+
+    def _on_window_visibility_changed(visibility):
+        # QWindow.Visibility: Hidden = 0; any other value (Windowed,
+        # Maximized, FullScreen, Minimized) means there is an on-screen
+        # window. macOS Cmd+Tab / Mission Control / Dock representation
+        # depends on the activation policy, which we toggle to mirror
+        # whether a window is currently shown:
+        #   shown  → Regular   (real foreground app)
+        #   hidden → Accessory (menu-bar only)
+        # The QML `onClosing { close.accepted = false; root.hide() }`
+        # handler in Main.qml turns Cmd+W and the red traffic light into
+        # `hide()` calls so window state collapses cleanly to Hidden.
+        # `_set_macos_activation_policy` is idempotent, so the storm of
+        # visibilityChanged emits during a window state transition
+        # collapses to at most one AppKit round-trip per direction.
+        is_visible = visibility != QWindow.Visibility.Hidden
+        _set_macos_activation_policy(regular=is_visible)
+        if is_visible:
+            # Window just became visible -- bring the app forward so the
+            # user actually sees it (covers initial launch + tray clicks).
+            _activate_macos_window()
+
+    if sys.platform == "darwin":
+        root_window.visibilityChanged.connect(_on_window_visibility_changed)
+        # The window was created visible (QML `visible: !launchHidden`) before
+        # this handler was connected, so its initial visibility transition has
+        # already fired with no listener. Reconcile the activation policy now
+        # so the Dock tile shows on a `--show-window` / non-hidden start.
+        _on_window_visibility_changed(root_window.visibility())
 
     def _on_second_instance_activate():
         _drain_local_activate_socket(single_server.nextPendingConnection())
@@ -515,7 +915,7 @@ def main():
     from PySide6.QtCore import QTimer
     QTimer.singleShot(0, lambda: (
         engine.start(),
-        print("[Mouser] Engine started — remapping is active"),
+        print("[Mouser] Engine started -- remapping is active"),
     ))
 
     # ── System Tray ────────────────────────────────────────────
@@ -619,6 +1019,21 @@ def main():
         QSystemTrayIcon.ActivationReason.DoubleClick,
     ) else None)
     tray.show()
+
+    # macOS only: install a native NSStatusItem so the menu-bar icon
+    # lives in the right-of-notch lineup alongside other modern status
+    # apps. Qt's QSystemTrayIcon still uses the legacy square-length
+    # NSStatusItem mode which macOS Sonoma+ refuses to composite on
+    # notched MacBooks once the bar fills up. We keep the QSystemTrayIcon
+    # alive (Qt's showMessage path uses NSUserNotification under the
+    # hood, separate from NSStatusItem) but hide its menu-bar surface to
+    # avoid two icons.
+    if sys.platform == "darwin":
+        native_tray = _install_native_macos_status_item(
+            tray_menu, show_main_window
+        )
+        if native_tray is not None:
+            tray.setVisible(False)
 
     if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
 
