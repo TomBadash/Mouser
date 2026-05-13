@@ -365,6 +365,17 @@ class Backend(QObject):
 
     # ── Properties ─────────────────────────────────────────────
 
+    def _button_label(self, key, fallback_name):
+        """Return the connected layout's hotspot label for ``key`` so the
+        mappings list matches the diagram, or ``fallback_name`` if the
+        device has no hotspot for that key."""
+        for hotspot in self._device_layout.get("hotspots", []) or []:
+            if hotspot.get("buttonKey") == key:
+                label = hotspot.get("label")
+                if label:
+                    return label
+        return fallback_name
+
     @Property(list, notify=mappingsChanged)
     def buttons(self):
         """List of button dicts for the active profile, filtered by device."""
@@ -381,7 +392,7 @@ class Backend(QObject):
             idx += 1
             result.append({
                 "key": key,
-                "name": name,
+                "name": self._button_label(key, name),
                 "actionId": aid,
                 "actionLabel": _action_label(aid),
                 "index": idx,
@@ -1470,7 +1481,7 @@ class Backend(QObject):
             aid = mappings.get(key, "none")
             result.append({
                 "key": key,
-                "name": name,
+                "name": self._button_label(key, name),
                 "actionId": aid,
                 "actionLabel": _action_label(aid),
             })

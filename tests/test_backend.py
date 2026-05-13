@@ -733,6 +733,57 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertNotIn("gesture", button_keys)
         self.assertNotIn("mode_shift", button_keys)
 
+    def test_mx_master_4_mappings_use_per_device_hotspot_labels(self):
+        device = SimpleNamespace(
+            key="mx_master_4",
+            display_name="MX Master 4",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_4",
+            supported_buttons=(
+                "middle", "gesture", "xbutton1", "xbutton2", "thumb_button",
+                "hscroll_left", "hscroll_right", "mode_shift",
+            ),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+
+        names_by_key = {button["key"]: button["name"] for button in backend.buttons}
+        self.assertEqual(names_by_key.get("gesture"), "Sense Panel")
+        self.assertEqual(names_by_key.get("thumb_button"), "Top thumb button")
+
+    def test_mappings_fall_back_to_button_names_when_layout_has_no_hotspot(self):
+        # mx_master_3s defines a hotspot for hscroll_left (the wheel marker)
+        # but none for hscroll_right, so the right-direction binding must
+        # surface the global BUTTON_NAMES entry instead of an empty label.
+        device = SimpleNamespace(
+            key="mx_master_3s",
+            display_name="MX Master 3S",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_3s",
+            supported_buttons=(
+                "middle", "gesture", "xbutton1", "xbutton2",
+                "hscroll_left", "hscroll_right",
+            ),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+
+        names_by_key = {button["key"]: button["name"] for button in backend.buttons}
+        self.assertEqual(names_by_key.get("hscroll_right"), "Horizontal scroll right")
+        self.assertEqual(names_by_key.get("hscroll_left"), "Horizontal scroll left")
+
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
         device = SimpleNamespace(
             key="mx_master_3",
