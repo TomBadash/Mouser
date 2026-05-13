@@ -15,8 +15,19 @@ build/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+
+# Per-machine / per-user dev-environment pins. These commonly carry
+# signing identities, API keys, install dirs, or runtime versions that
+# are local to a single developer's setup.
+.python-version
+.tool-versions
+.envrc
+.env
+.env.*
+*.local.json
 
 # OS
 Thumbs.db
