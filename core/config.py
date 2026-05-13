@@ -1,5 +1,5 @@
 """
-Configuration manager — loads/saves button mappings to a JSON file.
+Configuration manager -- loads/saves button mappings to a JSON file.
 Supports per-application profiles (for future use).
 """
 
@@ -29,6 +29,7 @@ BUTTON_NAMES = {
     "gesture":       "Gesture button",
     "xbutton1":      "Back button",
     "xbutton2":      "Forward button",
+    "thumb_button":   "Thumb button",
     "hscroll_left":  "Horizontal scroll left",
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
@@ -60,6 +61,7 @@ BUTTON_TO_EVENTS = {
     "gesture_down":  ("gesture_swipe_down",),
     "xbutton1":      ("xbutton1_down", "xbutton1_up"),
     "xbutton2":      ("xbutton2_down", "xbutton2_up"),
+    "thumb_button":   ("thumb_button_down", "thumb_button_up"),
     "hscroll_left":  ("hscroll_left",),
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
@@ -67,7 +69,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 11,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -82,6 +84,7 @@ DEFAULT_CONFIG = {
                 "gesture_down": "none",
                 "xbutton1": "alt_tab",
                 "xbutton2": "alt_tab",
+                "thumb_button": "none",
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
@@ -109,6 +112,10 @@ DEFAULT_CONFIG = {
         "ignore_trackpad": True,
         "check_for_updates": True,
         "update_check_state": {},
+        # HID++ wheel divert kill-switch:
+        #   "auto" → enable on capable devices (MX Master family).
+        #   "off"  → never divert; force OS-layer inversion fallback.
+        "wheel_divert": "auto",
     },
 }
 
@@ -329,6 +336,24 @@ def _migrate(cfg):
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
 
+    if version < 10:
+        # v10: HID++ wheel divert kill-switch. Default "auto" enables divert
+        # on capable devices (MX Master family). Existing installs keep
+        # working unchanged when the device exposes 0x2121 / 0x2150.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("wheel_divert", "auto")
+        cfg["version"] = 10
+
+    if version < 11:
+        # v11: MX Master 4 Thumb button (the small button on the front face,
+        # CID 0x00c3 in HID++). Existing profiles get "thumb_button": "none"
+        # so users opt in by mapping it in the UI. Devices without this
+        # button simply ignore the entry.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            mappings.setdefault("thumb_button", "none")
+        cfg["version"] = 11
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -337,6 +362,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("ignore_trackpad", True)
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("wheel_divert", "auto")
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

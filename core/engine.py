@@ -1,5 +1,5 @@
 """
-Engine — wires the mouse hook to the key simulator using the
+Engine -- wires the mouse hook to the key simulator using the
 current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
@@ -67,6 +67,12 @@ class Engine:
         self._replay_lock = threading.Lock()
         self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
         self._lock = threading.Lock()
+        # HID++ native-invert tracking. `_last_native_invert_target` is
+        # the most recently acknowledged (invert_v, invert_h) so the
+        # fast-path can skip redundant device round-trips on profile changes.
+        self._wheel_divert_change_cb = None
+        self._wheel_divert_active_local = False
+        self._last_native_invert_target = (False, False)
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
         self.hook.set_status_callback(self._emit_status)
@@ -140,6 +146,8 @@ class Engine:
         )
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
+        # Drive HID++ firmware wheel-invert from settings + device capability.
+        self._apply_wheel_invert_setting()
 
         for btn_key, action_id in mappings.items():
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
@@ -250,7 +258,7 @@ class Engine:
 
         IMPORTANT: this is called from a HID event callback which runs on the HID
         loop thread.  Calling hg.set_smart_shift() directly would block waiting for
-        the same loop to process the pending request — a deadlock that causes the
+        the same loop to process the pending request -- a deadlock that causes the
         3-second timeout seen in the logs.  Config and UI are updated synchronously;
         the device write is dispatched to a separate thread.
         """
@@ -277,7 +285,7 @@ class Engine:
         """Switch between ratchet and free-spin (Logi Options+ physical button behaviour).
 
         SmartShift auto-switching is disabled so the chosen fixed mode takes effect.
-        Same deadlock caveat as _toggle_smart_shift — device write runs off-thread.
+        Same deadlock caveat as _toggle_smart_shift -- device write runs off-thread.
         """
         settings = self.cfg.get("settings", {})
         current_mode = settings.get("smart_shift_mode", "ratchet")
@@ -332,6 +340,102 @@ class Engine:
             def _write():
                 hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
+
+    def _apply_wheel_invert_setting(self, *, force: bool = False) -> None:
+        """Drive HID++ firmware wheel-invert from settings + device
+        capability. ``force=True`` re-issues writes even when cached
+        state matches the target -- used by ``_run_saved_settings_replay``
+        to realign firmware that forgot state after sleep. On success the
+        engine + platform hook flip ``wheel_native_invert_active`` so the
+        OS-layer inversion path is suppressed; on failure the OS-layer
+        path handles inversion."""
+        settings = self.cfg.get("settings", {})
+        kill_switch_off = settings.get("wheel_divert", "auto") == "off"
+        invert_v = bool(settings.get("invert_vscroll", False))
+        invert_h = bool(settings.get("invert_hscroll", False))
+        device = self.connected_device
+        capable = bool(device and (
+            getattr(device, "has_hires_wheel", False)
+            or getattr(device, "has_thumbwheel", False)
+        ))
+        # Stay True even when both invert flags are False so we own the
+        # wheel-mode write and a stale invert lease from a crashed Mouser
+        # session is reset to native on reconnect.
+        target_active = bool(capable and not kill_switch_off)
+        hg = self.hook._hid_gesture
+        if (
+            not force
+            and target_active == self._wheel_divert_active_local
+            and target_active == bool(getattr(self.hook, "wheel_native_invert_active", False))
+            and (not target_active or self._last_native_invert_target == (invert_v, invert_h))
+        ):
+            return
+        ack = False
+        if target_active and hg is not None and hasattr(hg, "request_wheel_native_invert"):
+            try:
+                ack = bool(hg.request_wheel_native_invert(invert_v, invert_h))
+            except Exception as exc:
+                print(f"[Engine] wheel native-invert request failed: {exc}")
+                ack = False
+        elif not target_active and hg is not None and hasattr(hg, "request_wheel_native_invert"):
+            try:
+                hg.request_wheel_native_invert(False, False)
+            except Exception as exc:
+                print(f"[Engine] wheel native-invert release failed: {exc}")
+        new_active = bool(target_active and ack)
+        prev_active = self._wheel_divert_active_local
+        self._wheel_divert_active_local = new_active
+        self.hook.wheel_native_invert_active = new_active
+        self._last_native_invert_target = (invert_v, invert_h) if new_active else (False, False)
+        if hg is not None and hasattr(hg, "set_wheel_divert_active_flags"):
+            try:
+                hg.set_wheel_divert_active_flags(
+                    bool(new_active and invert_v
+                         and getattr(hg, "_hires_wheel_idx", None) is not None),
+                    bool(new_active and invert_h
+                         and getattr(hg, "_thumbwheel_idx", None) is not None),
+                )
+            except Exception as exc:
+                print(f"[Engine] set_wheel_divert_active_flags failed: {exc}")
+        if new_active != prev_active:
+            print(
+                f"[Engine] wheel native-invert -> "
+                f"{'ON (HID++)' if new_active else 'OFF (OS fallback)'} "
+                f"capable={capable} kill_switch_off={kill_switch_off} "
+                f"invert_v={invert_v} invert_h={invert_h} ack={ack}"
+            )
+            if not new_active and target_active:
+                self._emit_status(
+                    "Firmware wheel invert FAILED on a capable device -- "
+                    "falling back to OS-level inversion."
+                )
+            self._notify_wheel_divert_change(new_active)
+
+    def _notify_wheel_divert_change(self, active: bool) -> None:
+        if self._wheel_divert_change_cb is None:
+            return
+        try:
+            self._wheel_divert_change_cb(bool(active))
+        except Exception as exc:
+            print(f"[Engine] wheel divert change callback raised: {exc}")
+
+    def set_wheel_divert_change_callback(self, cb) -> None:
+        """Register ``cb(active: bool)`` invoked whenever the HID++ wheel
+        divert lease toggles. Fires once immediately with the current
+        state. Pass ``None`` to detach the currently registered callback."""
+        self._wheel_divert_change_cb = cb
+        if cb is None:
+            return
+        try:
+            cb(bool(self._wheel_divert_active_local))
+        except Exception as exc:
+            print(f"[Engine] wheel divert change callback (initial) raised: {exc}")
+
+    @property
+    def wheel_native_invert_active(self) -> bool:
+        """True iff the connected device is performing scroll inversion at
+        the firmware level (so the OS-layer inversion path is suppressed)."""
+        return bool(self._wheel_divert_active_local)
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
@@ -515,6 +619,17 @@ class Engine:
                         self._smart_shift_read_cb(saved_ss_state)
                     except Exception:
                         pass
+
+        # Phase A.5: re-apply HID++ native wheel invert with force=True so
+        # firmware that forgot invert state after sleep is realigned.
+        self._apply_wheel_invert_setting(force=True)
+        native_invert_target = (
+            self.cfg.get("settings", {}).get("wheel_divert", "auto") != "off"
+            and bool(getattr(self.connected_device, "has_hires_wheel", False)
+                     or getattr(self.connected_device, "has_thumbwheel", False))
+        )
+        if native_invert_target and not self._wheel_divert_active_local:
+            replay_ok = False
 
         time.sleep(3)
         hg = self.hook._hid_gesture
@@ -725,7 +840,7 @@ class Engine:
         hg = self.hook._hid_gesture
         if hg:
             return hg.set_dpi(dpi)
-        print("[Engine] No HID++ connection — DPI not applied")
+        print("[Engine] No HID++ connection -- DPI not applied")
         return False
 
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
@@ -744,7 +859,7 @@ class Engine:
             result = hg.set_smart_shift(mode, smart_shift_enabled, threshold)
             print(f"[Engine] set_smart_shift -> {'OK' if result else 'FAILED'}")
             return result
-        print("[Engine] set_smart_shift: No HID++ connection — not applied")
+        print("[Engine] set_smart_shift: No HID++ connection -- not applied")
         return False
 
     @property

@@ -427,7 +427,12 @@ class MouseHook(BaseMouseHook):
                 should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
-                if self.invert_vscroll:
+                # `wheel_native_invert_active` means the firmware has
+                # already flipped the sign at the device level. Skip the
+                # OS-layer inversion path so we don't flip a second time.
+                if self.wheel_native_invert_active:
+                    pass
+                elif self.invert_vscroll:
                     delta = hiword(mouse_data)
                     if delta != 0 and self._ri_hwnd:
                         self._pending_vscroll += -delta
@@ -451,7 +456,7 @@ class MouseHook(BaseMouseHook):
                     event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                     should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
 
-                if self.invert_hscroll:
+                if self.invert_hscroll and not self.wheel_native_invert_active:
                     if delta != 0 and self._ri_hwnd and not should_block:
                         self._pending_hscroll += -delta
                         if self._hscroll_posted:
@@ -595,7 +600,7 @@ class MouseHook(BaseMouseHook):
             None,
         )
         if not self._ri_hwnd:
-            print("[MouseHook] CreateWindowExW failed — gesture detection unavailable")
+            print("[MouseHook] CreateWindowExW failed -- gesture detection unavailable")
             return False
 
         ShowWindow(self._ri_hwnd, SW_HIDE)
@@ -683,7 +688,7 @@ class MouseHook(BaseMouseHook):
         if now - self._last_rehook_time < 2.0:
             return
         self._last_rehook_time = now
-        print("[MouseHook] Device change detected — refreshing hook")
+        print("[MouseHook] Device change detected -- refreshing hook")
         self._device_name_cache.clear()
         self._prev_raw_buttons.clear()
         self._reinstall_hook()

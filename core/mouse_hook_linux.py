@@ -19,7 +19,7 @@ try:
     _EVDEV_OK = True
 except ImportError:
     _EVDEV_OK = False
-    print("[MouseHook] python-evdev not installed — pip install evdev")
+    print("[MouseHook] python-evdev not installed -- pip install evdev")
 
 from core.logi_devices import (
     build_evdev_connected_device_info,
@@ -239,7 +239,7 @@ class MouseHook(BaseMouseHook):
                 )
             except PermissionError:
                 print(
-                    "[MouseHook] Permission denied — add user to 'input' group "
+                    "[MouseHook] Permission denied -- add user to 'input' group "
                     "and ensure /dev/uinput is writable"
                 )
                 self._set_evdev_remap_ready(False, _REMAP_REASON_UINPUT_FAILED)
@@ -421,43 +421,64 @@ class MouseHook(BaseMouseHook):
         if dispatch_event:
             self._dispatch(dispatch_event)
 
+    def _begin_gesture_capture(self, source_label):
+        """Activate gesture tracking from any source (HID++ gesture button
+        or BTN_TASK haptic-panel fallback)."""
+        with self._gesture_lock:
+            if self._gesture_active:
+                return
+            self._gesture_active = True
+            self._gesture_triggered = False
+            self._emit_debug(f"{source_label} button down")
+            self._emit_gesture_event({"type": "button_down"})
+            if self._gesture_direction_enabled and not self._gesture_cooldown_active():
+                self._start_gesture_tracking()
+            else:
+                self._gesture_tracking = False
+                self._gesture_triggered = False
+
+    def _end_gesture_capture(self, source_label):
+        dispatch_click = False
+        with self._gesture_lock:
+            if not self._gesture_active:
+                return
+            should_click = not self._gesture_triggered
+            self._gesture_active = False
+            self._finish_gesture_tracking()
+            self._gesture_triggered = False
+            self._emit_debug(
+                f"{source_label} button up click_candidate={str(should_click).lower()}"
+            )
+            self._emit_gesture_event(
+                {
+                    "type": "button_up",
+                    "click_candidate": should_click,
+                }
+            )
+            dispatch_click = should_click
+        if dispatch_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
     def _on_hid_gesture_down(self):
         if self._ui_passthrough:
             return
-        with self._gesture_lock:
-            if not self._gesture_active:
-                self._gesture_active = True
-                self._gesture_triggered = False
-                self._emit_debug("HID gesture button down")
-                self._emit_gesture_event({"type": "button_down"})
-                if self._gesture_direction_enabled and not self._gesture_cooldown_active():
-                    self._start_gesture_tracking()
-                else:
-                    self._gesture_tracking = False
-                    self._gesture_triggered = False
+        # MX4 routing: when the Sense Panel is the gesture source for this
+        # device, the small HID++ "gesture" button (CID 0x00c3) is the
+        # Thumb button, not the gesture trigger.
+        if self._gesture_via_sense_panel:
+            self._emit_debug("HID thumb button down")
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_DOWN))
+            return
+        self._begin_gesture_capture("HID gesture")
 
     def _on_hid_gesture_up(self):
         if self._ui_passthrough:
             return
-        dispatch_click = False
-        with self._gesture_lock:
-            if self._gesture_active:
-                should_click = not self._gesture_triggered
-                self._gesture_active = False
-                self._finish_gesture_tracking()
-                self._gesture_triggered = False
-                self._emit_debug(
-                    f"HID gesture button up click_candidate={str(should_click).lower()}"
-                )
-                self._emit_gesture_event(
-                    {
-                        "type": "button_up",
-                        "click_candidate": should_click,
-                    }
-                )
-                dispatch_click = should_click
-        if dispatch_click:
-            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+        if self._gesture_via_sense_panel:
+            self._emit_debug("HID thumb button up")
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_UP))
+            return
+        self._end_gesture_capture("HID gesture")
 
     def _on_hid_mode_shift_down(self):
         if self._ui_passthrough:
@@ -485,6 +506,9 @@ class MouseHook(BaseMouseHook):
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
         if self._ui_passthrough:
+            return
+        # MX4 fallback: drop rawXY from the small HID++ button.
+        if self._gesture_via_sense_panel:
             return
         self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
         self._emit_gesture_event(
@@ -824,6 +848,30 @@ class MouseHook(BaseMouseHook):
                 mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
                 should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
+        # MX Master 4 Sense Panel ("Action Ring" in Logi Options+) arrives
+        # as BTN_TASK in evdev (button 6 on X11).
+        elif event.code == getattr(_ecodes, "BTN_TASK", 0x117):
+            if self._gesture_via_sense_panel:
+                # Fallback path: 0x01a0 divert was rejected, so BTN_TASK
+                # drives the gesture trigger. REL events while held feed
+                # the swipe detector via `_handle_rel`.
+                if event.value == 1:
+                    self._begin_gesture_capture("Sense panel gesture")
+                elif event.value == 0:
+                    self._end_gesture_capture("Sense panel gesture")
+                return
+            if self._thumb_button_via_hid:
+                # The small Thumb button (CID 0x00c3) is being diverted
+                # over HID++ on this device, so any BTN_TASK leaking
+                # through is the Sense Panel; suppress it.
+                return
+            if event.value == 1:
+                mouse_event = MouseEvent(MouseEvent.THUMB_BUTTON_DOWN)
+                should_block = MouseEvent.THUMB_BUTTON_DOWN in self._blocked_events
+            elif event.value == 0:
+                mouse_event = MouseEvent(MouseEvent.THUMB_BUTTON_UP)
+                should_block = MouseEvent.THUMB_BUTTON_UP in self._blocked_events
+
         if mouse_event:
             self._dispatch(mouse_event)
 
@@ -849,7 +897,9 @@ class MouseHook(BaseMouseHook):
 
         rel_wheel_hi_res = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
         if code == _ecodes.REL_WHEEL or code == rel_wheel_hi_res:
-            if self.invert_vscroll:
+            # Skip the OS-layer rewrite when firmware is already flipping
+            # the sign at the device, otherwise the two flips cancel out.
+            if self.invert_vscroll and not self.wheel_native_invert_active:
                 self._uinput.write(_ecodes.EV_REL, code, -value)
             else:
                 self._uinput.write_event(event)
@@ -871,7 +921,7 @@ class MouseHook(BaseMouseHook):
 
             if should_block:
                 return
-            if self.invert_hscroll:
+            if self.invert_hscroll and not self.wheel_native_invert_active:
                 self._uinput.write(_ecodes.EV_REL, code, -value)
             else:
                 self._uinput.write_event(event)
@@ -910,7 +960,7 @@ class MouseHook(BaseMouseHook):
             )
             self._evdev_thread.start()
         else:
-            print("[MouseHook] evdev not available — button remapping disabled")
+            print("[MouseHook] evdev not available -- button remapping disabled")
 
         return True
 
