@@ -962,6 +962,55 @@ Item {
                         color: scrollPage.theme.textSecondary
                     }
 
+                    component InvertScopeBadge: Rectangle {
+                        // Inline indicator placed inside an invert toggle row.
+                        // Visible only when the toggle is on (so it always
+                        // describes a currently-applied inversion). Colour
+                        // tells the user whether that inversion will survive
+                        // Synergy / DeskFlow / KVM forwarding (HID++ does,
+                        // OS-layer injection does not).
+                        property bool active: backend.wheelDivertActive
+                        property bool toggleOn: false
+                        visible: toggleOn
+                        width: labelText.implicitWidth + 16
+                        height: 22
+                        radius: 11
+                        color: active
+                               ? scrollPage.theme.accent
+                               : scrollPage.theme.bgSubtle
+                        border.width: active ? 0 : 1
+                        border.color: scrollPage.theme.textSecondary
+
+                        ToolTip.text: active
+                                      ? s["scroll.wheel_invert_native_tooltip"]
+                                      : s["scroll.wheel_invert_os_tooltip"]
+                        ToolTip.delay: 400
+                        ToolTip.visible: hoverArea.containsMouse
+
+                        Text {
+                            id: labelText
+                            anchors.centerIn: parent
+                            text: parent.active
+                                  ? s["scroll.wheel_invert_native"]
+                                  : s["scroll.wheel_invert_os"]
+                            font {
+                                family: uiState.fontFamily
+                                pixelSize: 11
+                                bold: parent.active
+                            }
+                            color: parent.active
+                                   ? scrollPage.theme.bgSidebar
+                                   : scrollPage.theme.textSecondary
+                        }
+
+                        MouseArea {
+                            id: hoverArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.NoButton
+                        }
+                    }
+
                     Rectangle {
                         width: parent.width
                         height: 52
@@ -974,6 +1023,7 @@ Item {
                                 leftMargin: 16
                                 rightMargin: 16
                             }
+                            spacing: 10
 
                             Text {
                                 text: s["scroll.invert_vertical"]
@@ -983,6 +1033,10 @@ Item {
                                 }
                                 color: scrollPage.theme.textPrimary
                                 Layout.fillWidth: true
+                            }
+
+                            InvertScopeBadge {
+                                toggleOn: vscrollSwitch.checked
                             }
 
                             Switch {
@@ -1008,6 +1062,7 @@ Item {
                                 leftMargin: 16
                                 rightMargin: 16
                             }
+                            spacing: 10
 
                             Text {
                                 text: s["scroll.invert_horizontal"]
@@ -1017,6 +1072,10 @@ Item {
                                 }
                                 color: scrollPage.theme.textPrimary
                                 Layout.fillWidth: true
+                            }
+
+                            InvertScopeBadge {
+                                toggleOn: hscrollSwitch.checked
                             }
 
                             Switch {

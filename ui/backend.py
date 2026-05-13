@@ -215,6 +215,7 @@ class Backend(QObject):
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
+    wheelDivertActiveChanged = Signal(bool)
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
@@ -229,6 +230,7 @@ class Backend(QObject):
     _updateCheckFinishedRequest = Signal(bool, bool, object)
     _updateInstallStateRequest = Signal(str, str, bool)
     _updateInstallProgressRequest = Signal(int)
+    _wheelDivertChangeRequest = Signal(bool)
 
     def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
@@ -280,6 +282,7 @@ class Backend(QObject):
         self._update_timer = QTimer(self)
         self._update_timer.setInterval(DEFAULT_AUTO_CHECK_INTERVAL_SECONDS * 1000)
         self._update_timer.timeout.connect(lambda: self._startUpdateCheck(manual=False))
+        self._wheel_divert_active = False
 
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
@@ -306,6 +309,8 @@ class Backend(QObject):
             self._handleUpdateInstallState, Qt.QueuedConnection)
         self._updateInstallProgressRequest.connect(
             self._handleUpdateInstallProgress, Qt.QueuedConnection)
+        self._wheelDivertChangeRequest.connect(
+            self._handleWheelDivertChange, Qt.QueuedConnection)
 
         # Wire engine callbacks
         if engine:
@@ -322,6 +327,10 @@ class Backend(QObject):
                 engine.set_smart_shift_read_callback(self._onEngineSmartShiftRead)
             if hasattr(engine, "set_status_callback"):
                 engine.set_status_callback(self._onEngineStatusMessage)
+            if hasattr(engine, "set_wheel_divert_change_callback"):
+                engine.set_wheel_divert_change_callback(
+                    self._onEngineWheelDivertChange
+                )
             if hasattr(engine, "set_debug_enabled"):
                 engine.set_debug_enabled(self.debugMode)
             self._mouse_connected = bool(getattr(engine, "device_connected", False))
@@ -510,6 +519,12 @@ class Backend(QObject):
     @Property(bool, notify=settingsChanged)
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
+
+    @Property(bool, notify=wheelDivertActiveChanged)
+    def wheelDivertActive(self):
+        """True when scroll inversion is being applied by the device firmware
+        via HID++ (0x2121 / 0x2150) rather than by Mouser at the OS layer."""
+        return bool(self._wheel_divert_active)
 
     @Property(bool, notify=settingsChanged)
     def ignoreTrackpad(self):
@@ -1628,6 +1643,18 @@ class Backend(QObject):
         """Runs on Qt main thread."""
         if message:
             self.statusMessage.emit(message)
+
+    def _onEngineWheelDivertChange(self, active):
+        """Called from the engine thread; hops to the Qt main thread."""
+        self._wheelDivertChangeRequest.emit(bool(active))
+
+    @Slot(bool)
+    def _handleWheelDivertChange(self, active):
+        """Runs on Qt main thread."""
+        active = bool(active)
+        if active != self._wheel_divert_active:
+            self._wheel_divert_active = active
+            self.wheelDivertActiveChanged.emit(active)
 
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):
