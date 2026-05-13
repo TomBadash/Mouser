@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import re
 from typing import Iterable
 
-from core.logi_device_catalog import LOGI_DEVICE_SPECS
+from core.logi_device_catalog import LOGI_DEVICE_SPECS, MX_MASTER_4_BUTTONS
 
 
 DEFAULT_GESTURE_CIDS = (0x00C3, 0x00D7)
@@ -119,6 +119,16 @@ class LogiDeviceSpec:
     supported_buttons: tuple[str, ...] = DEFAULT_BUTTON_LAYOUT
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
+    # Catalog hints; runtime HID++ discovery overrides these via ConnectedDeviceInfo.
+    has_hires_wheel: bool = False
+    has_thumbwheel: bool = False
+    # True when the device exposes a haptic Sense Panel that should drive
+    # gestures (MX Master 4 family). Enables an OS-level btn=6 / BTN_TASK
+    # fallback path when HID++ divert of the panel is unavailable.
+    gesture_via_sense_panel: bool = False
+    # Optional second thumb-area control to divert as a button-only extra
+    # (no rawXY) alongside the active gesture CID.
+    thumb_button_cid: int | None = None
 
     def matches(self, product_id=None, product_name=None) -> bool:
         if product_id is not None and int(product_id) in self.product_ids:
@@ -367,6 +377,19 @@ class ConnectedDeviceInfo:
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
     capability_inventory: DeviceCapabilityInventory = DeviceCapabilityInventory()
+    # has_* mirrors HID++ feature presence; *_active reflects whether the
+    # listener currently holds the firmware-invert lease. Engine and mouse
+    # hooks read these directly instead of re-walking the inventory.
+    has_hires_wheel: bool = False
+    has_thumbwheel: bool = False
+    hires_wheel_active: bool = False
+    thumbwheel_active: bool = False
+    gesture_via_sense_panel: bool = False
+    thumb_button_cid: int | None = None
+    # CID the listener actually diverted as the gesture role; None until divert succeeds.
+    active_gesture_cid: int | None = None
+    # True when thumb_button events arrive over HID++ rather than via the OS button path.
+    thumb_button_via_hid: bool = False
 
 
 # Seeded from Mouser's own device catalog first, then extended with broader
@@ -763,6 +786,7 @@ def derive_supported_buttons_from_reprog_controls(
 # resolve buttons even when individual devices use per-device ui_layout keys.
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
+    "mx_master_4": MX_MASTER_4_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
@@ -787,11 +811,16 @@ def build_connected_device_info(
     source=None,
     gesture_cids=None,
     reprog_controls=None,
-    active_gesture_cid=None,
+    active_gesture_cid: int | None = None,
     gesture_rawxy_enabled=None,
     discovered_features=None,
     device_identity=None,
     diagnostics=None,
+    has_hires_wheel=False,
+    has_thumbwheel=False,
+    hires_wheel_active=False,
+    thumbwheel_active=False,
+    thumb_button_via_hid=False,
 ) -> ConnectedDeviceInfo:
     spec = resolve_device(product_id=product_id, product_name=product_name)
     pid = int(product_id) if product_id not in (None, "") else None
@@ -811,6 +840,11 @@ def build_connected_device_info(
         discovered_features=discovered_features,
         diagnostics=diagnostics,
     )
+    # Caller-supplied runtime evidence wins over catalog hints; otherwise
+    # fall back to whatever the spec declared.
+    eff_has_hires = bool(has_hires_wheel) or bool(getattr(spec, "has_hires_wheel", False))
+    eff_has_thumb = bool(has_thumbwheel) or bool(getattr(spec, "has_thumbwheel", False))
+    normalized_active_cid = int(active_gesture_cid) if active_gesture_cid is not None else None
     if spec:
         resolved_gesture_cids = tuple(gesture_cids or spec.gesture_cids)
         return ConnectedDeviceInfo(
@@ -827,6 +861,14 @@ def build_connected_device_info(
             dpi_min=spec.dpi_min,
             dpi_max=spec.dpi_max,
             capability_inventory=inventory,
+            has_hires_wheel=eff_has_hires,
+            has_thumbwheel=eff_has_thumb,
+            hires_wheel_active=bool(hires_wheel_active),
+            thumbwheel_active=bool(thumbwheel_active),
+            gesture_via_sense_panel=bool(spec.gesture_via_sense_panel),
+            thumb_button_cid=spec.thumb_button_cid,
+            active_gesture_cid=normalized_active_cid,
+            thumb_button_via_hid=bool(thumb_button_via_hid),
         )
 
     # Fallback for unrecognized devices (e.g., USB Receiver PID 0xC52B which
@@ -848,6 +890,12 @@ def build_connected_device_info(
         supported_buttons=GENERIC_BUTTONS,
         gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
         capability_inventory=inventory,
+        has_hires_wheel=eff_has_hires,
+        has_thumbwheel=eff_has_thumb,
+        hires_wheel_active=bool(hires_wheel_active),
+        thumbwheel_active=bool(thumbwheel_active),
+        active_gesture_cid=normalized_active_cid,
+        thumb_button_via_hid=bool(thumb_button_via_hid),
     )
 
 

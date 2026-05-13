@@ -584,12 +584,39 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
 
         self.assertIn("mode_shift", info.supported_buttons)
         self.assertIn("gesture_down", info.supported_buttons)
-        self.assertNotIn("action_ring", info.supported_buttons)
+        # `thumb_button` is the relocated Mouse Gesture Button (CID 0x00C3)
+        # exposed as a UI mapping target via MX_MASTER_4_BUTTONS. The Sense
+        # Panel (CID 0x01A0) drives gestures via rawXY and does not get a
+        # button entry of its own.
+        self.assertIn("thumb_button", info.supported_buttons)
         self.assertNotIn("haptic", info.supported_buttons)
         self.assertEqual(
             info.capability_inventory.to_dict()["known_unsupported_controls"],
             [{"cid": "0x01A0", "name": "haptic"}],
         )
+
+    def test_mx_master_4_spec_metadata_mirrored_onto_connected_info(self):
+        info = build_connected_device_info(product_id=0xB042)
+
+        self.assertEqual(info.key, "mx_master_4")
+        self.assertEqual(info.gesture_cids, (0x01A0, 0x00C3, 0x00D7))
+        self.assertEqual(info.thumb_button_cid, 0x00C3)
+        self.assertTrue(info.gesture_via_sense_panel)
+        self.assertTrue(info.has_hires_wheel)
+        self.assertTrue(info.has_thumbwheel)
+        self.assertFalse(info.hires_wheel_active)
+        self.assertFalse(info.thumbwheel_active)
+        self.assertFalse(info.thumb_button_via_hid)
+        self.assertIsNone(info.active_gesture_cid)
+
+    def test_active_gesture_cid_is_normalized_to_int(self):
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid=0x01A0,
+        )
+
+        self.assertEqual(info.active_gesture_cid, 0x01A0)
+        self.assertIsInstance(info.active_gesture_cid, int)
 
 
 if __name__ == "__main__":
