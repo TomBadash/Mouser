@@ -347,6 +347,93 @@ _MACOS_NATIVE_STATUS_ITEM = None
 _MACOS_NATIVE_STATUS_TARGET = None
 
 
+try:
+    from Foundation import NSObject as _MacOSNSObject  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - Foundation is only available on macOS
+    _MacOSNSObject = None
+
+
+def _call_objc_value(obj, name, default=None):
+    try:
+        value = getattr(obj, name)
+    except Exception:
+        return default
+    try:
+        return value() if callable(value) else value
+    except Exception:
+        return default
+
+
+def _int_const(module, *names, default=0):
+    for name in names:
+        value = getattr(module, name, None)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return value
+    return default
+
+
+def _macos_status_event_opens_menu(event, appkit) -> bool:
+    """Return True when an NSStatusItem click should open the tray menu."""
+    if event is None or appkit is None:
+        return False
+    event_type = _call_objc_value(event, "type")
+    try:
+        event_type = int(event_type)
+    except (TypeError, ValueError):
+        pass
+
+    menu_event_types = {
+        _int_const(appkit, "NSRightMouseDown", "NSEventTypeRightMouseDown", default=None),
+        _int_const(appkit, "NSOtherMouseDown", "NSEventTypeOtherMouseDown", default=None),
+    }
+    menu_event_types.discard(None)
+    if event_type in menu_event_types:
+        return True
+
+    modifiers = _call_objc_value(event, "modifierFlags", 0) or 0
+    try:
+        modifiers = int(modifiers)
+    except (TypeError, ValueError):
+        modifiers = 0
+    menu_modifiers = (
+        _int_const(appkit, "NSControlKeyMask", "NSEventModifierFlagControl")
+        | _int_const(appkit, "NSAlternateKeyMask", "NSEventModifierFlagOption")
+    )
+    return bool(modifiers & menu_modifiers)
+
+
+def _dispatch_macos_status_item_click(handlers):
+    appkit = handlers.get("appkit")
+    event = None
+    try:
+        event = appkit.NSApp.currentEvent()
+    except Exception:
+        pass
+    key = "menu" if _macos_status_event_opens_menu(event, appkit) else "primary"
+    handler = handlers.get(key) or handlers.get("primary")
+    if handler is not None:
+        handler()
+
+
+if _MacOSNSObject is not None:
+    class _MacOSStatusItemTarget(_MacOSNSObject):
+        """Objective-C target that forwards NSStatusItem clicks to Python."""
+
+        def setPyHandlers_(self, handlers):  # type: ignore[override]
+            self._py_handlers = handlers
+
+        def statusItemClicked_(self, sender):  # type: ignore[override]
+            try:
+                _dispatch_macos_status_item_click(getattr(self, "_py_handlers", {}))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Mouser] status-item click handler raised: {exc}")
+else:
+    _MacOSStatusItemTarget = None
+
+
 def _macos_appkit():
     """Lazy-import + cache of the AppKit module. Returns None on import
     failure (logged once) so callers can no-op cleanly."""
@@ -458,19 +545,15 @@ def _activate_macos_window():
 def _install_native_macos_status_item(qmenu, on_left_click):
     """Install a native AppKit ``NSStatusItem`` for the menu-bar.
 
-    Qt's ``QSystemTrayIcon`` on notched MacBooks still uses the
-    legacy ``NSSquareStatusItemLength`` mode for its underlying
-    ``NSStatusItem``. macOS Sonoma+ refuses to composite items
-    created that way into the right-of-notch status-item area,
-    which is why the icon disappears on dense menu bars (the
-    ``onscreen=False`` symptom in ``CGWindowListCopyWindowInfo``).
+    Qt's ``QSystemTrayIcon`` uses a fixed square ``NSStatusItem`` on
+    macOS. On notched MacBooks, constrained menu-bar space can hide
+    status items in ways Apple does not expose through a reliable API.
+    Creating the item directly with ``NSVariableStatusItemLength`` keeps
+    the icon as narrow as its content and avoids Qt's Cocoa wrapper path.
 
-    This helper creates a native item with ``NSVariableStatusItemLength``
-    so macOS slots it into the standard right-of-notch lineup,
-    sets the icon as a template image so it auto-tints to the menu
-    bar's appearance, and routes clicks back into Qt by popping the
-    existing ``QMenu`` (left click + ``on_left_click`` for the
-    primary-action case, the full menu for control-click).
+    The existing Qt ``QMenu`` remains the single source for localized
+    labels and action wiring: plain left click shows the window, while
+    right-click, control-click, and option-click pop up the menu.
 
     Returns the retained ``NSStatusItem`` on success, ``None`` on
     any failure -- callers should fall back to ``QSystemTrayIcon``.
@@ -481,8 +564,10 @@ def _install_native_macos_status_item(qmenu, on_left_click):
     appkit = _macos_appkit()
     if appkit is None:
         return None
+    if _MacOSStatusItemTarget is None:
+        print("[Mouser] Foundation.NSObject unavailable; using Qt tray icon")
+        return None
     try:
-        from Foundation import NSObject  # type: ignore[import-not-found]
         from PySide6.QtGui import QCursor
         from PySide6.QtCore import QPoint
     except Exception as exc:
@@ -522,25 +607,6 @@ def _install_native_macos_status_item(qmenu, on_left_click):
     button.setImage_(ns_image)
     button.setToolTip_("Mouser")
 
-    class _StatusItemTarget(NSObject):
-        """Tiny Objective-C target that funnels NSStatusItem button
-        clicks back into Python. PyObjC requires action methods to
-        live on an NSObject subclass exposed to the Obj-C runtime."""
-
-        def setPyHandlers_(self, handlers):  # type: ignore[override]
-            self._py_handlers = handlers
-
-        def statusItemClicked_(self, sender):  # type: ignore[override]
-            try:
-                self._py_handlers["primary"]()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[Mouser] status-item click handler raised: {exc}")
-
-    target = _StatusItemTarget.alloc().init()
-    target.setPyHandlers_({"primary": on_left_click})
-    button.setTarget_(target)
-    button.setAction_(b"statusItemClicked:")
-
     # Attach the existing QMenu as the right-click / control-click
     # menu via a tiny NSMenu shim that pops the Qt menu at the
     # status-item's screen position. Qt's QMenu carries all the
@@ -557,13 +623,23 @@ def _install_native_macos_status_item(qmenu, on_left_click):
         except Exception as exc:  # noqa: BLE001
             print(f"[Mouser] failed to popup tray menu: {exc}")
 
-    # The primary-click handler also gets the option to drop down the
-    # menu if the user expects it. Today we forward to ``on_left_click``
-    # (show window) per the existing Qt behaviour, but the QMenu remains
-    # reachable via right-click on the status item.
+    target = _MacOSStatusItemTarget.alloc().init()
     target.setPyHandlers_(
-        {"primary": on_left_click, "secondary": _open_menu_at_cursor}
+        {"primary": on_left_click, "menu": _open_menu_at_cursor, "appkit": appkit}
     )
+    button.setTarget_(target)
+    button.setAction_(b"statusItemClicked:")
+    try:
+        click_mask = (
+            _int_const(appkit, "NSEventMaskLeftMouseDown")
+            | _int_const(appkit, "NSEventMaskRightMouseDown")
+            | _int_const(appkit, "NSEventMaskOtherMouseDown")
+        )
+        button.sendActionOn_(click_mask)
+    except Exception as exc:
+        print(f"[Mouser] Could not configure status-item click mask: {exc}")
+        status_bar.removeStatusItem_(status_item)
+        return None
 
     # Cache the item + target globally so PyObjC doesn't release them
     # while the app keeps running.
@@ -1021,13 +1097,10 @@ def main():
     tray.show()
 
     # macOS only: install a native NSStatusItem so the menu-bar icon
-    # lives in the right-of-notch lineup alongside other modern status
-    # apps. Qt's QSystemTrayIcon still uses the legacy square-length
-    # NSStatusItem mode which macOS Sonoma+ refuses to composite on
-    # notched MacBooks once the bar fills up. We keep the QSystemTrayIcon
-    # alive (Qt's showMessage path uses NSUserNotification under the
-    # hood, separate from NSStatusItem) but hide its menu-bar surface to
-    # avoid two icons.
+    # can use AppKit's variable-length item path on notched MacBooks
+    # where Qt's square status item can disappear under constrained
+    # menu-bar space. We keep QSystemTrayIcon alive for notifications
+    # and hide only its icon surface to avoid two menu-bar items.
     if sys.platform == "darwin":
         native_tray = _install_native_macos_status_item(
             tray_menu, show_main_window
