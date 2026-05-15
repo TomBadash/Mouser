@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -88,7 +88,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -130,7 +130,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 9)
+        self.assertEqual(loaded["version"], 10)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -157,7 +157,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
@@ -211,6 +211,64 @@ class ConfigMigrationTests(unittest.TestCase):
                 config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
                 "firefox",
             )
+
+    def test_migrate_v9_adds_haptic_mapping_to_each_profile(self):
+        legacy = {
+            "version": 9,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {
+                        "middle": "none",
+                        "gesture": "none",
+                        "xbutton1": "browser_back",
+                        "mode_shift": "switch_scroll_mode",
+                    },
+                },
+                "browser": {
+                    "label": "Browser",
+                    "apps": ["chrome.exe"],
+                    "mappings": {
+                        "xbutton1": "browser_back",
+                    },
+                },
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertEqual(migrated["version"], 10)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["haptic"], "none"
+        )
+        self.assertEqual(
+            migrated["profiles"]["browser"]["mappings"]["haptic"], "none"
+        )
+
+    def test_migrate_v9_preserves_user_haptic_mapping(self):
+        cfg = {
+            "version": 9,
+            "profiles": {
+                "default": {
+                    "apps": [],
+                    "mappings": {
+                        "haptic": "mission_control",
+                    },
+                },
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(cfg)
+
+        self.assertEqual(migrated["version"], 10)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["haptic"],
+            "mission_control",
+        )
 
     def test_get_profile_for_app_matches_linux_legacy_launcher_path(self):
         cfg = {

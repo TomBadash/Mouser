@@ -637,6 +637,7 @@ KNOWN_CID_NAMES = {
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
     0x00FD: "DPI Switch",
+    0x01A0: "Haptic Thumb Rest",  # MX Master 4 (Action Ring trigger)
 }
 
 KEY_FLAG_BITS = (
@@ -1437,6 +1438,14 @@ class HidGestureListener:
         The loop raises IOError, which triggers full cleanup + _try_connect(),
         re-applying all button diverts (including CID 0x00C4).
         """
+        self._reconnect_requested = True
+
+    def update_extra_diverts(self, extra_diverts):
+        """Replace the extra-divert table; reconnect re-runs ``_divert_extras`` on the device."""
+        self._extra_diverts = {
+            cid: {**info, "held": False}
+            for cid, info in (extra_diverts or {}).items()
+        }
         self._reconnect_requested = True
 
     def read_smart_shift(self):

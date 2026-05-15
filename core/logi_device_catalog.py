@@ -249,6 +249,16 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_x=160,
                 label_off_y=60,
             ),
+            _hotspot(
+                "haptic",
+                "Haptic button",
+                "mapping",
+                0.30,
+                0.68,
+                label_side="left",
+                label_off_x=-200,
+                label_off_y=80,
+            ),
         ],
     ),
     "mx_master_3s": _layout(

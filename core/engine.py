@@ -114,30 +114,7 @@ class Engine:
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
         )
-        # Divert mode shift CID only when the device has the button and
-        # at least one profile maps it to an action.  When no device is
-        # connected yet, assume the button exists (safe: if the device
-        # turns out not to have it, the divert simply has no effect).
-        device = getattr(self, "connected_device", None)
-        device_buttons = getattr(device, "supported_buttons", None)
-        has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
-        self.hook.divert_mode_shift = (
-            has_mode_shift
-            and any(
-                pdata.get("mappings", {}).get("mode_shift", "none") != "none"
-                for pdata in self.cfg.get("profiles", {}).values()
-            )
-        )
-
-        # Divert DPI switch CID (0x00FD) on MX Vertical when mapped.
-        has_dpi_switch = device_buttons is None or "dpi_switch" in device_buttons
-        self.hook.divert_dpi_switch = (
-            has_dpi_switch
-            and any(
-                pdata.get("mappings", {}).get("dpi_switch", "none") != "none"
-                for pdata in self.cfg.get("profiles", {}).values()
-            )
-        )
+        self._apply_divert_flags()
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
@@ -168,6 +145,43 @@ class Engine:
                             self.hook.register(evt_type, self._make_handler(action_id))
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id))
+
+    def _apply_divert_flags(self):
+        """Compute HID++ divert flags and push to the live listener if changed."""
+        device = self.connected_device
+        device_buttons = getattr(device, "supported_buttons", None)
+
+        # When no device is connected yet, assume the family supports the
+        # button (safe: divert call is a no-op on devices without the CID).
+        has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
+        has_dpi_switch = device_buttons is None or "dpi_switch" in device_buttons
+        has_haptic = device_buttons is None or "haptic" in device_buttons
+
+        profiles = self.cfg.get("profiles", {})
+
+        def any_mapped(button):
+            return any(
+                pdata.get("mappings", {}).get(button, "none") != "none"
+                for pdata in profiles.values()
+            )
+
+        new_mode_shift = has_mode_shift and any_mapped("mode_shift")
+        new_dpi_switch = has_dpi_switch and any_mapped("dpi_switch")
+        new_haptic = has_haptic and any_mapped("haptic")
+
+        changed = (
+            self.hook.divert_mode_shift != new_mode_shift
+            or self.hook.divert_dpi_switch != new_dpi_switch
+            or self.hook.divert_haptic != new_haptic
+        )
+        self.hook.divert_mode_shift = new_mode_shift
+        self.hook.divert_dpi_switch = new_dpi_switch
+        self.hook.divert_haptic = new_haptic
+
+        if changed:
+            hg = self.hook._hid_gesture
+            if hg is not None and hasattr(hg, "update_extra_diverts"):
+                hg.update_extra_diverts(self.hook._build_extra_diverts())
 
     def _make_handler(self, action_id):
         def handler(event):
@@ -617,6 +631,7 @@ class Engine:
             if self._battery_poll_thread is not None:
                 self._battery_poll_thread.join(timeout=5)
                 self._battery_poll_thread = None
+            self._apply_divert_flags()
         self._last_hid_features_ready = hid_features_ready
         if self._connection_change_cb:
             try:

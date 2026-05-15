@@ -205,6 +205,13 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn("hscroll_left", hotspot_keys)
         self.assertIn("mode_shift", hotspot_keys)
 
+    def test_mx_master_4_layout_has_haptic_hotspot(self):
+        layout = get_device_layout("mx_master_4")
+
+        button_keys = {h["buttonKey"] for h in layout["hotspots"]}
+        self.assertIn("haptic", button_keys)
+
+
 
 if __name__ == "__main__":
     unittest.main()

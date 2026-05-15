@@ -33,6 +33,7 @@ BUTTON_NAMES = {
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
     "dpi_switch":    "DPI switch button",
+    "haptic":        "Haptic button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -64,10 +65,11 @@ BUTTON_TO_EVENTS = {
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
     "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
+    "haptic":        ("haptic_down", "haptic_up"),
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -85,6 +87,7 @@ DEFAULT_CONFIG = {
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
+                "haptic": "none",
             },
         }
     },
@@ -328,6 +331,14 @@ def _migrate(cfg):
         settings = cfg.setdefault("settings", {})
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
+
+    if version < 10:
+        # MX Master 4 haptic thumb-rest button (CID 0x01A0). Default "none" so
+        # existing users see no behaviour change until they explicitly remap it.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            mappings.setdefault("haptic", "none")
+        cfg["version"] = 10
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
