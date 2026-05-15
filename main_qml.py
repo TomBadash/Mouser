@@ -48,7 +48,7 @@ os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap, QWindow
-from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo
+from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtSvg import QSvgRenderer
@@ -345,6 +345,7 @@ _MACOS_DOCK_ICON_NSIMAGE = None
 _MACOS_ACTIVATION_POLICY_REGULAR: "bool | None" = None
 _MACOS_NATIVE_STATUS_ITEM = None
 _MACOS_NATIVE_STATUS_TARGET = None
+_MACOS_QUIT_FILTER = None
 
 
 try:
@@ -432,6 +433,32 @@ if _MacOSNSObject is not None:
                 print(f"[Mouser] status-item click handler raised: {exc}")
 else:
     _MacOSStatusItemTarget = None
+
+
+class _MacOSQuitToTrayFilter(QObject):
+    """Intercept app-level quit requests and hide the window instead."""
+
+    def __init__(self, root_window, parent=None):
+        super().__init__(parent)
+        self._root_window = root_window
+        self._allow_quit = False
+
+    def allow_quit(self) -> None:
+        self._allow_quit = True
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt override
+        if self._allow_quit:
+            return False
+        try:
+            if event.type() != QEvent.Type.Quit:
+                return False
+            self._root_window.hide()
+            if hasattr(event, "ignore"):
+                event.ignore()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Mouser] Failed to hide on macOS quit event: {exc}")
+            return False
 
 
 def _macos_appkit():
@@ -816,6 +843,18 @@ def _runtime_launch_path() -> str:
     return os.path.abspath(__file__)
 
 
+def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
+    if not accessibility_granted:
+        print("[Mouser] Engine not started -- Accessibility permission is required")
+        return False
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(0, lambda: (
+        engine.start(),
+        print("[Mouser] Engine started -- remapping is active"),
+    ))
+    return True
+
+
 def main():
     # Re-exec through a `Mouser`-named symlink BEFORE anything Qt or
     # AppKit related runs. Necessary because macOS reads the Dock label /
@@ -969,6 +1008,9 @@ def main():
         # already fired with no listener. Reconcile the activation policy now
         # so the Dock tile shows on a `--show-window` / non-hidden start.
         _on_window_visibility_changed(root_window.visibility())
+        global _MACOS_QUIT_FILTER
+        _MACOS_QUIT_FILTER = _MacOSQuitToTrayFilter(root_window, app)
+        app.installEventFilter(_MACOS_QUIT_FILTER)
 
     def _on_second_instance_activate():
         _drain_local_activate_socket(single_server.nextPendingConnection())
@@ -982,17 +1024,13 @@ def main():
     print(f"[Startup] TOTAL to window:  {(_t8-_t0)*1000:7.1f} ms")
 
     # ── Accessibility check (macOS) ──────────────────────────────
-    _check_accessibility(locale_mgr)
+    accessibility_granted = _check_accessibility(locale_mgr)
 
     if sys.platform == "linux":
         engine.set_ui_passthrough(not launch_hidden)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
-    from PySide6.QtCore import QTimer
-    QTimer.singleShot(0, lambda: (
-        engine.start(),
-        print("[Mouser] Engine started -- remapping is active"),
-    ))
+    _schedule_engine_start(engine, accessibility_granted=accessibility_granted)
 
     # ── System Tray ────────────────────────────────────────────
     tray = QSystemTrayIcon(_tray_icon(), app)
@@ -1049,6 +1087,8 @@ def main():
     quit_action = QAction(locale_mgr.tr("tray.quit"), tray_menu)
 
     def quit_app():
+        if _MACOS_QUIT_FILTER is not None:
+            _MACOS_QUIT_FILTER.allow_quit()
         engine.stop()
         tray.hide()
         app.quit()
