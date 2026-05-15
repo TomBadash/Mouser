@@ -130,6 +130,55 @@ class MacOSStatusItemEventTests(unittest.TestCase):
 
 
 @unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
+class MacOSSystemQuitReasonTests(unittest.TestCase):
+    def _descriptor(self, value):
+        return SimpleNamespace(enumCodeValue=lambda: main_qml._four_char_code(value))
+
+    def _appkit(self, *, descriptor):
+        apple_event = SimpleNamespace(
+            attributeDescriptorForKeyword_=lambda keyword: (
+                descriptor if keyword == main_qml._four_char_code("why?") else None
+            )
+        )
+        manager = SimpleNamespace(currentAppleEvent=lambda: apple_event)
+        return SimpleNamespace(
+            NSAppleEventManager=SimpleNamespace(
+                sharedAppleEventManager=lambda: manager
+            )
+        )
+
+    def test_system_quit_reason_codes_are_allowed_through(self):
+        for reason in ("quia", "shut", "rest", "rlgo", "logo", "rrst", "rsdn"):
+            with self.subTest(reason=reason):
+                with (
+                    patch.object(main_qml.sys, "platform", "darwin"),
+                    patch.object(
+                        main_qml,
+                        "_macos_appkit",
+                        return_value=self._appkit(descriptor=self._descriptor(reason)),
+                    ),
+                ):
+                    self.assertTrue(
+                        main_qml._macos_current_quit_is_system_session_event()
+                    )
+
+    def test_missing_or_unknown_quit_reason_stays_user_quit(self):
+        for descriptor in (None, self._descriptor("quit")):
+            with self.subTest(descriptor=descriptor):
+                with (
+                    patch.object(main_qml.sys, "platform", "darwin"),
+                    patch.object(
+                        main_qml,
+                        "_macos_appkit",
+                        return_value=self._appkit(descriptor=descriptor),
+                    ),
+                ):
+                    self.assertFalse(
+                        main_qml._macos_current_quit_is_system_session_event()
+                    )
+
+
+@unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
 class MacOSQuitAndAccessibilityTests(unittest.TestCase):
     def test_quit_filter_hides_window_and_blocks_app_quit(self):
         root_window = MagicMock()
@@ -153,6 +202,54 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
         self.assertFalse(event_filter.eventFilter(None, event))
         root_window.hide.assert_not_called()
         event.ignore.assert_not_called()
+
+    def test_quit_filter_allows_system_session_quit(self):
+        root_window = MagicMock()
+        event = MagicMock()
+        event.type.return_value = main_qml.QEvent.Type.Quit
+        event_filter = main_qml._MacOSQuitToTrayFilter(root_window)
+
+        with patch.object(
+            main_qml,
+            "_macos_current_quit_is_system_session_event",
+            return_value=True,
+        ):
+            self.assertFalse(event_filter.eventFilter(None, event))
+
+        root_window.hide.assert_not_called()
+        event.ignore.assert_not_called()
+
+    def test_session_quit_fallback_does_not_allow_ordinary_quit(self):
+        event_filter = main_qml._MacOSQuitToTrayFilter(MagicMock())
+
+        with patch.object(
+            main_qml,
+            "_macos_current_quit_is_system_session_event",
+            return_value=False,
+        ):
+            self.assertFalse(
+                main_qml._allow_macos_session_quit_if_requested(event_filter)
+            )
+
+        event = MagicMock()
+        event.type.return_value = main_qml.QEvent.Type.Quit
+        self.assertTrue(event_filter.eventFilter(None, event))
+
+    def test_session_quit_fallback_allows_system_quit(self):
+        event_filter = main_qml._MacOSQuitToTrayFilter(MagicMock())
+
+        with patch.object(
+            main_qml,
+            "_macos_current_quit_is_system_session_event",
+            return_value=True,
+        ):
+            self.assertTrue(
+                main_qml._allow_macos_session_quit_if_requested(event_filter)
+            )
+
+        event = MagicMock()
+        event.type.return_value = main_qml.QEvent.Type.Quit
+        self.assertFalse(event_filter.eventFilter(None, event))
 
     def test_engine_start_not_scheduled_without_accessibility(self):
         engine = MagicMock()
@@ -191,6 +288,24 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
             patch.object(main_qml, "is_process_trusted", side_effect=RuntimeError("boom")),
         ):
             self.assertFalse(main_qml._check_accessibility(locale_mgr))
+
+    def test_tray_minimized_notice_is_scheduled_with_module_qtimer(self):
+        tray = MagicMock()
+        locale_mgr = SimpleNamespace(tr=lambda key: f"translated:{key}")
+
+        with patch.object(main_qml.QTimer, "singleShot") as single_shot:
+            main_qml._schedule_tray_minimized_notice(tray, locale_mgr)
+
+        delay, callback = single_shot.call_args.args
+        self.assertEqual(delay, 400)
+
+        callback()
+        tray.showMessage.assert_called_once_with(
+            "Mouser",
+            "translated:tray.tray_message",
+            main_qml.QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
 
 
 if __name__ == "__main__":

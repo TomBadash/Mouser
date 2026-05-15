@@ -48,7 +48,7 @@ os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap, QWindow
-from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent
+from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtSvg import QSvgRenderer
@@ -346,6 +346,15 @@ _MACOS_ACTIVATION_POLICY_REGULAR: "bool | None" = None
 _MACOS_NATIVE_STATUS_ITEM = None
 _MACOS_NATIVE_STATUS_TARGET = None
 _MACOS_QUIT_FILTER = None
+_MACOS_SYSTEM_QUIT_REASONS = {
+    "quia",  # kAEQuitAll
+    "shut",  # kAEShutDown
+    "rest",  # kAERestart
+    "rlgo",  # kAEReallyLogOut
+    "logo",  # kAELogOut
+    "rrst",  # kAEShowRestartDialog
+    "rsdn",  # kAEShowShutdownDialog
+}
 
 
 try:
@@ -374,6 +383,51 @@ def _int_const(module, *names, default=0):
             except (TypeError, ValueError):
                 return value
     return default
+
+
+def _four_char_code(value: str) -> int:
+    if len(value) != 4:
+        raise ValueError("four-character codes must be exactly 4 characters")
+    return int.from_bytes(value.encode("mac_roman"), "big")
+
+
+def _descriptor_code_value(descriptor):
+    if descriptor is None:
+        return None
+    for attr_name in ("enumCodeValue", "typeCodeValue", "int32Value"):
+        value = _call_objc_value(descriptor, attr_name)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _macos_current_quit_is_system_session_event() -> bool:
+    """Return True for logout/restart/shutdown AppleEvent quit reasons."""
+    if sys.platform != "darwin":
+        return False
+    appkit = _macos_appkit()
+    if appkit is None:
+        return False
+    try:
+        manager = appkit.NSAppleEventManager.sharedAppleEventManager()
+        apple_event = manager.currentAppleEvent()
+        if apple_event is None:
+            return False
+        reason = apple_event.attributeDescriptorForKeyword_(
+            _four_char_code("why?")
+        )
+    except Exception:
+        return False
+    reason_code = _descriptor_code_value(reason)
+    if reason_code is None:
+        return False
+    return reason_code in {
+        _four_char_code(value) for value in _MACOS_SYSTEM_QUIT_REASONS
+    }
 
 
 def _macos_status_event_opens_menu(event, appkit) -> bool:
@@ -452,6 +506,9 @@ class _MacOSQuitToTrayFilter(QObject):
         try:
             if event.type() != QEvent.Type.Quit:
                 return False
+            if _macos_current_quit_is_system_session_event():
+                self.allow_quit()
+                return False
             self._root_window.hide()
             if hasattr(event, "ignore"):
                 event.ignore()
@@ -459,6 +516,16 @@ class _MacOSQuitToTrayFilter(QObject):
         except Exception as exc:  # noqa: BLE001
             print(f"[Mouser] Failed to hide on macOS quit event: {exc}")
             return False
+
+
+def _allow_macos_session_quit_if_requested(quit_filter) -> bool:
+    """Allow quit only when the current macOS event is a session shutdown."""
+    if quit_filter is None:
+        return False
+    if not _macos_current_quit_is_system_session_event():
+        return False
+    quit_filter.allow_quit()
+    return True
 
 
 def _macos_appkit():
@@ -847,12 +914,23 @@ def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
     if not accessibility_granted:
         print("[Mouser] Engine not started -- Accessibility permission is required")
         return False
-    from PySide6.QtCore import QTimer
     QTimer.singleShot(0, lambda: (
         engine.start(),
         print("[Mouser] Engine started -- remapping is active"),
     ))
     return True
+
+
+def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
+    def _tray_minimized_notice():
+        tray.showMessage(
+            "Mouser",
+            locale_mgr.tr("tray.tray_message"),
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+
+    QTimer.singleShot(400, _tray_minimized_notice)
 
 
 def main():
@@ -1011,6 +1089,12 @@ def main():
         global _MACOS_QUIT_FILTER
         _MACOS_QUIT_FILTER = _MacOSQuitToTrayFilter(root_window, app)
         app.installEventFilter(_MACOS_QUIT_FILTER)
+        app.commitDataRequest.connect(
+            lambda *_: _allow_macos_session_quit_if_requested(_MACOS_QUIT_FILTER)
+        )
+        app.saveStateRequest.connect(
+            lambda *_: _allow_macos_session_quit_if_requested(_MACOS_QUIT_FILTER)
+        )
 
     def _on_second_instance_activate():
         _drain_local_activate_socket(single_server.nextPendingConnection())
@@ -1149,16 +1233,7 @@ def main():
             tray.setVisible(False)
 
     if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
-
-        def _tray_minimized_notice():
-            tray.showMessage(
-                "Mouser",
-                locale_mgr.tr("tray.tray_message"),
-                QSystemTrayIcon.MessageIcon.Information,
-                5000,
-            )
-
-        QTimer.singleShot(400, _tray_minimized_notice)
+        _schedule_tray_minimized_notice(tray, locale_mgr)
 
     # ── Run ────────────────────────────────────────────────────
     try:
