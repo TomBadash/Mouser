@@ -246,8 +246,11 @@ pip install pyinstaller
 ./build_macos_app.sh
 ```
 
-输出为 `dist/Mouser.app`。脚本优先使用 `images/AppIcon.icns`；若不存在，则从 `images/logo_icon.png` 生成 `.icns`，并使用 `codesign --sign -` 进行 ad-hoc 签名。
+输出为 `dist/Mouser.app`。脚本优先使用 `images/AppIcon.icns`；若不存在，则从 `images/logo_icon.png` 生成 `.icns`。签名方式取决于是否设置了 `MOUSER_SIGN_IDENTITY`：
 
+- **未设置（默认）**：使用 `codesign --sign -` 进行 ad-hoc 签名，适合一次性本地构建，但每次重建都可能改变 bundle 的代码身份，因此 macOS 可能要求重新授予辅助功能权限。
+- **设置为代码签名身份**（可用 `security find-identity -v -p codesigning` 查看，推荐使用 SHA-1 形式）：会使用 hardened runtime 选项签名每个嵌套 `.dylib` / `.so` / `.framework`，然后用 `build_resources/Mouser.entitlements` 中的 hardened-runtime 例外权限签名外层 app。这是面向本地重复构建的开发者签名路径；稳定的 macOS 权限行为依赖相同源码、解析出的 Python 解释器、依赖版本、目标架构、签名身份、entitlements 和 timestamp 策略。
+- 这**不是** notarized 发布签名流程。公开 macOS release zip 仍保持 ad-hoc 签名，直到未来单独加入 Developer ID 签名、安全 timestamp、notarization、stapling 和 Gatekeeper 校验流程。
 - 构建时使用与目标架构一致的 Python：`arm64` Python 产出 Apple Silicon Bundle，`x86_64` Python 产出 Intel Bundle。可设置 `PYINSTALLER_TARGET_ARCH=arm64|x86_64|universal2` 来覆盖。
 - 推送 tag 后，Release CI 会自动同时发布 `Mouser-macOS.zip`（Apple Silicon）与 `Mouser-macOS-intel.zip`（Intel）。
 - 需要授予辅助功能（Accessibility）权限。完整步骤与平台差异请见 [readme_mac_osx.md](readme_mac_osx.md)。

@@ -12,6 +12,8 @@ ENTITLEMENTS="$ROOT_DIR/build_resources/Mouser.entitlements"
 TARGET_ARCH="${PYINSTALLER_TARGET_ARCH:-}"
 SIGN_IDENTITY="${MOUSER_SIGN_IDENTITY:-}"
 export PYINSTALLER_CONFIG_DIR="$BUILD_DIR/pyinstaller"
+PYTHON=""
+PYTHON_SOURCE=""
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This build script must be run on macOS."
@@ -49,83 +51,164 @@ if [[ -n "$TARGET_ARCH" ]]; then
   echo "Building macOS app for target architecture: $TARGET_ARCH"
 fi
 
-# Resolve the Python interpreter used for PyInstaller. Order:
-#   1. MOUSER_PYTHON      explicit override, wins over everything
-#   2. $ROOT_DIR/.venv    typical "python -m venv .venv" + requirements.txt
-#                         flow; preferred because it isolates the
-#                         PyInstaller / Qt / PyObjC dependency set from
-#                         the user's global site-packages
-#   3. pyenv which python3   when MOUSER_PREFER_PYENV=1 or .venv absent;
-#                            picks the interpreter pinned by
-#                            .python-version after pyenv has installed
-#                            PyInstaller / requirements into it
-#   4. python3 on PATH     fallback
-# Using the wrong interpreter silently produces a different bundle
-# layout (different stdlib paths, different .so vendor IDs), which
-# defeats the cdhash stability the rest of this script enforces.
-if [[ -n "${MOUSER_PYTHON:-}" ]]; then
-  PYTHON="$MOUSER_PYTHON"
-elif [[ -z "${MOUSER_PREFER_PYENV:-}" && -x "$ROOT_DIR/.venv/bin/python3" ]]; then
-  PYTHON="$ROOT_DIR/.venv/bin/python3"
-elif command -v pyenv >/dev/null 2>&1; then
-  PYTHON="$(cd "$ROOT_DIR" && pyenv which python3 2>/dev/null)" || PYTHON=""
-  if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
-    PYTHON="python3"
-  fi
-else
-  PYTHON="python3"
-fi
-if ! "$PYTHON" -c "import PyInstaller" >/dev/null 2>&1; then
-  echo "ERROR: PyInstaller not installed in $PYTHON" >&2
-  echo "       Install it with:  $PYTHON -m pip install pyinstaller" >&2
+fail() {
+  echo "ERROR: $*" >&2
   exit 1
-fi
-echo "Using Python: $PYTHON"
+}
 
-# PYTHONHASHSEED=0 pins set iteration so PyInstaller's base_library.zip
-# layout is byte-identical across rebuilds. Without it the outer cdhash
-# drifts even when the same identity and entitlements are reused.
-PYTHONHASHSEED=0 "$PYTHON" -m PyInstaller "$ROOT_DIR/Mouser-mac.spec" --noconfirm
+python_from_env_dir() {
+  local env_dir="$1"
+  if [[ -x "$env_dir/bin/python3" ]]; then
+    echo "$env_dir/bin/python3"
+    return 0
+  fi
+  if [[ -x "$env_dir/bin/python" ]]; then
+    echo "$env_dir/bin/python"
+    return 0
+  fi
+  return 1
+}
 
-if ! command -v codesign >/dev/null 2>&1; then
-  echo "warning: codesign not available, bundle is unsigned"
-  echo "Build complete: $ROOT_DIR/dist/Mouser.app"
-  exit 0
-fi
+resolve_command() {
+  local candidate="$1"
+  if [[ "$candidate" == */* ]]; then
+    [[ -x "$candidate" ]] || return 1
+    echo "$candidate"
+    return 0
+  fi
+  command -v "$candidate" 2>/dev/null
+}
 
-if [[ -z "$SIGN_IDENTITY" ]]; then
-  # Ad-hoc fallback: cdhash differs on every rebuild, so TCC grants reset.
-  codesign --force --deep --sign - "$ROOT_DIR/dist/Mouser.app"
-else
-  if [[ ! -f "$ENTITLEMENTS" ]]; then
-    echo "ERROR: entitlements file not found at $ENTITLEMENTS" >&2
+resolve_python() {
+  local candidate=""
+
+  if [[ -n "${MOUSER_PYTHON:-}" ]]; then
+    candidate="$(resolve_command "$MOUSER_PYTHON")" || \
+      fail "MOUSER_PYTHON is set but is not executable: $MOUSER_PYTHON"
+    PYTHON="$candidate"
+    PYTHON_SOURCE="MOUSER_PYTHON"
+    return
+  fi
+
+  if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    candidate="$(python_from_env_dir "$VIRTUAL_ENV")" || \
+      fail "VIRTUAL_ENV is set but no executable Python was found in $VIRTUAL_ENV/bin"
+    PYTHON="$candidate"
+    PYTHON_SOURCE="VIRTUAL_ENV"
+    return
+  fi
+
+  if [[ -d "$ROOT_DIR/.venv" ]]; then
+    candidate="$(python_from_env_dir "$ROOT_DIR/.venv")" || \
+      fail "Repository .venv exists but no executable Python was found in $ROOT_DIR/.venv/bin"
+    PYTHON="$candidate"
+    PYTHON_SOURCE="repo .venv"
+    return
+  fi
+
+  if candidate="$(command -v python3 2>/dev/null)"; then
+    PYTHON="$candidate"
+    PYTHON_SOURCE="PATH python3"
+    return
+  fi
+
+  if candidate="$(command -v python 2>/dev/null)"; then
+    PYTHON="$candidate"
+    PYTHON_SOURCE="PATH python"
+    return
+  fi
+
+  fail "No Python interpreter found. Create .venv or set MOUSER_PYTHON."
+}
+
+require_pyinstaller() {
+  if ! "$PYTHON" -c "import PyInstaller" >/dev/null 2>&1; then
+    echo "ERROR: PyInstaller not installed in $PYTHON (source: $PYTHON_SOURCE)" >&2
+    echo "       Install it with:  $PYTHON -m pip install -r $ROOT_DIR/requirements.txt" >&2
     exit 1
   fi
-  echo "Code-signing with identity: $SIGN_IDENTITY"
+}
 
-  # Sign nested code first; codesign --deep can't apply per-level
-  # entitlements, and --options runtime must be set on every binary.
+log_python_provenance() {
+  local python_version
+  local python_arch
+  local pyinstaller_version
+  python_version="$("$PYTHON" -c 'import platform; print(platform.python_version())')"
+  python_arch="$("$PYTHON" -c 'import platform; print(platform.machine() or "unknown")')"
+  pyinstaller_version="$("$PYTHON" -c 'import PyInstaller; print(PyInstaller.__version__)')"
+
+  echo "Using Python: $PYTHON (source: $PYTHON_SOURCE)"
+  echo "Python version: $python_version ($python_arch)"
+  echo "PyInstaller version: $pyinstaller_version"
+  if [[ -n "$TARGET_ARCH" ]]; then
+    echo "Target architecture: $TARGET_ARCH"
+  fi
+}
+
+run_pyinstaller() {
+  # PYTHONHASHSEED=0 pins set iteration so PyInstaller's base_library.zip
+  # layout is byte-identical across rebuilds for the same toolchain inputs.
+  PYTHONHASHSEED=0 "$PYTHON" -m PyInstaller "$ROOT_DIR/Mouser-mac.spec" --noconfirm
+}
+
+sign_ad_hoc() {
+  echo "Signing mode: ad-hoc"
+  codesign --force --deep --sign - "$ROOT_DIR/dist/Mouser.app"
+}
+
+entitlements_sha256() {
+  shasum -a 256 "$ENTITLEMENTS" | awk '{print $1}'
+}
+
+sign_nested_code() {
+  local frameworks_dir="$ROOT_DIR/dist/Mouser.app/Contents/Frameworks"
+  [[ -d "$frameworks_dir" ]] || return 0
+
   while IFS= read -r -d '' nested; do
     codesign --force --options runtime --timestamp=none \
       --sign "$SIGN_IDENTITY" "$nested"
-  done < <(find "$ROOT_DIR/dist/Mouser.app/Contents/Frameworks" \
-             \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null)
+  done < <(find "$frameworks_dir" -depth \
+             \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) \
+             -print0 2>/dev/null)
+}
 
-  while IFS= read -r -d '' framework; do
-    codesign --force --options runtime --timestamp=none \
-      --sign "$SIGN_IDENTITY" "$framework"
-  done < <(find "$ROOT_DIR/dist/Mouser.app/Contents/Frameworks" \
-             -type d -name "*.framework" -print0 2>/dev/null)
+verify_bundle() {
+  codesign --verify --deep --strict --verbose=2 "$ROOT_DIR/dist/Mouser.app"
+}
 
+sign_with_identity() {
+  if [[ ! -f "$ENTITLEMENTS" ]]; then
+    fail "entitlements file not found at $ENTITLEMENTS"
+  fi
+
+  echo "Signing mode: identity"
+  echo "Code-signing with identity: $SIGN_IDENTITY"
+  echo "Entitlements: $ENTITLEMENTS (sha256: $(entitlements_sha256))"
+  sign_nested_code
   codesign --force --options runtime --timestamp=none \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" \
     "$ROOT_DIR/dist/Mouser.app"
+  verify_bundle
+}
 
-  if ! codesign --verify --deep --strict --verbose=2 "$ROOT_DIR/dist/Mouser.app"; then
-    echo "ERROR: codesign --verify --deep --strict failed for the signed bundle" >&2
-    exit 1
+sign_app() {
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "warning: codesign not available, bundle is unsigned"
+    return
   fi
-fi
+
+  if [[ -z "$SIGN_IDENTITY" ]]; then
+    sign_ad_hoc
+  else
+    sign_with_identity
+  fi
+}
+
+resolve_python
+require_pyinstaller
+log_python_provenance
+run_pyinstaller
+sign_app
 
 echo "Build complete: $ROOT_DIR/dist/Mouser.app"
