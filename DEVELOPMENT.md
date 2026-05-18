@@ -147,6 +147,19 @@ Logitech gesture / thumb buttons do not always appear as standard mouse events. 
 
 The same module owns the SmartShift integration. It prefers the enhanced feature `0x2111` (`FEAT_SMART_SHIFT_ENHANCED`) when available and falls back to `0x2110`, exposing both an enable flag and a sensitivity threshold; pending settings are re-applied on every reconnect (including wake-from-sleep).
 
+#### HID++ wheel native-invert
+
+On MX Master devices `HidGestureListener` discovers two HID++ wheel features and asks the firmware to invert the scroll sign at the source. The OS receives native HID scroll reports with the direction already flipped, so inversion survives Synergy / DeskFlow / KVM forwarding without Mouser becoming the scroll producer.
+
+| Feature | ID | Functions Mouser uses | Wire format |
+|---|---|---|---|
+| **HiResWheel** (vertical) | `0x2121` | fn 0 `getWheelCapability` (multiplier discovery), fn 1 `getWheelMode` (read-before-write), fn 2 `setWheelMode` | `setWheelMode(mode)` byte: bit0 = target (Mouser writes 0 = OS), bit1 = hi-res (Mouser writes 0 = low-res so the firmware-default cadence survives), bit2 = invert (Mouser flips per `invert_vscroll`). The device continues emitting native HID scroll; only the sign is reversed. |
+| **Thumbwheel** (horizontal) | `0x2150` | fn 0 `getThumbwheelInfo`, fn 2 `setThumbwheelReporting` | `setThumbwheelReporting(reporting, invertDirection)`: Mouser writes `[0x00, invertByte]` to keep the wheel non-diverted but flip the firmware's horizontal sign for `invert_hscroll`. |
+
+The engine drives this via `_apply_wheel_invert_setting` on every profile / device change. When the device acknowledges, `wheel_native_invert_active` is set on both the engine and the platform mouse hook, and the hook's OS-layer inversion path is suppressed so a second flip doesn't net out to no inversion. On unsupported devices, devices that reject the request, or when the kill-switch is off, the hook's existing OS-layer inversion handles `invert_vscroll` / `invert_hscroll` via the fallback path (in-place CGEvent negation on macOS; uinput delta sign-flip on Linux; LL hook delta sign-flip on Windows).
+
+The kill-switch is `settings.wheel_divert` in `config.json`: `"auto"` (default) enables divert on capable devices; `"off"` forces the OS-layer fallback even on MX Master.
+
 ### App detector
 
 [`core/app_detector.py`](core/app_detector.py) polls the foreground window every 300ms.
@@ -173,9 +186,9 @@ All settings live in `config.json` under the platform config dir (`%APPDATA%\Mou
 
 - Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
 - Per-profile app associations (list of `.exe` / bundle / process names)
-- Global settings: DPI, scroll inversion, macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift mode + sensitivity, language, and startup preferences (`start_at_login`, `start_minimized`)
+- Global settings: DPI, scroll inversion (`invert_vscroll`, `invert_hscroll`), HID++ wheel-divert kill-switch (`wheel_divert: "auto" | "off"`), macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift mode + sensitivity, language, and startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
-- Automatic migration from older config versions (current version `9`)
+- Automatic migration from older config versions (current version `11`)
 
 Logs are written via [`core/log_setup.py`](core/log_setup.py) to a 5 × 5 MB rotating file in `~/Library/Logs/Mouser`, `%APPDATA%\Mouser\logs`, or `$XDG_STATE_HOME/Mouser/logs`. The setup is idempotent and safe to call multiple times — `main_qml.py` invokes it before any Qt or core import so startup output is captured from the very first line.
 

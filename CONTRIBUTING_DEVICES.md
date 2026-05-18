@@ -42,9 +42,41 @@ Look at the `reprog_controls` array.  Each entry has a `cid` (Control ID) and
 | `0x0052` | Middle click |
 | `0x0053` | Back (side button) |
 | `0x0056` | Forward (side button) |
-| `0x00C3` | Gesture button (physical) |
+| `0x00C3` | Gesture button (physical, "Thumb button" on MX Master 4) |
 | `0x00C4` | Smart Shift / Mode Shift |
 | `0x00D7` | Virtual gesture button |
+| `0x01A0` | MX Master 4 Sense Panel (see role-swap notes below) |
+
+MX Master 4 has two thumb-area buttons that both surface as divertable
+HID++ controls and need an explicit role swap. The Sense Panel
+(`0x01A0`, Solaar's `Haptic` feature -- the touch surface Logitech
+markets as "Haptic Sense" and Logi Options+ exposes under the "Action
+Ring" overlay) drives directional gestures because it's far more
+comfortable for swipes than the small side button. The small Thumb
+button (`0x00C3`, the legacy gesture CID on older MX Master variants;
+Solaar's `Mouse_Gesture_Button` with the `Thumb_Button` alias on MX
+Master 4) is the single-press trigger. Wire it like this:
+
+```python
+"gesture_cids": (0x01A0, 0x00C3, 0x00D7),  # Sense Panel CID first
+"thumb_button_cid": 0x00C3,                # small button as button-only extra
+"gesture_via_sense_panel": True,           # enables OS-level fallback swap
+```
+
+`0x01A0` lives in `gesture_cids` so the listener prefers diverting it
+with rawXY. `thumb_button_cid` is diverted as button-only (no rawXY),
+so the firmware doesn't suppress normal OS mouse motion while the
+small button is held -- that was the root cause of the cursor-freeze
+on stock MX Master 4. `gesture_via_sense_panel` enables an OS-level
+`btn=6` / `BTN_TASK` swap fallback for cases where firmware rejects
+the `0x01A0` divert; the platform mouse hooks consult
+`active_gesture_cid` (set to `0x01A0` on success, anything else on
+fallback) and `thumb_button_via_hid` (true when the extra divert is
+installed) on `ConnectedDeviceInfo` to pick the right path.
+
+Older MX Master mice (3S, 3, 2S, classic) keep `gesture_via_sense_panel
+= False` (the default) so their HID++ gesture button continues to
+drive swipes and the global `Gesture button` label is shown.
 
 Not all CIDs are divertable.  Check the `flags` field -- if bit `0x0020` is
 set, the control can be intercepted by Mouser.
@@ -75,12 +107,37 @@ Add a new dict to `LOGI_DEVICE_SPECS`:
     "gesture_cids": (0x00C3,),                 # from gesture_candidates in your dump
     "dpi_min": 200,
     "dpi_max": 4000,                           # from discovered DPI range, or vendor specs
+    "has_hires_wheel": False,                  # set True if device exposes 0x2121
+    "has_thumbwheel": False,                   # set True if device exposes 0x2150
 },
 ```
+
+#### `has_hires_wheel` and `has_thumbwheel`
+
+These flags tell Mouser the device exposes the corresponding HID++ feature so it
+can divert the wheel and apply scroll inversion at the source (matching Logitech
+Options+ behavior). They're catalog hints only — runtime feature discovery in
+`HidGestureListener` always overrides them, so a wrong catalog flag won't cause
+a divert attempt against a non-existent feature.
+
+Set them on every device you can confirm exposes the feature. Quick way to find
+out: connect the device, run Mouser with debug logs enabled, and look for
+`[HidGesture] Found wheel feature 0x2121` (HiResWheel) or `Found wheel feature
+0x2150` (Thumbwheel) in the output.
+
+| Flag | True when device has |
+|---|---|
+| `has_hires_wheel` | A vertical scroll wheel that supports HID++ feature `0x2121` (HiResWheel). Most modern Logitech mice. |
+| `has_thumbwheel` | A horizontal thumbwheel that supports HID++ feature `0x2150` (Thumbwheel). MX Master family only. |
 
 Pick the right button tuple for `supported_buttons`:
 
 - `MX_MASTER_BUTTONS` -- middle, gesture (with swipes), back, forward, hscroll, mode_shift
+- `MX_MASTER_4_BUTTONS` -- everything in `MX_MASTER_BUTTONS` plus
+  `thumb_button`, the slot fed by the small Thumb button (CID `0x00C3`
+  via HID++) and -- on fallback paths where the Sense Panel divert was
+  rejected -- by the Sense Panel itself (button 6 / `BTN_TASK` at the
+  OS layer)
 - `MX_ANYWHERE_BUTTONS` -- middle, gesture (with swipes), back, forward
 - `MX_VERTICAL_BUTTONS` -- middle, back, forward
 - `GENERIC_BUTTONS` -- middle, back, forward (safe default)

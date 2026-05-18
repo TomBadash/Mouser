@@ -77,10 +77,12 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Logitech Options+ must not be running.** Both apps fight over HID++ access; quit Options+ before launching Mouser.
 - **macOS** asks for **Accessibility** permission so the event tap can intercept mouse events. See [readme_mac_osx.md](readme_mac_osx.md) for the full setup walkthrough.
 - **Linux** needs read access to `/dev/hidraw*`, `/dev/input/event*`, and write access to `/dev/uinput`. Run the bundled helper once after extracting:
+
   ```bash
   cd /path/to/extracted/Mouser
   ./install-linux-permissions.sh
   ```
+
   Reconnect the mouse, then relaunch.
 - Config is saved automatically to:
   - `%APPDATA%\Mouser\config.json` (Windows)
@@ -113,7 +115,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **DPI / pointer speed** — slider from 200 to the device max (8000 on MX Master) with quick presets, plus a `Cycle DPI Presets` action you can map to a button.
 - **Smart Shift** — toggle Logitech's ratchet ↔ free-spin scroll mode (HID++ `0x2111`), with a sensitivity threshold and a mappable `Toggle SmartShift` action.
 - **Switch scroll mode** — bind a button to flip ratchet / free-spin without opening the UI; defaults to mode-shift.
-- **Scroll direction inversion** — independent toggles for vertical and horizontal scroll.
+- **Scroll direction inversion** — independent toggles for vertical and horizontal scroll. On MX Master devices, inversion is applied at the device via HID++ (`0x2121` HiResWheel + `0x2150` Thumbwheel) and survives Synergy / DeskFlow / KVM forwarding.
 - **Gesture button + swipe actions** — tap for one action, swipe up/down/left/right for four others.
 
 ### Cross-platform
@@ -314,7 +316,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 
 - **Per-device mappings aren't fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global.
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access. Quit Options+ before running Mouser.
-- **Scroll inversion** uses coalesced post-injection on Windows to avoid LL-hook deadlocks; it's stable in mainstream apps but may misbehave in some games or low-level drivers.
+- **Scroll inversion** — on MX Master devices, Mouser asks the firmware to flip the wheel and thumbwheel sign at the source (HID++ `0x2121` / `0x2150`); the device keeps emitting native HID scroll, so inversion survives Synergy / DeskFlow / KVM forwarding. On other devices it falls back to OS-layer event-tap / LL-hook injection (stable in mainstream apps but may misbehave in some games or low-level drivers). Set `"wheel_divert": "off"` in `config.json` `settings` to force the OS-layer fallback even on capable devices.
 - **Admin not required** — but injected keystrokes may not reach elevated windows or some games. Run Mouser elevated if you need that path.
 - **Linux app detection is partial** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, GNOME / other Wayland compositors still fall back to the default profile.
 - **Linux device permissions** — Mouser needs access to `/dev/hidraw*`, `/dev/input/event*`, and `/dev/uinput`. Use [`install-linux-permissions.sh`](packaging/linux/install-linux-permissions.sh) once instead of running as root.
