@@ -777,6 +777,22 @@ FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
+# REPROG_V4 ``setCidReporting`` control flags (fn 3 byte 2). The
+# protocol packs four bits we ever toggle from this module:
+#   bit 0 (0x01) = temporary divert    -- volatile, cleared on disconnect.
+#   bit 1 (0x02) = persistent divert   -- survives sleep/wake.
+#   bit 4 (0x10) = temporary rawXY     -- forward raw cursor deltas instead
+#                                         of the synthesized button click.
+#   bit 5 (0x20) = persistent rawXY    -- survives sleep/wake.
+# We always set both the volatile and persistent bits so the firmware
+# replays our divert across power-saving wake events without needing a
+# re-driver round trip. The constants below name the four combinations
+# this module emits so call sites no longer read like bare magic bytes.
+_DIVERT_BUTTON_ONLY = 0x03  # 0x01 | 0x02       -- divert as button click
+_DIVERT_RAW_XY      = 0x33  # 0x01 | 0x02 | 0x10 | 0x20 -- divert + rawXY
+_UNDIVERT_BUTTON    = 0x02  # 0x02 only         -- revert button-only divert
+_UNDIVERT_RAW_XY    = 0x22  # 0x02 | 0x20       -- revert rawXY divert
+
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
 
 HIDPP_ERROR_NAMES = {
@@ -1512,13 +1528,13 @@ class HidGestureListener:
             self._gesture_cid = cid
             button_only = cid in self._button_only_cids
             if not button_only:
-                resp = self._set_cid_reporting(cid, 0x33)
+                resp = self._set_cid_reporting(cid, _DIVERT_RAW_XY)
                 if resp is not None:
                     self._rawxy_enabled = True
                     print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
                     return True
             self._rawxy_enabled = False
-            resp = self._set_cid_reporting(cid, 0x03)
+            resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
             ok = resp is not None
             mode = "button-only (catalog hint)" if button_only else "button-only fallback"
             print(f"[HidGesture] Divert {_format_cid(cid)} ({mode}): "
@@ -1612,7 +1628,7 @@ class HidGestureListener:
         self._extra_divert_acks.clear()
         failed: list[int] = []
         for cid in list(self._extra_diverts.keys()):
-            resp = self._set_cid_reporting(cid, 0x03)
+            resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
             ok = resp is not None
             print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
                   f"{'OK' if ok else 'FAILED'}")
@@ -1626,38 +1642,50 @@ class HidGestureListener:
             self._extra_diverts.pop(cid, None)
 
     def _undivert(self):
-        """Restore default button behaviour (best-effort)."""
+        """Restore default button behaviour (best-effort).
+
+        Failures during teardown are logged at debug level rather than
+        silently swallowed -- a stuck divert state is a user-visible bug
+        and the next session needs the breadcrumb to diagnose it. We
+        intentionally never raise here because callers (disconnect path,
+        atexit) must complete the rest of teardown regardless.
+        """
         if self._feat_idx is None or self._dev is None:
             return
-        # Undivert extra CIDs
         for cid in self._extra_diverts:
             hi = (cid >> 8) & 0xFF
             lo = cid & 0xFF
             try:
                 self._tx(LONG_ID, self._feat_idx, 3,
-                         [hi, lo, 0x02, 0x00, 0x00])
-            except Exception:
-                pass
-        # Undivert gesture CID
+                         [hi, lo, _UNDIVERT_BUTTON, 0x00, 0x00])
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(
+                    f"[HidGesture] _undivert: extra {_format_cid(cid)} "
+                    f"revert failed: {exc}"
+                )
         hi = (self._gesture_cid >> 8) & 0xFF
         lo = self._gesture_cid & 0xFF
-        flags = 0x22 if self._rawxy_enabled else 0x02
+        flags = _UNDIVERT_RAW_XY if self._rawxy_enabled else _UNDIVERT_BUTTON
         try:
             self._tx(LONG_ID, self._feat_idx, 3,
                      [hi, lo, flags, 0x00, 0x00])
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(
+                f"[HidGesture] _undivert: gesture {_format_cid(self._gesture_cid)} "
+                f"revert failed: {exc}"
+            )
         self._rawxy_enabled = False
         # Best-effort revert; mid-disconnect failures are harmless because
-        # firmware auto-reverts on power cycle anyway.
+        # firmware auto-reverts on power cycle anyway, but we still log so
+        # a stuck divert across a normal disconnect is observable.
         try:
             self._set_native_wheel_invert_vertical(False)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(f"[HidGesture] _undivert: vertical invert revert failed: {exc}")
         try:
             self._set_native_wheel_invert_horizontal(False)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(f"[HidGesture] _undivert: horizontal invert revert failed: {exc}")
         self._wheel_divert_state = False
 
     # ── DPI control ───────────────────────────────────────────────

@@ -14,6 +14,7 @@ from core.key_simulator import (
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
+    WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
 )
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
@@ -350,7 +351,9 @@ class Engine:
         OS-layer inversion path is suppressed; on failure the OS-layer
         path handles inversion."""
         settings = self.cfg.get("settings", {})
-        kill_switch_off = settings.get("wheel_divert", "auto") == "off"
+        kill_switch_off = (
+            coerce_wheel_divert_setting(settings.get("wheel_divert")) == WHEEL_DIVERT_OFF
+        )
         invert_v = bool(settings.get("invert_vscroll", False))
         invert_h = bool(settings.get("invert_hscroll", False))
         device = self.connected_device
@@ -624,7 +627,9 @@ class Engine:
         # firmware that forgot invert state after sleep is realigned.
         self._apply_wheel_invert_setting(force=True)
         native_invert_target = (
-            self.cfg.get("settings", {}).get("wheel_divert", "auto") != "off"
+            coerce_wheel_divert_setting(
+                self.cfg.get("settings", {}).get("wheel_divert")
+            ) != WHEEL_DIVERT_OFF
             and bool(getattr(self.connected_device, "has_hires_wheel", False)
                      or getattr(self.connected_device, "has_thumbwheel", False))
         )
