@@ -619,8 +619,14 @@ ApplicationWindow {
         }
     }
 
-    // LSUIElement on macOS: every close path hides the window so the engine keeps running.
+    // Hide-to-tray: every "close window" idiom on every supported platform routes through
+    // dismiss() so the engine and tray icon keep running. macOS LSUIElement bundles depend
+    // on this because the Dock close button never terminates the process; Linux and Windows
+    // tray builds inherit the same behavior for consistency.
     function dismiss() {
+        if (!root.visible) {
+            return
+        }
         root.hide()
     }
 
@@ -629,23 +635,31 @@ ApplicationWindow {
         root.dismiss()
     }
 
-    // LSUIElement apps have no platform menu bar to bind StandardKey.Close against.
+    // LSUIElement apps have no platform menu bar binding StandardKey.Close to Cmd-W, and
+    // Ctrl/Cmd+M mirrors the OS "minimize" idiom. Qt.ApplicationShortcut keeps these active
+    // anywhere inside the Mouser process; enabled-when-visible avoids no-op fires while the
+    // window is already in the tray.
     Shortcut {
         sequence: StandardKey.Close
         context: Qt.ApplicationShortcut
+        enabled: root.visible
         onActivated: root.dismiss()
     }
 
     Shortcut {
         sequence: "Ctrl+M"
         context: Qt.ApplicationShortcut
+        enabled: root.visible
         onActivated: root.dismiss()
     }
 
-    // WindowShortcut keeps Esc scoped to the main window; modal Popups still close first via CloseOnEscape.
+    // Qt.WindowShortcut keeps Esc scoped to the main window; modal Popups consume Esc via
+    // CloseOnEscape before it reaches the window-level shortcut, so we never hide while a
+    // dialog is up.
     Shortcut {
         sequence: "Escape"
         context: Qt.WindowShortcut
+        enabled: root.visible
         onActivated: root.dismiss()
     }
 
