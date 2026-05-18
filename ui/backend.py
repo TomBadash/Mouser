@@ -281,6 +281,18 @@ class Backend(QObject):
         self._update_timer.setInterval(DEFAULT_AUTO_CHECK_INTERVAL_SECONDS * 1000)
         self._update_timer.timeout.connect(lambda: self._startUpdateCheck(manual=False))
 
+        # Lazily-computed list snapshots for QML bindings. Every read of a
+        # ``@Property(list, ...)`` returns the cached value until the
+        # property's notify signal (or a structurally-dependent signal)
+        # fires and clears it. Without these caches QML repaints rebuild
+        # the lists on every binding evaluation -- profiles re-runs
+        # ``app_catalog`` lookups, knownApps walks the catalog, etc.
+        self._buttons_cache: list | None = None
+        self._profiles_cache: list | None = None
+        self._known_apps_cache: list | None = None
+        self._action_categories_cache: list | None = None
+        self._all_actions_cache: list | None = None
+
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
             self._handleProfileSwitch, Qt.QueuedConnection)
@@ -306,6 +318,15 @@ class Backend(QObject):
             self._handleUpdateInstallState, Qt.QueuedConnection)
         self._updateInstallProgressRequest.connect(
             self._handleUpdateInstallProgress, Qt.QueuedConnection)
+
+        # List-property cache invalidation. Each notify signal maps to the
+        # subset of caches that depends on it; reads after the next emit
+        # rebuild lazily.
+        self.mappingsChanged.connect(self._invalidate_buttons_cache)
+        self.profilesChanged.connect(self._invalidate_profiles_cache)
+        self.activeProfileChanged.connect(self._invalidate_profiles_cache)
+        self.knownAppsChanged.connect(self._invalidate_known_apps_cache)
+        self.deviceLayoutChanged.connect(self._invalidate_device_dependent_caches)
 
         # Wire engine callbacks
         if engine:
@@ -358,7 +379,20 @@ class Backend(QObject):
 
     @Property(list, notify=mappingsChanged)
     def buttons(self):
-        """List of button dicts for the active profile, filtered by device."""
+        """List of button dicts for the active profile, filtered by device.
+
+        Cached -- invalidated by ``mappingsChanged`` (active-profile
+        mappings) and ``deviceLayoutChanged`` (effective supported-button
+        set). The QML mappings list binds to ``backend.buttons`` and
+        re-evaluates on every paint of the row delegate, so without the
+        cache this rebuilt a list of ~10 dicts and a per-button
+        ``_action_label`` lookup on every frame the user scrolled.
+        """
+        if self._buttons_cache is None:
+            self._buttons_cache = self._compute_buttons()
+        return self._buttons_cache
+
+    def _compute_buttons(self):
         mappings = get_active_mappings(self._cfg)
         device_buttons = set(
             self._effective_supported_buttons or BUTTON_NAMES.keys()
@@ -379,6 +413,24 @@ class Backend(QObject):
             })
         return result
 
+    def _invalidate_buttons_cache(self) -> None:
+        self._buttons_cache = None
+
+    def _invalidate_profiles_cache(self) -> None:
+        self._profiles_cache = None
+
+    def _invalidate_known_apps_cache(self) -> None:
+        self._known_apps_cache = None
+
+    def _invalidate_device_dependent_caches(self) -> None:
+        # ``buttons`` depends on ``_effective_supported_buttons`` and
+        # ``actionCategories`` / ``allActions`` depend on the hidden-action
+        # filter that is itself derived from the layout. A device swap
+        # invalidates all three at once.
+        self._buttons_cache = None
+        self._action_categories_cache = None
+        self._all_actions_cache = None
+
     def _hidden_actions(self):
         """Return set of action IDs to hide based on effective device buttons."""
         btns = self._effective_supported_buttons
@@ -390,7 +442,18 @@ class Backend(QObject):
 
     @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
-        """Actions grouped by category, filtered by device capabilities."""
+        """Actions grouped by category, filtered by device capabilities.
+
+        Cached -- invalidated by ``deviceLayoutChanged``. The grouped
+        structure is rebuilt across the whole ``ACTIONS`` registry on
+        every read; the QML action picker binds to this property and
+        rebuilt it on every focus/visibility change before the cache.
+        """
+        if self._action_categories_cache is None:
+            self._action_categories_cache = self._compute_action_categories()
+        return self._action_categories_cache
+
+    def _compute_action_categories(self):
         from collections import OrderedDict
         hidden = self._hidden_actions()
         cats = OrderedDict()
@@ -414,7 +477,15 @@ class Backend(QObject):
 
     @Property(list, notify=deviceLayoutChanged)
     def allActions(self):
-        """Flat sorted action list (Do Nothing first), filtered by device."""
+        """Flat sorted action list (Do Nothing first), filtered by device.
+
+        Cached -- invalidated by ``deviceLayoutChanged``.
+        """
+        if self._all_actions_cache is None:
+            self._all_actions_cache = self._compute_all_actions()
+        return self._all_actions_cache
+
+    def _compute_all_actions(self):
         hidden = self._hidden_actions()
         result = []
         none_data = ACTIONS.get("none")
@@ -711,6 +782,20 @@ class Backend(QObject):
 
     @Property(list, notify=profilesChanged)
     def profiles(self):
+        """Profile snapshots for the QML profile selector.
+
+        Cached -- invalidated by ``profilesChanged`` (catalog churn) and
+        ``activeProfileChanged`` (the ``isActive`` flag per row). The
+        compute path walks every profile's apps and resolves each through
+        ``get_icon_for_exe`` and ``app_catalog.get_app_label`` -- both
+        non-trivial in a profile with several apps, so rebuilding on
+        every QML read was the worst per-paint allocator in this file.
+        """
+        if self._profiles_cache is None:
+            self._profiles_cache = self._compute_profiles()
+        return self._profiles_cache
+
+    def _compute_profiles(self):
         result = []
         active = self._cfg.get("active_profile", "default")
         for pname, pdata in self._cfg.get("profiles", {}).items():
@@ -727,6 +812,17 @@ class Backend(QObject):
 
     @Property(list, notify=knownAppsChanged)
     def knownApps(self):
+        """Catalog snapshot for the QML known-apps picker.
+
+        Cached -- invalidated by ``knownAppsChanged``. The catalog itself
+        is essentially static for a session, so this is the highest-hit
+        memoization target of the five.
+        """
+        if self._known_apps_cache is None:
+            self._known_apps_cache = self._compute_known_apps()
+        return self._known_apps_cache
+
+    def _compute_known_apps(self):
         result = []
         for entry in app_catalog.get_app_catalog():
             icon = get_icon_for_exe(entry.get("path", ""))
