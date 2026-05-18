@@ -233,6 +233,31 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
 
+    def test_clamp_dpi_accepts_string_int(self):
+        """Hand-edited config files can persist DPI as a JSON string when
+        users copy values around. Coerce instead of throwing."""
+        self.assertEqual(clamp_dpi("1500", None), 1500)
+
+    def test_clamp_dpi_accepts_hex_string(self):
+        self.assertEqual(clamp_dpi("0x5DC", None), 1500)
+
+    def test_clamp_dpi_falls_back_to_min_on_garbage_string(self):
+        self.assertEqual(clamp_dpi("not-a-number", None), 200)
+
+    def test_clamp_dpi_falls_back_to_min_on_none(self):
+        self.assertEqual(clamp_dpi(None, None), 200)
+
+    def test_clamp_dpi_rejects_bool(self):
+        """``bool`` is a subclass of ``int`` -- without the explicit check
+        ``True``/``False`` would silently clamp to ``dpi_min``/``dpi_min``
+        because ``int(True) == 1`` and ``min(200, 1) == 1`` becomes 200 via
+        the floor, which masks the upstream bug."""
+        self.assertEqual(clamp_dpi(True, None), 200)
+        self.assertEqual(clamp_dpi(False, None), 200)
+
+    def test_clamp_dpi_accepts_float(self):
+        self.assertEqual(clamp_dpi(1500.7, None), 1500)
+
     def test_mx_anywhere_2s_supported_buttons_include_middle_and_hscroll(self):
         device = resolve_device(product_id=0xB01A)
 

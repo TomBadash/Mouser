@@ -442,9 +442,32 @@ def iter_known_devices() -> Iterable[LogiDeviceSpec]:
 
 
 def clamp_dpi(value, device=None) -> int:
+    """Clamp ``value`` into the device's DPI range, defaulting to the safe
+    floor on malformed input.
+
+    ``value`` may arrive from a JSON config file, a QML binding, or a HID
+    report -- so the raw ``int(value)`` cast that was here before could
+    raise on a stringified hex value, on ``None``, or on a partial HID
+    read. Crashing the engine's DPI path because the user edited
+    ``config.json`` by hand is the wrong failure mode; we coerce
+    defensively and return the device minimum so the cursor never freezes.
+    """
     dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
     dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
-    dpi = int(value)
+    if isinstance(value, bool):
+        # ``bool`` is a subclass of ``int`` -- reject it explicitly so a
+        # leaked truthy flag never silently resolves to 0 or 1 DPI.
+        return dpi_min
+    if isinstance(value, str):
+        try:
+            dpi = int(value, 0)
+        except (TypeError, ValueError):
+            return dpi_min
+    else:
+        try:
+            dpi = int(value)
+        except (TypeError, ValueError):
+            return dpi_min
     return max(dpi_min, min(dpi_max, dpi))
 
 
