@@ -427,12 +427,11 @@ class MouseHook(BaseMouseHook):
                 should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
-                # `wheel_native_invert_active` means the firmware has
-                # already flipped the sign at the device level. Skip the
-                # OS-layer inversion path so we don't flip a second time.
-                if self.wheel_native_invert_active:
-                    pass
-                elif self.invert_vscroll:
+                # The OS-layer inversion path only runs when a Logitech is
+                # currently connected (the toggle is meant for Logitech
+                # scroll, not generic / trackball / virtual mouse events) and
+                # the firmware is not already inverting at the source.
+                if self._apply_vscroll_invert_fallback():
                     delta = hiword(mouse_data)
                     if delta != 0 and self._ri_hwnd:
                         self._pending_vscroll += -delta
@@ -456,7 +455,7 @@ class MouseHook(BaseMouseHook):
                     event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                     should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
 
-                if self.invert_hscroll and not self.wheel_native_invert_active:
+                if self._apply_hscroll_invert_fallback():
                     if delta != 0 and self._ri_hwnd and not should_block:
                         self._pending_hscroll += -delta
                         if self._hscroll_posted:

@@ -48,6 +48,16 @@ _BTN_FORWARD = 4
 # btn=6 drives _begin_gesture_capture / _end_gesture_capture below.
 _BTN_OS_EXTRA = 6
 _INJECTED_EVENT_MARKER = 0x4D4F5554
+# CGEvent integer-value-field id for kCGScrollWheelEventIsContinuous. Some
+# Quartz versions surface the symbolic constant (``Quartz.kCGScrollWheelEventIsContinuous``),
+# others do not -- we cache the integer here so the event-tap path does not
+# carry a naked magic number, and we still fall back to the symbol when the
+# binding is available so future SDK renumbering picks up automatically.
+_CG_SCROLL_FIELD_IS_CONTINUOUS = getattr(
+    Quartz if _QUARTZ_OK else object(),
+    "kCGScrollWheelEventIsContinuous",
+    88,
+)
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -358,9 +368,10 @@ class MouseHook(BaseMouseHook):
                     == _INJECTED_EVENT_MARKER
                 ):
                     return cg_event
-                is_continuous_field = 88
                 is_continuous = bool(
-                    Quartz.CGEventGetIntegerValueField(cg_event, is_continuous_field)
+                    Quartz.CGEventGetIntegerValueField(
+                        cg_event, _CG_SCROLL_FIELD_IS_CONTINUOUS
+                    )
                 )
                 if self.ignore_trackpad and is_continuous:
                     return cg_event
@@ -393,14 +404,15 @@ class MouseHook(BaseMouseHook):
                 if should_block:
                     return None
                 # In-place sign flip on the original event so downstream
-                # consumers see unit type / phase preserved. Skipped when
-                # firmware is already inverting at the source, otherwise
-                # the two flips cancel out.
-                if not self.wheel_native_invert_active:
-                    if self.invert_vscroll:
-                        self._negate_scroll_axis(cg_event, 1)
-                    if self.invert_hscroll:
-                        self._negate_scroll_axis(cg_event, 2)
+                # consumers see unit type / phase preserved. Gated on a
+                # Logitech device being connected: the toggle is meant for
+                # Logitech scroll, not for inverting every trackpad and
+                # generic USB mouse the OS hands us. Also skipped when the
+                # firmware already inverted at the source.
+                if self._apply_vscroll_invert_fallback():
+                    self._negate_scroll_axis(cg_event, 1)
+                if self._apply_hscroll_invert_fallback():
+                    self._negate_scroll_axis(cg_event, 2)
 
             if mouse_event:
                 self._enqueue_dispatch_event(mouse_event)

@@ -198,12 +198,18 @@ def _candidate_matches_cache(info, cached_candidate) -> bool:
 
 def _atexit_stop_listeners():
     """Best-effort undivert before interpreter exit so a Mouser crash or
-    SIGTERM does not leave the device stuck in HID++ divert mode."""
+    SIGTERM does not leave the device stuck in HID++ divert mode.
+
+    Failures are logged but otherwise tolerated -- atexit runs during
+    interpreter teardown when the HID stack may already be partially gone,
+    so we never propagate. We do *not* silently swallow: a stuck divert is a
+    user-visible bug that the next session needs to diagnose.
+    """
     for listener in list(_ATEXIT_LISTENERS):
         try:
             listener.stop()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - atexit must never propagate
+            print(f"[HidGesture] atexit stop failed for {listener!r}: {exc}")
 
 
 def _register_atexit_listener(listener):
@@ -860,6 +866,36 @@ def _format_cid(cid):
     return f"0x{cid:04X} ({name})" if name else f"0x{cid:04X}"
 
 
+def _coerce_int_cid(value) -> int | None:
+    """Normalize a CID value (``int``, ``"0x01A0"`` hex string, ``None``) to
+    ``int | None``. Fail-closed: malformed inputs resolve to ``None`` so the
+    caller never falls into divert paths with garbage values.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _control_present(controls, cid: int) -> bool:
+    """True when ``cid`` appears in the live REPROG_V4 ``controls`` dump.
+
+    Centralizes the catalog-vs-runtime gating invariant: we never attempt to
+    divert (or otherwise act on) a CID the firmware does not advertise on the
+    current connection.
+    """
+    if not controls:
+        return False
+    for control in controls:
+        if not isinstance(control, dict):
+            continue
+        if _coerce_int_cid(control.get("cid")) == cid:
+            return True
+    return False
+
+
 # ── Listener class ────────────────────────────────────────────────
 
 class HidGestureListener:
@@ -893,6 +929,12 @@ class HidGestureListener:
             for cid, info in self._static_extra_diverts.items()
         }
         self._thumb_button_cid: int | None = None
+        # Per-CID divert acknowledgment: a CID lives in ``_extra_diverts`` from
+        # the moment it is installed, but it only joins this set after the
+        # firmware acknowledges the ``setCidReporting`` call. ``thumb_button_via_hid``
+        # reads off this set so callers never suppress the OS-level BTN_TASK
+        # fallback while the device is still emitting it.
+        self._extra_divert_acks: set[int] = set()
         self._dev       = None          # hid.device()
         self._thread    = None
         self._running   = False
@@ -971,17 +1013,21 @@ class HidGestureListener:
         return True
 
     def stop(self):
-        # Best-effort revert to native non-inverted before tearing down,
-        # so a graceful exit leaves the device in firmware default state.
+        # Best-effort revert to native non-inverted before tearing down, so a
+        # graceful exit leaves the device in firmware default state. We log
+        # failures rather than swallow them: a failed revert means the next
+        # session will see an unexpected divert state and the user needs the
+        # breadcrumb to debug it. We do not propagate -- ``stop`` must always
+        # complete the rest of teardown (close device, join thread).
         if self._dev is not None and self._wheel_divert_state:
             try:
                 self._set_native_wheel_invert_vertical(False)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(f"[HidGesture] stop: vertical invert revert failed: {exc}")
             try:
                 self._set_native_wheel_invert_horizontal(False)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(f"[HidGesture] stop: horizontal invert revert failed: {exc}")
             self._wheel_divert_state = False
         self._running = False
         d = self._dev
@@ -1482,19 +1528,24 @@ class HidGestureListener:
         self._gesture_cid = DEFAULT_GESTURE_CID
         return False
 
-    def _install_thumb_button_extra(self, device_spec):
+    def _install_thumb_button_extra(self, device_spec, controls):
         """Wire ``device_spec.thumb_button_cid`` (when set) as a button-only
         extra divert so its press/release fires ``_on_thumb_button_down/up``.
-        Must run between ``_divert()`` and ``_divert_extras()`` so the
-        entry lands in the same setCidReporting round. Skipped when the
-        CID is already the active gesture CID (fallback path)."""
+
+        Must run between ``_divert()`` and ``_divert_extras()`` so the entry
+        lands in the same setCidReporting round. Gated against the live
+        REPROG_V4 ``controls`` list -- we never install an extra divert for a
+        CID the firmware has not advertised, otherwise ``setCidReporting``
+        hammers the device for a control that does not exist. Skipped when the
+        CID is already the active gesture CID (fallback path).
+        """
         if (
             self._thumb_button_cid is not None
             and self._thumb_button_cid not in self._static_extra_diverts
         ):
             self._extra_diverts.pop(self._thumb_button_cid, None)
         self._thumb_button_cid = None
-        cid = getattr(device_spec, "thumb_button_cid", None)
+        cid = _coerce_int_cid(getattr(device_spec, "thumb_button_cid", None))
         if cid is None:
             return
         if cid == self._gesture_cid:
@@ -1503,8 +1554,14 @@ class HidGestureListener:
                 f"-- it's already the active gesture CID (fallback path)"
             )
             return
-        self._thumb_button_cid = int(cid)
-        self._extra_diverts[int(cid)] = {
+        if not _control_present(controls, cid):
+            print(
+                f"[HidGesture] Skip thumb_button extra {_format_cid(cid)} "
+                f"-- firmware does not advertise this CID in REPROG_V4"
+            )
+            return
+        self._thumb_button_cid = cid
+        self._extra_diverts[cid] = {
             "on_down": self._fire_thumb_button_down,
             "on_up": self._fire_thumb_button_up,
             "held": False,
@@ -1530,19 +1587,43 @@ class HidGestureListener:
 
     @property
     def thumb_button_via_hid(self) -> bool:
-        """True when the listener is delivering thumb_button events from
-        a HID++ extra divert (rather than the OS-level btn=6 fallback)."""
-        return self._thumb_button_cid is not None
+        """True when the listener is delivering thumb_button events from a
+        HID++ extra divert (rather than the OS-level btn=6 fallback).
+
+        Reads off ``_extra_divert_acks``, not ``_thumb_button_cid``, so the
+        property only flips after ``setCidReporting`` is acknowledged. Without
+        this gate the hook layer would suppress the OS BTN_TASK path while the
+        device is still emitting it, eating the press entirely.
+        """
+        cid = self._thumb_button_cid
+        return cid is not None and cid in self._extra_divert_acks
 
     def _divert_extras(self):
-        """Divert additional CIDs (e.g. mode shift) without raw XY."""
+        """Divert additional CIDs (e.g. mode shift) without raw XY.
+
+        Tracks per-CID acknowledgment in ``_extra_divert_acks`` so callers
+        know which extras the firmware actually took. CIDs that fail the
+        setCidReporting call are removed from ``_extra_diverts`` so the loop
+        does not later route OS events through a divert handler the firmware
+        never installed.
+        """
         if self._feat_idx is None:
             return
-        for cid, info in self._extra_diverts.items():
+        self._extra_divert_acks.clear()
+        failed: list[int] = []
+        for cid in list(self._extra_diverts.keys()):
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
             print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
                   f"{'OK' if ok else 'FAILED'}")
+            if ok:
+                self._extra_divert_acks.add(cid)
+            else:
+                failed.append(cid)
+        for cid in failed:
+            if cid == self._thumb_button_cid:
+                self._thumb_button_cid = None
+            self._extra_diverts.pop(cid, None)
 
     def _undivert(self):
         """Restore default button behaviour (best-effort)."""
@@ -1938,10 +2019,16 @@ class HidGestureListener:
         """Cross-thread API. Ask the device to flip the wheel sign at
         the firmware level (no divert). Blocks until the listener
         applies the write or ``timeout_s`` elapses. ``_wheel_divert_target``
-        is cached so reconnect replays the same intent."""
+        is cached so reconnect replays the same intent.
+
+        The reconnect-replay cache (``_wheel_divert_target``) is mutated
+        *inside* ``_wheel_divert_call_lock`` so two concurrent callers cannot
+        interleave updates: whichever caller wins the lock is the one whose
+        intent persists across reconnect.
+        """
         target = (bool(invert_vertical), bool(invert_horizontal))
-        self._wheel_divert_target = target
         with self._wheel_divert_call_lock:
+            self._wheel_divert_target = target
             with self._wheel_divert_lock:
                 self._wheel_divert_result = None
                 self._pending_wheel_divert = target
@@ -2413,8 +2500,10 @@ class HidGestureListener:
                         )
                     if self._divert():
                         # Install BEFORE _divert_extras so it lands in the
-                        # same setCidReporting round.
-                        self._install_thumb_button_extra(device_spec)
+                        # same setCidReporting round. Pass the live REPROG_V4
+                        # controls so the helper can refuse to divert CIDs the
+                        # firmware does not advertise.
+                        self._install_thumb_button_extra(device_spec, controls)
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
                             actual_transport = "Bluetooth"

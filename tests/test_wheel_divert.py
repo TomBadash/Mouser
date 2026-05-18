@@ -390,12 +390,28 @@ class MacOSSuppressionTests(unittest.TestCase):
         # Original event flows through untouched -- no block, no reinject.
         self.assertIs(result, cg_event)
 
+    def _logitech_stub(self):
+        """Minimal stand-in for a connected Logitech ``ConnectedDeviceInfo``.
+
+        The OS-fallback inversion path requires ``_connected_device is not
+        None`` as proof that scroll events are coming from a Logitech the
+        user's invert toggle is meant to apply to. Tests that exercise the
+        fallback path must pin this state explicitly.
+        """
+        return SimpleNamespace(
+            key="mx_master_3s",
+            display_name="MX Master 3S",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
+
     def test_os_inversion_runs_when_native_inactive(self):
         hook = self._mouse_hook_macos.MouseHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
         hook.wheel_native_invert_active = False
+        hook._connected_device = self._logitech_stub()
         cg_event = MagicMock(name="cg_event")
         self.mock_quartz.CGEventGetIntegerValueField.side_effect = (
             self._mock_get_field(is_continuous=0)
@@ -416,6 +432,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         hook._tap = MagicMock(name="tap")
         hook.invert_hscroll = True
         hook.wheel_native_invert_active = False
+        hook._connected_device = self._logitech_stub()
         cg_event = MagicMock(name="cg_event")
         self.mock_quartz.CGEventGetIntegerValueField.side_effect = (
             self._mock_get_field(is_continuous=0)
@@ -434,6 +451,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         hook.invert_vscroll = True
         hook.invert_hscroll = True
         hook.wheel_native_invert_active = False
+        hook._connected_device = self._logitech_stub()
         cg_event = MagicMock(name="cg_event")
         self.mock_quartz.CGEventGetIntegerValueField.side_effect = (
             self._mock_get_field(is_continuous=0)
@@ -446,6 +464,59 @@ class MacOSSuppressionTests(unittest.TestCase):
         negate.assert_any_call(cg_event, 2)
         self.assertEqual(negate.call_count, 2)
         self.assertIs(result, cg_event)
+
+    def test_os_inversion_skipped_when_no_logitech_connected(self):
+        """The wheel-invert toggle is meant for Logitech scroll. When no
+        Logitech is connected we have no source-of-truth that a scroll event
+        came from a device the toggle applies to, so the OS-layer fallback
+        must stand down rather than invert every trackpad / generic mouse
+        scroll the OS forwards through us.
+        """
+        hook = self._mouse_hook_macos.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook.invert_vscroll = True
+        hook.invert_hscroll = True
+        hook.wheel_native_invert_active = False
+        hook._connected_device = None  # no Logitech detected
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = (
+            self._mock_get_field(is_continuous=0)
+        )
+        with patch.object(hook, "_negate_scroll_axis") as negate:
+            result = hook._event_tap_callback(
+                None, self._kCGEventScrollWheel, cg_event, None
+            )
+        negate.assert_not_called()
+        self.assertIs(result, cg_event)
+
+    def test_os_inversion_resumes_when_logitech_reconnects(self):
+        """Disconnect/reconnect transitions must not require Mouser restart:
+        the very next event after ``_connected_device`` flips back to a
+        ``ConnectedDeviceInfo`` is the one we start inverting again.
+        """
+        hook = self._mouse_hook_macos.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook.invert_vscroll = True
+        hook.wheel_native_invert_active = False
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = (
+            self._mock_get_field(is_continuous=0)
+        )
+
+        hook._connected_device = None
+        with patch.object(hook, "_negate_scroll_axis") as negate_off:
+            hook._event_tap_callback(
+                None, self._kCGEventScrollWheel, MagicMock(name="evt-off"), None
+            )
+        negate_off.assert_not_called()
+
+        hook._connected_device = self._logitech_stub()
+        with patch.object(hook, "_negate_scroll_axis") as negate_on:
+            hook._event_tap_callback(
+                None, self._kCGEventScrollWheel, MagicMock(name="evt-on"), None
+            )
+        negate_on.assert_called_once()
 
     def test_negate_scroll_axis_flips_all_three_delta_fields_in_place(self):
         """Direct unit test: negate flips Delta, FixedPtDelta, and

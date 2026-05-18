@@ -799,7 +799,8 @@ class HidBoltReceiverTests(unittest.TestCase):
     def test_install_thumb_button_extra_adds_cid_when_distinct_from_gesture(self):
         """Happy path: 0x01A0 is the active gesture CID on MX Master 4,
         so 0x00C3 (thumb_button_cid) is added as a button-only extra with
-        thumb_button callbacks wired in."""
+        thumb_button callbacks wired in. ``thumb_button_via_hid`` stays
+        False until ``_divert_extras`` acknowledges the setCidReporting."""
         on_down = Mock()
         on_up = Mock()
         listener = hid_gesture.HidGestureListener(
@@ -808,12 +809,19 @@ class HidBoltReceiverTests(unittest.TestCase):
         )
         listener._gesture_cid = 0x01A0
         device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
 
         with patch("builtins.print"):
-            listener._install_thumb_button_extra(device_spec)
+            listener._install_thumb_button_extra(device_spec, controls)
 
         self.assertEqual(listener._thumb_button_cid, 0x00C3)
         self.assertIn(0x00C3, listener._extra_diverts)
+        # No ack yet -- divert_extras has not run.
+        self.assertFalse(listener.thumb_button_via_hid)
+
+        listener._extra_divert_acks.add(0x00C3)
         self.assertTrue(listener.thumb_button_via_hid)
 
         # Trigger the wired callbacks via the extras dispatch path.
@@ -821,6 +829,59 @@ class HidBoltReceiverTests(unittest.TestCase):
         on_down.assert_called_once()
         listener._extra_diverts[0x00C3]["on_up"]()
         on_up.assert_called_once()
+
+    def test_install_thumb_button_extra_skipped_when_cid_absent_from_reprog(self):
+        """Catalog declares a thumb_button CID, but the firmware does not
+        advertise it on this connection. The helper must refuse to queue the
+        divert -- queueing would hammer setCidReporting with a CID the
+        firmware never exposed.
+        """
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=Mock(),
+            on_thumb_button_up=Mock(),
+        )
+        listener._gesture_cid = 0x01A0
+        device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x0052, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x01A0, "flags": 0x0130, "mapping_flags": 0x0011},
+        ]
+
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(device_spec, controls)
+
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertFalse(listener.thumb_button_via_hid)
+
+    def test_divert_extras_clears_acks_and_drops_failed_cids(self):
+        """When setCidReporting fails for a CID, the listener must drop it
+        from ``_extra_diverts`` so the OS-fallback path stays in charge of
+        that button. ``thumb_button_via_hid`` then resolves to False.
+        """
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x09
+        listener._thumb_button_cid = 0x00C3
+        listener._extra_diverts = {
+            0x00C4: {"on_down": Mock(), "on_up": Mock(), "held": False},
+            0x00C3: {"on_down": Mock(), "on_up": Mock(), "held": False},
+        }
+        responses = {0x00C4: True, 0x00C3: None}
+
+        def fake_set_cid_reporting(cid, flags):
+            return responses.get(cid)
+
+        with (
+            patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting),
+            patch("builtins.print"),
+        ):
+            listener._divert_extras()
+
+        self.assertEqual(listener._extra_divert_acks, {0x00C4})
+        self.assertIn(0x00C4, listener._extra_diverts)
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertFalse(listener.thumb_button_via_hid)
 
     def test_install_thumb_button_extra_skipped_when_same_as_gesture_cid(self):
         """Fallback path: 0x01A0 divert was rejected, so 0x00C3 became
@@ -832,9 +893,12 @@ class HidBoltReceiverTests(unittest.TestCase):
         )
         listener._gesture_cid = 0x00C3
         device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
 
         with patch("builtins.print"):
-            listener._install_thumb_button_extra(device_spec)
+            listener._install_thumb_button_extra(device_spec, controls)
 
         self.assertIsNone(listener._thumb_button_cid)
         self.assertNotIn(0x00C3, listener._extra_diverts)
@@ -846,7 +910,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         device_spec = SimpleNamespace(thumb_button_cid=None)
 
         with patch("builtins.print"):
-            listener._install_thumb_button_extra(device_spec)
+            listener._install_thumb_button_extra(device_spec, [])
 
         self.assertIsNone(listener._thumb_button_cid)
         self.assertEqual(listener._extra_diverts, {})
@@ -945,16 +1009,21 @@ class HidBoltReceiverTests(unittest.TestCase):
             on_thumb_button_up=Mock(),
         )
         listener._gesture_cid = 0x01A0
+        first_controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
         with patch("builtins.print"):
             listener._install_thumb_button_extra(
-                SimpleNamespace(thumb_button_cid=0x00C3)
+                SimpleNamespace(thumb_button_cid=0x00C3),
+                first_controls,
             )
         self.assertIn(0x00C3, listener._extra_diverts)
 
         listener._gesture_cid = 0x00C3  # different device
         with patch("builtins.print"):
             listener._install_thumb_button_extra(
-                SimpleNamespace(thumb_button_cid=None)
+                SimpleNamespace(thumb_button_cid=None),
+                [],
             )
 
         self.assertNotIn(0x00C3, listener._extra_diverts)

@@ -897,9 +897,11 @@ class MouseHook(BaseMouseHook):
 
         rel_wheel_hi_res = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
         if code == _ecodes.REL_WHEEL or code == rel_wheel_hi_res:
-            # Skip the OS-layer rewrite when firmware is already flipping
-            # the sign at the device, otherwise the two flips cancel out.
-            if self.invert_vscroll and not self.wheel_native_invert_active:
+            # The OS-layer sign flip only fires when a Logitech device is
+            # currently connected (otherwise we would invert every uinput
+            # scroll from a generic mouse or trackball routed through us)
+            # and the firmware is not already inverting at the source.
+            if self._apply_vscroll_invert_fallback():
                 self._uinput.write(_ecodes.EV_REL, code, -value)
             else:
                 self._uinput.write_event(event)
@@ -921,7 +923,7 @@ class MouseHook(BaseMouseHook):
 
             if should_block:
                 return
-            if self.invert_hscroll and not self.wheel_native_invert_active:
+            if self._apply_hscroll_invert_fallback():
                 self._uinput.write(_ecodes.EV_REL, code, -value)
             else:
                 self._uinput.write_event(event)

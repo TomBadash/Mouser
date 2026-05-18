@@ -132,6 +132,33 @@ class BaseMouseHook:
     # (raw-XY divertable) AND as OS btn=6 / BTN_TASK.
     SENSE_PANEL_CID = 0x01A0
 
+    def _apply_vscroll_invert_fallback(self) -> bool:
+        """True only when the OS-layer vertical-scroll inversion fallback
+        should fire on the current event.
+
+        The user's wheel-invert toggle is meant to flip *Logitech* scroll --
+        firmware-first on HID++-capable devices, OS-layer event-tap on the
+        rest. When no Logitech is currently connected we have no source-of-
+        truth that the event came from a device the toggle applies to, so the
+        fallback must stand down rather than invert every trackpad / generic
+        USB mouse scroll the OS forwards through us. The three platform
+        guards live in one place so future hooks (X11, BSD, etc.) inherit
+        the same contract.
+        """
+        if not self.invert_vscroll:
+            return False
+        if self.wheel_native_invert_active:
+            return False
+        return self._connected_device is not None
+
+    def _apply_hscroll_invert_fallback(self) -> bool:
+        """Horizontal twin of :meth:`_apply_vscroll_invert_fallback`."""
+        if not self.invert_hscroll:
+            return False
+        if self.wheel_native_invert_active:
+            return False
+        return self._connected_device is not None
+
     @property
     def _thumb_button_via_hid(self) -> bool:
         """True when thumb_button presses arrive over the HID++ vendor
