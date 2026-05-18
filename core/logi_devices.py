@@ -455,16 +455,25 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
     return None
 
 
+def _coerce_cid(value) -> int | None:
+    """Normalize a CID value (int, ``"0x01A0"`` hex string, or ``None``) to ``int | None``.
+
+    Returns ``None`` for falsy / unparseable inputs so callers never have to
+    distinguish between "absent" and "malformed" -- the contract is
+    intentionally fail-closed.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _control_cid(control) -> int | None:
     if not isinstance(control, dict):
         return None
-    cid = control.get("cid")
-    if cid in (None, ""):
-        return None
-    try:
-        return int(cid, 0) if isinstance(cid, str) else int(cid)
-    except (TypeError, ValueError):
-        return None
+    return _coerce_cid(control.get("cid"))
 
 
 def _control_int(control, field) -> int | None:
@@ -803,6 +812,19 @@ def get_buttons_for_layout(ui_layout_key: str) -> tuple[str, ...] | None:
     return None
 
 
+def _resolve_capability(runtime: bool | None, catalog: bool) -> bool:
+    """Tristate capability resolver: ``None`` defers to catalog; non-None wins.
+
+    Callers signal "I haven't probed this yet" with ``None`` and "I probed and
+    here's what I saw" with ``True``/``False``. Without the tristate, a runtime
+    probe that returned ``False`` (definitive absence) would be silently
+    overridden by an optimistic catalog hint.
+    """
+    if runtime is None:
+        return bool(catalog)
+    return bool(runtime)
+
+
 def build_connected_device_info(
     *,
     product_id=None,
@@ -811,16 +833,16 @@ def build_connected_device_info(
     source=None,
     gesture_cids=None,
     reprog_controls=None,
-    active_gesture_cid: int | None = None,
+    active_gesture_cid=None,
     gesture_rawxy_enabled=None,
     discovered_features=None,
     device_identity=None,
     diagnostics=None,
-    has_hires_wheel=False,
-    has_thumbwheel=False,
-    hires_wheel_active=False,
-    thumbwheel_active=False,
-    thumb_button_via_hid=False,
+    has_hires_wheel: bool | None = None,
+    has_thumbwheel: bool | None = None,
+    hires_wheel_active: bool = False,
+    thumbwheel_active: bool = False,
+    thumb_button_via_hid: bool = False,
 ) -> ConnectedDeviceInfo:
     spec = resolve_device(product_id=product_id, product_name=product_name)
     pid = int(product_id) if product_id not in (None, "") else None
@@ -831,22 +853,27 @@ def build_connected_device_info(
         "source": source,
         **dict(device_identity or {}),
     }
+    # Empty tuple is a legitimate "no gesture CIDs detected" signal from the
+    # runtime; only fall back to spec/defaults when the caller passes ``None``.
+    spec_gesture_cids = spec.gesture_cids if spec is not None else None
     inventory = build_device_capability_inventory(
         reprog_controls,
         device_identity=identity,
-        gesture_cids=gesture_cids or getattr(spec, "gesture_cids", None),
+        gesture_cids=spec_gesture_cids if gesture_cids is None else gesture_cids,
         active_gesture_cid=active_gesture_cid,
         gesture_rawxy_enabled=gesture_rawxy_enabled,
         discovered_features=discovered_features,
         diagnostics=diagnostics,
     )
-    # Caller-supplied runtime evidence wins over catalog hints; otherwise
-    # fall back to whatever the spec declared.
-    eff_has_hires = bool(has_hires_wheel) or bool(getattr(spec, "has_hires_wheel", False))
-    eff_has_thumb = bool(has_thumbwheel) or bool(getattr(spec, "has_thumbwheel", False))
-    normalized_active_cid = int(active_gesture_cid) if active_gesture_cid is not None else None
+    spec_has_hires = bool(spec.has_hires_wheel) if spec is not None else False
+    spec_has_thumb = bool(spec.has_thumbwheel) if spec is not None else False
+    eff_has_hires = _resolve_capability(has_hires_wheel, spec_has_hires)
+    eff_has_thumb = _resolve_capability(has_thumbwheel, spec_has_thumb)
+    normalized_active_cid = _coerce_cid(active_gesture_cid)
     if spec:
-        resolved_gesture_cids = tuple(gesture_cids or spec.gesture_cids)
+        resolved_gesture_cids = (
+            tuple(gesture_cids) if gesture_cids is not None else tuple(spec.gesture_cids)
+        )
         return ConnectedDeviceInfo(
             key=spec.key,
             display_name=spec.display_name,
@@ -878,6 +905,9 @@ def build_connected_device_info(
         f"Logitech PID 0x{pid:04X}" if pid is not None else "Logitech mouse"
     )
     key = _normalize_name(display_name).replace(" ", "_") or "logitech_mouse"
+    fallback_gesture_cids = (
+        tuple(gesture_cids) if gesture_cids is not None else tuple(DEFAULT_GESTURE_CIDS)
+    )
     return ConnectedDeviceInfo(
         key=key,
         display_name=display_name,
@@ -888,7 +918,7 @@ def build_connected_device_info(
         ui_layout="generic_mouse",
         image_asset="icons/mouse-simple.svg",
         supported_buttons=GENERIC_BUTTONS,
-        gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
+        gesture_cids=fallback_gesture_cids,
         capability_inventory=inventory,
         has_hires_wheel=eff_has_hires,
         has_thumbwheel=eff_has_thumb,

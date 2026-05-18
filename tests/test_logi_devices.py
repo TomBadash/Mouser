@@ -618,6 +618,94 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertEqual(info.active_gesture_cid, 0x01A0)
         self.assertIsInstance(info.active_gesture_cid, int)
 
+    def test_active_gesture_cid_accepts_hex_string(self):
+        """Runtime callers occasionally hand back CIDs as hex strings; the
+        normalizer must coerce or downstream mouse hooks compare wrong types.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid="0x01A0",
+        )
+
+        self.assertEqual(info.active_gesture_cid, 0x01A0)
+        self.assertIsInstance(info.active_gesture_cid, int)
+
+    def test_active_gesture_cid_malformed_value_resolves_to_none(self):
+        """Garbage in, ``None`` out -- never a stale numeric coercion."""
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid="not-a-hex",
+        )
+
+        self.assertIsNone(info.active_gesture_cid)
+
+    def test_unknown_pid_falls_back_to_generic_layout(self):
+        """Unrecognized devices must never inherit MX-family controls or layouts."""
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            product_name="Mystery Mouse",
+        )
+
+        self.assertEqual(info.ui_layout, "generic_mouse")
+        self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
+        self.assertEqual(info.supported_buttons, GENERIC_BUTTONS)
+        self.assertNotIn("thumb_button", info.supported_buttons)
+        self.assertNotIn("hscroll_left", info.supported_buttons)
+        self.assertNotIn("mode_shift", info.supported_buttons)
+        self.assertFalse(info.gesture_via_sense_panel)
+        self.assertIsNone(info.thumb_button_cid)
+
+    def test_unknown_pid_defaults_capabilities_to_false(self):
+        info = build_connected_device_info(product_id=0xDEAD)
+
+        self.assertFalse(info.has_hires_wheel)
+        self.assertFalse(info.has_thumbwheel)
+
+    def test_explicit_runtime_false_overrides_catalog_true(self):
+        """The tristate capability resolver is the FANG-critical contract:
+        a runtime probe that definitively saw no HiResWheel must defeat a
+        catalog hint, otherwise the listener tries to divert a feature the
+        device does not advertise and the device returns hard errors.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            has_hires_wheel=False,
+            has_thumbwheel=False,
+        )
+
+        self.assertFalse(info.has_hires_wheel)
+        self.assertFalse(info.has_thumbwheel)
+
+    def test_explicit_runtime_true_on_uncatalogued_device(self):
+        """Devices the catalog does not know about can still be upgraded to
+        having a HiResWheel by a runtime probe."""
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            has_hires_wheel=True,
+        )
+
+        self.assertTrue(info.has_hires_wheel)
+        self.assertEqual(info.ui_layout, "generic_mouse")
+
+    def test_caller_supplied_empty_gesture_cids_is_respected(self):
+        """``gesture_cids=()`` is the runtime signal "I probed and saw none";
+        it must not silently fall back to ``spec.gesture_cids``.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            gesture_cids=(),
+        )
+
+        self.assertEqual(info.gesture_cids, ())
+
+    def test_caller_supplied_empty_gesture_cids_on_unknown_device(self):
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            gesture_cids=(),
+        )
+
+        self.assertEqual(info.gesture_cids, ())
+
 
 if __name__ == "__main__":
     unittest.main()
