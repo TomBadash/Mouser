@@ -964,43 +964,74 @@ Item {
 
                     component InvertScopeBadge: Rectangle {
                         // Inline indicator placed inside an invert toggle row.
-                        // Visible only when the toggle is on (so it always
-                        // describes a currently-applied inversion). Colour
-                        // tells the user whether that inversion will survive
-                        // Synergy / DeskFlow / KVM forwarding (HID++ does,
-                        // OS-layer injection does not).
+                        // Tristate so the user always sees the truth about
+                        // whether their toggle is doing anything:
+                        //   * "device"   -- inverted at device firmware (HID++).
+                        //                   Survives Synergy / DeskFlow / KVM /
+                        //                   Barrier forwarding because the
+                        //                   wheel reports the inverted sign
+                        //                   natively.
+                        //   * "mouser"   -- inverted locally by Mouser before
+                        //                   the OS dispatches the event. Does
+                        //                   NOT survive KVM forwarding (the
+                        //                   remote sees the original sign).
+                        //   * "inactive" -- the toggle is on but no Logitech
+                        //                   is currently connected, so the
+                        //                   platform hook gate suppresses
+                        //                   inversion entirely.
                         property bool active: backend.wheelDivertActive
+                        property bool mouseConnected: backend.mouseConnected
                         property bool toggleOn: false
+                        readonly property string scope:
+                            !mouseConnected
+                                ? "inactive"
+                                : active
+                                    ? "device"
+                                    : "mouser"
                         visible: toggleOn
                         width: labelText.implicitWidth + 16
                         height: 22
                         radius: 11
-                        color: active
+                        color: scope === "device"
                                ? scrollPage.theme.accent
-                               : scrollPage.theme.bgSubtle
-                        border.width: active ? 0 : 1
-                        border.color: scrollPage.theme.textSecondary
+                               : scope === "inactive"
+                                   ? "transparent"
+                                   : scrollPage.theme.bgSubtle
+                        border.width: scope === "device" ? 0 : 1
+                        border.color: scope === "inactive"
+                                      ? scrollPage.theme.warning
+                                      : scrollPage.theme.textSecondary
 
-                        ToolTip.text: active
+                        ToolTip.text: scope === "device"
                                       ? s["scroll.wheel_invert_native_tooltip"]
-                                      : s["scroll.wheel_invert_os_tooltip"]
+                                      : scope === "inactive"
+                                          ? s["scroll.wheel_invert_inactive_tooltip"]
+                                          : s["scroll.wheel_invert_os_tooltip"]
                         ToolTip.delay: 400
                         ToolTip.visible: hoverArea.containsMouse
+
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: labelText.text
+                        Accessible.description: ToolTip.text
 
                         Text {
                             id: labelText
                             anchors.centerIn: parent
-                            text: parent.active
+                            text: parent.scope === "device"
                                   ? s["scroll.wheel_invert_native"]
-                                  : s["scroll.wheel_invert_os"]
+                                  : parent.scope === "inactive"
+                                      ? s["scroll.wheel_invert_inactive"]
+                                      : s["scroll.wheel_invert_os"]
                             font {
                                 family: uiState.fontFamily
                                 pixelSize: 11
-                                bold: parent.active
+                                bold: parent.scope === "device"
                             }
-                            color: parent.active
+                            color: parent.scope === "device"
                                    ? scrollPage.theme.bgSidebar
-                                   : scrollPage.theme.textSecondary
+                                   : parent.scope === "inactive"
+                                       ? scrollPage.theme.warning
+                                       : scrollPage.theme.textSecondary
                         }
 
                         MouseArea {
