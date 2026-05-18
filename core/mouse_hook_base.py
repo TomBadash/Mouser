@@ -197,8 +197,11 @@ class BaseMouseHook:
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(
+                    f"[MouseHook] connection_change_cb raised on "
+                    f"{state.lower()}: {exc!r}"
+                )
 
     def set_debug_callback(self, callback):
         self._debug_callback = callback
@@ -213,22 +216,24 @@ class BaseMouseHook:
         if self.debug_mode and self._debug_callback:
             try:
                 self._debug_callback(message)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                # ``_emit_debug`` is itself the diagnostic channel, so the
+                # failure goes straight to print() rather than recursing.
+                print(f"[MouseHook] debug_callback raised: {exc!r}")
 
     def _emit_status(self, message):
         if self._status_callback:
             try:
                 self._status_callback(message)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(f"[MouseHook] status_callback raised: {exc!r}")
 
     def _emit_gesture_event(self, event):
         if self.debug_mode and self._gesture_callback:
             try:
                 self._gesture_callback(event)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(f"[MouseHook] gesture_callback raised: {exc!r}")
 
     def _dispatch(self, event):
         callbacks = self._callbacks.get(event.event_type, [])

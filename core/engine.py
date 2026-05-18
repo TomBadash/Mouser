@@ -778,8 +778,15 @@ class Engine:
                         except Exception:
                             pass
 
+                # Read ``_replay_inflight`` under the same lock that the
+                # replay thread uses to flip it, otherwise the battery
+                # loop can issue a Smart Shift poll partway through a
+                # replay round-trip and the firmware queues conflicting
+                # HID++ writes.
+                with self._replay_lock:
+                    replay_inflight = self._replay_inflight
                 if (
-                    not self._replay_inflight
+                    not replay_inflight
                     and now - _last_ss >= _ss_poll_interval
                     and hg.smart_shift_supported
                 ):
@@ -928,3 +935,15 @@ class Engine:
             self._battery_poll_thread = None
         self._app_detector.stop()
         self.hook.stop()
+        # Cancel any pending safety auto-release timers. Without this the
+        # threading.Timer scheduled by execute_action can still fire after
+        # ``stop()`` returns and call ``inject_mouse_up`` against a hook
+        # that has already been torn down -- one of the timers fires a
+        # phantom release every time Mouser quits during a long press.
+        timers = list(self._mouse_release_timers.values())
+        self._mouse_release_timers.clear()
+        for timer in timers:
+            try:
+                timer.cancel()
+            except Exception as exc:  # noqa: BLE001 - shutdown must complete
+                print(f"[Engine] stop: failed to cancel release timer: {exc!r}")

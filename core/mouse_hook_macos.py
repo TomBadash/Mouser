@@ -229,6 +229,14 @@ class MouseHook(BaseMouseHook):
 
     @_autoreleased
     def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
+        # The CGEventTap continues to fire briefly after ``stop()`` sets
+        # ``_running = False`` -- macOS does not synchronously drain
+        # in-flight callbacks before disabling the tap. Drop the event
+        # untouched so we never enqueue into a torn-down dispatch worker,
+        # mutate shared state, or apply scroll inversion after the device
+        # connection has already been released.
+        if not self._running:
+            return cg_event
         try:
             if event_type in (
                 _kCGEventTapDisabledByTimeout,
@@ -254,8 +262,13 @@ class MouseHook(BaseMouseHook):
                     == _INJECTED_EVENT_MARKER
                 ):
                     return cg_event
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - Quartz boundary
+                # Surface failures so a borked Quartz binding cannot make
+                # the injected-event marker silently misfire on every
+                # event for the rest of the session.
+                self._emit_debug(
+                    f"CGEventGetIntegerValueField(kCGEventSourceUserData) failed: {exc!r}"
+                )
             mouse_event = None
             should_block = False
 

@@ -241,6 +241,12 @@ class MouseHook(BaseMouseHook):
         self._startup_ok = False
         self._prev_raw_buttons = {}
         self._last_rehook_time = 0
+        # Serializes gesture begin/end transitions across the LL hook
+        # thread (XBUTTON), the Raw Input window proc thread, and the HID
+        # listener thread. Held only around the `_gesture_active` /
+        # `_gesture_triggered` flips -- dispatch happens outside so an
+        # engine callback that re-enters the hook never deadlocks.
+        self._gesture_lock = threading.Lock()
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_worker_thread = None
 
@@ -562,15 +568,20 @@ class MouseHook(BaseMouseHook):
         if extra_now == extra_prev:
             return
         if extra_now and not extra_prev:
-            if not self._gesture_active:
+            with self._gesture_lock:
+                if self._gesture_active:
+                    return
                 self._gesture_active = True
                 self._gesture_triggered = False
-                print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
-        elif not extra_now and extra_prev:
-            if self._gesture_active:
+            print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
+            return
+        if not extra_now and extra_prev:
+            with self._gesture_lock:
+                if not self._gesture_active:
+                    return
                 self._gesture_active = False
-                print("[MouseHook] Gesture UP")
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+            print("[MouseHook] Gesture UP")
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _setup_raw_input(self):
         instance = GetModuleHandleW(None)
@@ -709,34 +720,42 @@ class MouseHook(BaseMouseHook):
             print("[MouseHook] Failed to reinstall hook!")
 
     def _on_hid_gesture_down(self):
-        if not self._gesture_active:
+        with self._gesture_lock:
+            if self._gesture_active:
+                return
             self._gesture_active = True
             self._gesture_triggered = False
-            self._emit_debug("HID gesture button down")
-            self._emit_gesture_event({"type": "button_down"})
-            if self._gesture_direction_enabled and not self._gesture_cooldown_active():
+            tracking = (
+                self._gesture_direction_enabled
+                and not self._gesture_cooldown_active()
+            )
+            if tracking:
                 self._start_gesture_tracking()
             else:
                 self._gesture_tracking = False
-                self._gesture_triggered = False
+        self._emit_debug("HID gesture button down")
+        self._emit_gesture_event({"type": "button_down"})
 
     def _on_hid_gesture_up(self):
-        if self._gesture_active:
+        should_click = False
+        with self._gesture_lock:
+            if not self._gesture_active:
+                return
             should_click = not self._gesture_triggered
             self._gesture_active = False
             self._finish_gesture_tracking()
             self._gesture_triggered = False
-            self._emit_debug(
-                f"HID gesture button up click_candidate={str(should_click).lower()}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "button_up",
-                    "click_candidate": should_click,
-                }
-            )
-            if should_click:
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+        self._emit_debug(
+            f"HID gesture button up click_candidate={str(should_click).lower()}"
+        )
+        self._emit_gesture_event(
+            {
+                "type": "button_up",
+                "click_candidate": should_click,
+            }
+        )
+        if should_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")
