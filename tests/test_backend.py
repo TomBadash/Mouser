@@ -784,6 +784,60 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(names_by_key.get("hscroll_right"), "Horizontal scroll right")
         self.assertEqual(names_by_key.get("hscroll_left"), "Horizontal scroll left")
 
+    def test_button_label_falls_back_when_layout_has_no_hotspots_array(self):
+        """A layout without a ``hotspots`` array (e.g. generic mouse) must
+        still produce the global BUTTON_NAMES fallback for every key.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {"key": "generic_mouse"}
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_falls_back_when_layout_is_none(self):
+        """Defensive: a transient None layout (race with disconnect cleanup)
+        must not raise -- the mappings list rebuild has to survive the case.
+        """
+        backend = self._make_backend()
+        backend._device_layout = None
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_ignores_empty_string_label(self):
+        """A hotspot whose label is the empty string is data corruption, not
+        a deliberate "label is empty" signal. Fall back so the user always
+        sees a non-empty name in the mappings list.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [{"buttonKey": "middle", "label": ""}],
+        }
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_ignores_non_dict_hotspots(self):
+        """Malformed catalog entries (a list slipping in instead of a dict)
+        must not raise AttributeError mid-rebuild.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [
+                None,
+                ["not", "a", "dict"],
+                {"buttonKey": "middle", "label": "Wheel click"},
+            ],
+        }
+        self.assertEqual(backend._button_label("middle", "Middle"), "Wheel click")
+
+    def test_button_label_returns_first_match_on_duplicates(self):
+        """If duplicate hotspots claim the same buttonKey (catalog bug), the
+        return value must be deterministic -- first wins.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [
+                {"buttonKey": "middle", "label": "First"},
+                {"buttonKey": "middle", "label": "Second"},
+            ],
+        }
+        self.assertEqual(backend._button_label("middle", "Fallback"), "First")
+
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
         device = SimpleNamespace(
             key="mx_master_3",

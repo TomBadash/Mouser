@@ -365,15 +365,26 @@ class Backend(QObject):
 
     # ── Properties ─────────────────────────────────────────────
 
-    def _button_label(self, key, fallback_name):
+    def _button_label(self, key: str, fallback_name: str) -> str:
         """Return the connected layout's hotspot label for ``key`` so the
         mappings list matches the diagram, or ``fallback_name`` if the
-        device has no hotspot for that key."""
-        for hotspot in self._device_layout.get("hotspots", []) or []:
-            if hotspot.get("buttonKey") == key:
-                label = hotspot.get("label")
-                if label:
-                    return label
+        device has no hotspot for that key.
+
+        Defensive against malformed catalog data: non-dict hotspots,
+        missing ``buttonKey``, empty-string labels, and missing
+        ``hotspots`` arrays all degrade cleanly to the fallback name
+        rather than blowing up the mappings list rebuild.
+        """
+        layout = self._device_layout or {}
+        hotspots = layout.get("hotspots") or ()
+        for hotspot in hotspots:
+            if not isinstance(hotspot, dict):
+                continue
+            if hotspot.get("buttonKey") != key:
+                continue
+            label = hotspot.get("label")
+            if isinstance(label, str) and label:
+                return label
         return fallback_name
 
     @Property(list, notify=mappingsChanged)
