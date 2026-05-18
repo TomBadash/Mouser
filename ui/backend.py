@@ -1638,12 +1638,6 @@ class Backend(QObject):
         """Called from engine thread — posts to Qt main thread."""
         self._statusMessageRequest.emit(str(message or ""))
 
-    @Slot(str)
-    def _handleStatusMessage(self, message):
-        """Runs on Qt main thread."""
-        if message:
-            self.statusMessage.emit(message)
-
     def _onEngineWheelDivertChange(self, active):
         """Called from the engine thread; hops to the Qt main thread."""
         self._wheelDivertChangeRequest.emit(bool(active))
