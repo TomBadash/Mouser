@@ -19,9 +19,9 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, GESTURE_SENSITIVITY_PX, gesture_sensitivity_index_for,
 )
-from core import app_catalog
+from core import app_catalog, log_setup
 from core.device_layouts import get_device_layout, get_manual_layout_choices
 from core.key_registry import (
     ShortcutParseError,
@@ -208,6 +208,7 @@ class Backend(QObject):
     batteryLevelChanged = Signal()
     debugLogChanged = Signal()
     debugEventsEnabledChanged = Signal()
+    appLogChanged = Signal()
     gestureStateChanged = Signal()
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
@@ -222,6 +223,7 @@ class Backend(QObject):
     _connectionChangeRequest = Signal(bool)
     _batteryChangeRequest = Signal(int)
     _debugMessageRequest = Signal(str)
+    _appLogMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
     _smartShiftReadRequest = Signal()
     _statusMessageRequest = Signal(str)
@@ -247,6 +249,7 @@ class Backend(QObject):
         self._battery_level = -1
         self._hid_features_ready = False
         self._debug_lines = []
+        self._app_log_lines = []
         self._debug_events_enabled = bool(
             self._cfg.get("settings", {}).get("debug_mode", False)
         )
@@ -292,6 +295,8 @@ class Backend(QObject):
             self._handleBatteryChange, Qt.QueuedConnection)
         self._debugMessageRequest.connect(
             self._handleDebugMessage, Qt.QueuedConnection)
+        self._appLogMessageRequest.connect(
+            self._handleAppLogMessage, Qt.QueuedConnection)
         self._gestureEventRequest.connect(
             self._handleGestureEvent, Qt.QueuedConnection)
         self._smartShiftReadRequest.connect(
@@ -306,6 +311,11 @@ class Backend(QObject):
             self._handleUpdateInstallState, Qt.QueuedConnection)
         self._updateInstallProgressRequest.connect(
             self._handleUpdateInstallProgress, Qt.QueuedConnection)
+
+        # Mirror the console log (everything print()s) into the UI. Capture
+        # has run since setup_logging(); seed from its buffer and subscribe
+        # for new lines — atomically, so none are missed or double-counted.
+        self._app_log_lines = log_setup.add_log_listener(self._onAppLogMessage)
 
         # Wire engine callbacks
         if engine:
@@ -516,8 +526,11 @@ class Backend(QObject):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
 
     @Property(int, notify=settingsChanged)
-    def gestureThreshold(self):
-        return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
+    def gestureSensitivityIndex(self):
+        """Index into GESTURE_SENSITIVITY_PX nearest the stored px threshold."""
+        px = self._cfg.get("settings", {}).get(
+            "gesture_threshold", GESTURE_SENSITIVITY_PX[1])
+        return gesture_sensitivity_index_for(px)
 
     @Property(str, notify=settingsChanged)
     def appearanceMode(self):
@@ -676,6 +689,10 @@ class Backend(QObject):
     @Property(str, notify=debugLogChanged)
     def debugLog(self):
         return "\n".join(self._debug_lines)
+
+    @Property(str, notify=appLogChanged)
+    def appLog(self):
+        return "\n".join(self._app_log_lines)
 
     @Property(bool, notify=gestureStateChanged)
     def recordMode(self):
@@ -1303,9 +1320,11 @@ class Backend(QObject):
         self.settingsChanged.emit()
 
     @Slot(int)
-    def setGestureThreshold(self, value):
-        snapped = max(20, min(400, int(round(value / 5.0) * 5)))
-        self._cfg.setdefault("settings", {})["gesture_threshold"] = snapped
+    def setGestureSensitivity(self, index):
+        """Store the px threshold for sensitivity preset `index`."""
+        index = max(0, min(len(GESTURE_SENSITIVITY_PX) - 1, int(index)))
+        self._cfg.setdefault("settings", {})["gesture_threshold"] = \
+            GESTURE_SENSITIVITY_PX[index]
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()
@@ -1352,6 +1371,11 @@ class Backend(QObject):
     def clearDebugLog(self):
         self._debug_lines = []
         self.debugLogChanged.emit()
+
+    @Slot()
+    def clearAppLog(self):
+        self._app_log_lines = []
+        self.appLogChanged.emit()
 
     @Slot(bool)
     def setRecordMode(self, value):
@@ -1578,6 +1602,14 @@ class Backend(QObject):
     def _onEngineDebugMessage(self, message):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._debugMessageRequest.emit(message)
+
+    def _onAppLogMessage(self, line):
+        """Called from any thread by log_setup — posts to Qt main thread.
+
+        Stays non-blocking and never logs/prints: it runs inside the logging
+        handler that captures stdout.
+        """
+        self._appLogMessageRequest.emit(line)
 
     def _onEngineGestureEvent(self, event):
         """Called from engine/hook thread — posts to Qt main thread."""
@@ -1823,6 +1855,14 @@ class Backend(QObject):
     def _handleDebugMessage(self, message):
         """Runs on Qt main thread."""
         self._append_debug_line(message)
+
+    @Slot(str)
+    def _handleAppLogMessage(self, line):
+        """Runs on Qt main thread — appends one captured console log line."""
+        self._app_log_lines.append(line)
+        # Keep the UI view bounded, matching log_setup's ring buffer.
+        self._app_log_lines = self._app_log_lines[-1000:]
+        self.appLogChanged.emit()
 
     @Slot(str)
     def _handleStatusMessage(self, message):

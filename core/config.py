@@ -21,6 +21,9 @@ elif sys.platform == "linux":
 else:
     CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Mouser")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+# Last-good HID++ device identity, written by hid_gesture on every successful
+# connect so the next launch can skip the slow multi-receiver device scan.
+DEVICE_CACHE_FILE = os.path.join(CONFIG_DIR, "device_cache.json")
 
 # Which mouse events map to which friendly button names
 # Order matches the Logi Options+ diagram (top view then side view)
@@ -41,6 +44,22 @@ GESTURE_DIRECTION_BUTTONS = (
     "gesture_up",
     "gesture_down",
 )
+
+# Swipe sensitivity presets — px of travel the recognizer needs to commit a
+# swipe (stored as `gesture_threshold`). Ordered most → least sensitive; the
+# UI exposes these as a discrete "Sensitivity" selector rather than a raw px
+# slider. A lower value fires on shorter strokes.
+GESTURE_SENSITIVITY_PX = (18, 25, 33, 44, 56)
+GESTURE_DEFAULT_SENSITIVITY_INDEX = 1  # 25 px — leans toward the sensitive end
+
+
+def gesture_sensitivity_index_for(threshold_px):
+    """Return the sensitivity preset index nearest to a stored px threshold."""
+    return min(
+        range(len(GESTURE_SENSITIVITY_PX)),
+        key=lambda i: abs(GESTURE_SENSITIVITY_PX[i] - int(threshold_px)),
+    )
+
 
 PROFILE_BUTTON_NAMES = {
     **BUTTON_NAMES,
@@ -67,7 +86,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -98,10 +117,12 @@ DEFAULT_CONFIG = {
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
-        "gesture_threshold": 50,
-        "gesture_deadzone": 40,
-        "gesture_timeout_ms": 3000,
-        "gesture_cooldown_ms": 500,
+        # px of travel along the swipe axis; UI sets this via the discrete
+        # GESTURE_SENSITIVITY_PX presets ("Sensitivity" selector).
+        "gesture_threshold": GESTURE_SENSITIVITY_PX[GESTURE_DEFAULT_SENSITIVITY_INDEX],
+        "gesture_commit_window_ms": 400,    # that travel must finish this fast
+        "gesture_settle_ms": 90,            # pause that ends a stroke
+        "gesture_cross_ratio": 0.5,         # tolerated off-axis travel ratio
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -173,24 +194,51 @@ def load_config():
     return json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
 
 
-def save_config(cfg):
-    """Persist config to disk via atomic write with restrictive permissions."""
+def _atomic_write_json(path, obj):
+    """Write obj to path as JSON via a temp file plus atomic rename, with
+    restrictive (owner-only) permissions. Used for config.json and the HID
+    device cache so a crash mid-write can never leave a partial file."""
     ensure_config_dir()
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=CONFIG_DIR)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+            json.dump(obj, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
         if sys.platform != "win32":
             os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(tmp_path, CONFIG_FILE)
+        os.replace(tmp_path, path)
     except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def save_config(cfg):
+    """Persist config to disk via atomic write with restrictive permissions."""
+    _atomic_write_json(CONFIG_FILE, cfg)
+
+
+def load_device_cache():
+    """Return the last-good HID++ device identity dict, or None.
+
+    Lets hid_gesture._try_connect re-open the device that connected last time
+    before falling back to a full multi-receiver scan — the difference between
+    a ~1 s reconnect and a multi-second one.
+    """
+    try:
+        with open(DEVICE_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_device_cache(identity):
+    """Persist the last-good HID++ device identity (atomic write)."""
+    _atomic_write_json(DEVICE_CACHE_FILE, identity)
 
 
 def get_active_mappings(cfg):
@@ -272,10 +320,10 @@ def _migrate(cfg):
 
     if version < 3:
         settings = cfg.setdefault("settings", {})
-        settings.setdefault("gesture_threshold", 50)
-        settings.setdefault("gesture_deadzone", 40)
-        settings.setdefault("gesture_timeout_ms", 3000)
-        settings.setdefault("gesture_cooldown_ms", 500)
+        settings.setdefault(
+            "gesture_threshold",
+            GESTURE_SENSITIVITY_PX[GESTURE_DEFAULT_SENSITIVITY_INDEX],
+        )
         for pdata in cfg.get("profiles", {}).values():
             mappings = pdata.setdefault("mappings", {})
             mappings.setdefault("gesture", "none")
@@ -328,6 +376,17 @@ def _migrate(cfg):
         settings = cfg.setdefault("settings", {})
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
+
+    if version < 10:
+        # Gesture swipe detection was rewritten: the fixed-pixel-threshold
+        # accumulator (gesture_deadzone / gesture_timeout_ms /
+        # gesture_cooldown_ms) is replaced by a stroke-aware recognizer.
+        # The obsolete keys are left in place but ignored.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("gesture_commit_window_ms", 400)
+        settings.setdefault("gesture_settle_ms", 90)
+        settings.setdefault("gesture_cross_ratio", 0.5)
+        cfg["version"] = 10
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

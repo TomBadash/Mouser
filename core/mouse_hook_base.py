@@ -3,7 +3,6 @@ Shared mouse hook behavior used by platform implementations.
 """
 
 import queue
-import time
 
 try:
     from core.hid_gesture import HidGestureListener
@@ -11,6 +10,16 @@ except Exception:
     HidGestureListener = None
 
 from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
+from core.gesture_recognizer import GestureRecognizer
+
+
+# Recognizer swipe directions → dispatched MouseEvent types.
+_SWIPE_EVENTS = {
+    "left": MouseEvent.GESTURE_SWIPE_LEFT,
+    "right": MouseEvent.GESTURE_SWIPE_RIGHT,
+    "up": MouseEvent.GESTURE_SWIPE_UP,
+    "down": MouseEvent.GESTURE_SWIPE_DOWN,
+}
 
 
 class BaseMouseHook:
@@ -30,18 +39,10 @@ class BaseMouseHook:
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
         self._gesture_direction_enabled = False
-        self._gesture_threshold = 50.0
-        self._gesture_deadzone = 40.0
-        self._gesture_timeout_ms = 3000
-        self._gesture_cooldown_ms = 500
-        self._gesture_tracking = False
-        self._gesture_triggered = False
-        self._gesture_started_at = 0.0
-        self._gesture_last_move_at = 0.0
-        self._gesture_delta_x = 0.0
-        self._gesture_delta_y = 0.0
-        self._gesture_cooldown_until = 0.0
-        self._gesture_input_source = None
+        self._gesture_recognizer = GestureRecognizer(
+            on_swipe=self._on_recognized_swipe,
+            on_debug=self._emit_gesture_event,
+        )
         self._connected_device = None
         self._dispatch_queue = None
 
@@ -88,19 +89,18 @@ class BaseMouseHook:
         self,
         enabled=False,
         threshold=50,
-        deadzone=40,
-        timeout_ms=3000,
-        cooldown_ms=500,
+        commit_window_ms=400,
+        settle_ms=90,
+        cross_ratio=0.5,
     ):
         self._gesture_direction_enabled = bool(enabled)
-        self._gesture_threshold = float(max(5, threshold))
-        self._gesture_deadzone = float(max(0, deadzone))
-        self._gesture_timeout_ms = max(250, int(timeout_ms))
-        self._gesture_cooldown_ms = max(0, int(cooldown_ms))
-        if not self._gesture_direction_enabled:
-            self._gesture_tracking = False
-            self._gesture_triggered = False
-            self._gesture_input_source = None
+        self._gesture_recognizer.configure(
+            enabled=bool(enabled),
+            threshold=threshold,
+            commit_window_ms=commit_window_ms,
+            settle_ms=settle_ms,
+            cross_ratio=cross_ratio,
+        )
 
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
@@ -203,50 +203,6 @@ class BaseMouseHook:
     def _hid_gesture_available(self):
         return self._hid_gesture is not None and self._device_connected
 
-    def _gesture_cooldown_active(self):
-        return time.monotonic() < self._gesture_cooldown_until
-
-    def _start_gesture_tracking(self):
-        self._gesture_tracking = self._gesture_direction_enabled
-        self._gesture_started_at = time.monotonic()
-        self._gesture_last_move_at = self._gesture_started_at
-        self._gesture_delta_x = 0.0
-        self._gesture_delta_y = 0.0
-        self._gesture_input_source = None
-
-    def _finish_gesture_tracking(self):
-        self._gesture_tracking = False
-        self._gesture_started_at = 0.0
-        self._gesture_last_move_at = 0.0
-        self._gesture_delta_x = 0.0
-        self._gesture_delta_y = 0.0
-        self._gesture_input_source = None
-
-    def _detect_gesture_event(self):
-        delta_x = self._gesture_delta_x
-        delta_y = self._gesture_delta_y
-
-        abs_x = abs(delta_x)
-        abs_y = abs(delta_y)
-        dominant = max(abs_x, abs_y)
-        if dominant < self._gesture_threshold:
-            return None
-
-        cross_limit = max(self._gesture_deadzone, dominant * 0.35)
-
-        if abs_x > abs_y:
-            if abs_y > cross_limit:
-                return None
-            if delta_x > 0:
-                return MouseEvent.GESTURE_SWIPE_RIGHT
-            return MouseEvent.GESTURE_SWIPE_LEFT
-
-        if abs_x > cross_limit:
-            return None
-        if delta_y > 0:
-            return MouseEvent.GESTURE_SWIPE_DOWN
-        return MouseEvent.GESTURE_SWIPE_UP
-
     def _build_extra_diverts(self):
         extra = {}
         if self.divert_mode_shift:
@@ -295,13 +251,71 @@ class BaseMouseHook:
         self._set_device_connected(False)
 
     def _on_hid_gesture_down(self):
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
+        if getattr(self, "_ui_passthrough", False):
+            return
+        if self._gesture_active:
+            return
+        self._gesture_recognizer.begin()
+        self._gesture_active = True
+        self._emit_debug("HID gesture button down")
+        self._emit_gesture_event({"type": "button_down"})
 
     def _on_hid_gesture_up(self):
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
+        if getattr(self, "_ui_passthrough", False):
+            return
+        if not self._gesture_active:
+            return
+        self._gesture_active = False
+        was_click = self._gesture_recognizer.end()
+        self._log_gesture_summary()
+        self._emit_debug(
+            f"HID gesture button up click_candidate={str(was_click).lower()}"
+        )
+        self._emit_gesture_event(
+            {"type": "button_up", "click_candidate": was_click}
+        )
+        if was_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
+    def _log_gesture_summary(self):
+        """Print a one-line trace of the gesture hold that just ended.
+
+        Always on — one line per gesture-button press — so swipe-vs-click
+        behaviour is visible in ~/Library/Logs/Mouser/mouser.log. It is the
+        fastest way to tune the recognizer against real hardware.
+        """
+        s = self._gesture_recognizer.summary()
+        outcome = "+".join(s["fired"]) if s["fired"] else "click"
+        print(
+            f"[Gesture] hold={s['duration_ms']:.0f}ms samples={s['samples']} "
+            f"net=({s['net_x']:+.0f},{s['net_y']:+.0f}) "
+            f"peak={s['peak_speed']:.0f}u/s src={s['source'] or '-'} "
+            f"-> {outcome}"
+        )
 
     def _on_hid_gesture_move(self, dx, dy):
-        self._accumulate_gesture_delta(dx, dy, "hid_rawxy")
+        if getattr(self, "_ui_passthrough", False):
+            return
+        self._emit_gesture_event(
+            {"type": "move", "source": "hid_rawxy", "dx": dx, "dy": dy}
+        )
+        self._gesture_recognizer.sample(dx, dy, "hid_rawxy")
+
+    def _on_recognized_swipe(self, direction):
+        """Recognizer callback — dispatch a recognized swipe as a MouseEvent.
+
+        Invoked on the HID listener thread (or, on macOS, the event-tap
+        thread, when raw XY is unavailable).
+        """
+        event_type = _SWIPE_EVENTS.get(direction)
+        if event_type is not None:
+            self._emit_gesture_swipe(MouseEvent(event_type))
+
+    def _emit_gesture_swipe(self, mouse_event):
+        """Deliver a recognized swipe event. Platform hooks that own a
+        dedicated dispatch thread override this to hand the event off there
+        instead of dispatching inline."""
+        self._dispatch(mouse_event)
 
     def _on_hid_mode_shift_down(self):
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))

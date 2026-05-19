@@ -203,5 +203,118 @@ class StreamToLoggerTests(unittest.TestCase):
         self.assertEqual(stream.encoding, "utf-8")
 
 
+class LogBufferTests(unittest.TestCase):
+    """The in-memory log buffer + listener fan-out feeding the UI app log."""
+
+    def setUp(self):
+        self._orig_stdout = sys.stdout
+        self._orig_handlers = logging.root.handlers[:]
+        self._orig_level = logging.root.level
+        logging.root.handlers.clear()
+        log_setup._log_buffer.clear()
+        log_setup._log_listeners.clear()
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp_dir.name
+
+    def tearDown(self):
+        sys.stdout = self._orig_stdout
+        for h in logging.root.handlers[:]:
+            h.close()
+        logging.root.handlers.clear()
+        logging.root.handlers.extend(self._orig_handlers)
+        logging.root.setLevel(self._orig_level)
+        log_setup._log_listeners.clear()
+        log_setup._log_buffer.clear()
+        self._tmp_dir.cleanup()
+
+    def _setup(self):
+        with patch.object(log_setup, "_get_log_dir", return_value=self.tmp):
+            log_setup.setup_logging()
+
+    def test_setup_logging_installs_buffer_handler(self):
+        self._setup()
+        self.assertTrue(any(
+            isinstance(h, log_setup._BufferLogHandler)
+            for h in logging.root.handlers
+        ))
+
+    def test_print_output_is_captured_in_recent_logs(self):
+        self._setup()
+        print("[Test] buffered line")
+        self.assertTrue(any(
+            "[Test] buffered line" in ln for ln in log_setup.get_recent_logs()
+        ))
+
+    def test_recent_logs_keep_the_timestamped_format(self):
+        import re
+        self._setup()
+        print("[Test] stamped line")
+        line = next(
+            ln for ln in log_setup.get_recent_logs() if "stamped line" in ln
+        )
+        self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
+
+    def test_add_log_listener_returns_existing_buffer_snapshot(self):
+        self._setup()
+        print("[Test] logged before subscribe")
+        snapshot = log_setup.add_log_listener(lambda line: None)
+        self.assertTrue(any(
+            "logged before subscribe" in ln for ln in snapshot
+        ))
+
+    def test_listener_receives_new_lines(self):
+        self._setup()
+        received = []
+        log_setup.add_log_listener(received.append)
+        print("[Test] logged after subscribe")
+        self.assertTrue(any(
+            "logged after subscribe" in ln for ln in received
+        ))
+
+    def test_removed_listener_stops_receiving(self):
+        self._setup()
+        received = []
+        log_setup.add_log_listener(received.append)
+        log_setup.remove_log_listener(received.append)
+        print("[Test] logged after removal")
+        self.assertEqual(received, [])
+
+    def test_buffer_is_bounded_by_capacity(self):
+        self._setup()
+        for i in range(log_setup._LOG_BUFFER_CAPACITY + 50):
+            print(f"[Test] line {i}")
+        self.assertLessEqual(
+            len(log_setup.get_recent_logs()), log_setup._LOG_BUFFER_CAPACITY
+        )
+
+    def test_listener_exception_does_not_break_logging(self):
+        self._setup()
+
+        def bad_listener(line):
+            raise RuntimeError("listener boom")
+
+        log_setup.add_log_listener(bad_listener)
+        print("[Test] survives a bad listener")  # must not raise
+        self.assertTrue(any(
+            "survives a bad listener" in ln
+            for ln in log_setup.get_recent_logs()
+        ))
+
+    def test_listener_that_logs_does_not_recurse(self):
+        self._setup()
+        calls = []
+
+        def logging_listener(line):
+            calls.append(line)
+            if len(calls) < 3:           # bounded so a broken guard still ends
+                print("[Test] re-entrant line")
+
+        log_setup.add_log_listener(logging_listener)
+        print("[Test] trigger line")
+        # The re-entrancy guard means the listener is not re-invoked for the
+        # line it logged itself — exactly one call, no recursion.
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

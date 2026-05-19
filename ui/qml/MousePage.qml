@@ -1381,53 +1381,30 @@ Item {
                                     color: theme.border
                                 }
 
-                                Row {
-                                    width: parent.width
-                                    spacing: 12
-
                                 Text {
-                                    text: s["mouse.threshold"]
-                                    font { family: uiState.fontFamily; pixelSize: 12; bold: true }
-                                    color: theme.textPrimary
+                                    text: s["mouse.sensitivity"]
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
                                 }
 
-                                    Text {
-                                        text: (
-                                            gestureThresholdSlider.pressed
-                                            ? Math.round(gestureThresholdSlider.value / 5.0) * 5
-                                            : backend.gestureThreshold
-                                        ) + " px"
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: theme.textSecondary
-                                    }
-                                }
-
-                                WheelSafeSlider {
-                                    id: gestureThresholdSlider
+                                ComboBox {
                                     width: parent.width
-                                    from: 20
-                                    to: 400
-                                    stepSize: 5
-                                    value: backend.gestureThreshold
-                                    accentColor: theme.accent
-                                    accentDimColor: theme.accentDim
-                                    trackColor: theme.border
-                                    onMoved: gestureThresholdSave.restart()
-                                    onPressedChanged: {
-                                        if (!pressed) {
-                                            gestureThresholdSave.stop()
-                                            backend.setGestureThreshold(
-                                                Math.round(value / 5.0) * 5)
-                                        }
+                                    // Ordered most → least sensitive, matching
+                                    // core.config.GESTURE_SENSITIVITY_PX.
+                                    model: (lm.strings, [
+                                        s["mouse.sensitivity_highest"],
+                                        s["mouse.sensitivity_high"],
+                                        s["mouse.sensitivity_medium"],
+                                        s["mouse.sensitivity_low"],
+                                        s["mouse.sensitivity_lowest"]
+                                    ])
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    currentIndex: backend.gestureSensitivityIndex
+                                    onActivated: function(index) {
+                                        backend.setGestureSensitivity(index)
                                     }
-                                }
-
-                                Timer {
-                                    id: gestureThresholdSave
-                                    interval: 250
-                                    repeat: false
-                                    onTriggered: backend.setGestureThreshold(
-                                        Math.round(gestureThresholdSlider.value / 5.0) * 5)
                                 }
 
                                 Text {
@@ -2131,6 +2108,84 @@ Item {
                                         font.family: "Menlo"
                                         background: null
                                         padding: 10
+                                    }
+                                }
+                            }
+
+                            Column {
+                                width: parent.width
+                                spacing: 6
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: "Application Log"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Rectangle {
+                                        Layout.preferredWidth: clearAppLogText.implicitWidth + 20
+                                        Layout.preferredHeight: 24
+                                        radius: 8
+                                        color: clearAppLogMa.containsMouse
+                                               ? Qt.rgba(1, 1, 1, 0.08)
+                                               : Qt.rgba(1, 1, 1, 0.04)
+
+                                        Text {
+                                            id: clearAppLogText
+                                            anchors.centerIn: parent
+                                            text: s["mouse.clear"]
+                                            font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                            color: theme.textPrimary
+                                        }
+
+                                        MouseArea {
+                                            id: clearAppLogMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: backend.clearAppLog()
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: 200
+                                    radius: 10
+                                    color: Qt.rgba(0, 0, 0, 0.18)
+                                    border.width: 1
+                                    border.color: theme.border
+
+                                    ScrollView {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        clip: true
+
+                                        TextArea {
+                                            id: appLogArea
+                                            text: backend.appLog.length
+                                                  ? backend.appLog
+                                                  : "Application log output appears here while debug mode is on."
+                                            readOnly: true
+                                            wrapMode: TextEdit.NoWrap
+                                            selectByMouse: true
+                                            color: backend.appLog.length
+                                                   ? theme.textPrimary
+                                                   : theme.textSecondary
+                                            font.pixelSize: 11
+                                            font.family: "Menlo"
+                                            background: null
+                                            padding: 10
+
+                                            onTextChanged: {
+                                                cursorPosition = length
+                                            }
+                                        }
                                     }
                                 }
                             }

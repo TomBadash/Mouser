@@ -24,6 +24,14 @@ class KeySimulatorActionTests(unittest.TestCase):
         self.assertTrue(len(key_simulator.ACTIONS["next_tab"]["keys"]) > 0)
         self.assertTrue(len(key_simulator.ACTIONS["prev_tab"]["keys"]) > 0)
 
+    @unittest.skipUnless(sys.platform in ("darwin", "win32"), "screenshot action is platform-specific")
+    def test_screenshot_action_exists(self):
+        self.assertIn("screenshot", key_simulator.ACTIONS)
+        action = key_simulator.ACTIONS["screenshot"]
+        self.assertIn("Screenshot", action["label"])
+        # A real, synthesizable key chord (modifiers + a main key).
+        self.assertGreaterEqual(len(action["keys"]), 2)
+
 
 class CustomShortcutParsingTests(unittest.TestCase):
     def test_build_custom_key_name_map_adds_common_aliases(self):

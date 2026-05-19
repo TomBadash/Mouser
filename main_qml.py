@@ -47,7 +47,7 @@ os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 
 _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap, QWindow
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap, QWindow
 from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
@@ -346,6 +346,10 @@ _MACOS_ACTIVATION_POLICY_REGULAR: "bool | None" = None
 _MACOS_NATIVE_STATUS_ITEM = None
 _MACOS_NATIVE_STATUS_TARGET = None
 _MACOS_QUIT_FILTER = None
+# Held for the process lifetime so the non-modal Accessibility prompt and
+# its grant-watcher QTimer are not garbage-collected before they fire.
+_ACCESSIBILITY_PROMPT = None
+_ACCESSIBILITY_WATCHER = None
 _MACOS_SYSTEM_QUIT_REASONS = {
     "quia",  # kAEQuitAll
     "shut",  # kAEShutDown
@@ -879,29 +883,21 @@ class SystemIconProvider(QQuickImageProvider):
         return pixmap
 
 
-def _check_accessibility(locale_mgr: "LocaleManager") -> bool:
-    """Verify the macOS Accessibility grant. Returns True only when
-    AXIsProcessTrustedWithOptions confirms the grant; any other path
-    (no grant, exception during the check) returns False so callers
-    fail closed.
+def _check_accessibility() -> bool:
+    """Return True when the macOS Accessibility grant is in place.
+
+    ``prompt=True`` asks macOS to show its own grant dialog and to list
+    Mouser under Accessibility, so granting it is a single toggle. Any
+    failure path returns False so callers fail closed -- the engine
+    stays off until the grant is actually confirmed.
     """
     if sys.platform != "darwin":
         return True
     try:
-        trusted = is_process_trusted(prompt=True)
+        return bool(is_process_trusted(prompt=True))
     except Exception as exc:
         print(f"[Mouser] Accessibility check failed: {exc}")
         return False
-    if not trusted:
-        print("[Mouser] Accessibility permission not granted")
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(locale_mgr.tr("accessibility.title"))
-        msg.setText(locale_mgr.tr("accessibility.text"))
-        msg.setInformativeText(locale_mgr.tr("accessibility.info"))
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
-    return bool(trusted)
 
 
 def _runtime_launch_path() -> str:
@@ -919,6 +915,120 @@ def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
         print("[Mouser] Engine started -- remapping is active"),
     ))
     return True
+
+
+def _open_accessibility_settings() -> None:
+    """Deep-link into System Settings -> Privacy & Security -> Accessibility."""
+    QDesktopServices.openUrl(QUrl(
+        "x-apple.systempreferences:com.apple.preference.security"
+        "?Privacy_Accessibility"
+    ))
+
+
+def _show_accessibility_prompt(locale_mgr) -> QMessageBox:
+    """Show the non-blocking "grant Accessibility" notice.
+
+    Deliberately non-modal: the grant watcher relaunches Mouser the
+    moment permission lands, so this dialog never needs an answer. It is
+    a signpost that explains the wait, plus a one-click shortcut into
+    the right System Settings pane.
+    """
+    print("[Mouser] Accessibility permission not granted -- watching for grant")
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setWindowTitle(locale_mgr.tr("accessibility.title"))
+    msg.setText(locale_mgr.tr("accessibility.text"))
+    msg.setInformativeText(locale_mgr.tr("accessibility.info"))
+    open_button = msg.addButton(
+        locale_mgr.tr("accessibility.open_settings"),
+        QMessageBox.ButtonRole.ActionRole,
+    )
+    msg.addButton(QMessageBox.StandardButton.Close)
+    msg.setDefaultButton(open_button)
+
+    def _on_button_clicked(button):
+        if button is open_button:
+            _open_accessibility_settings()
+
+    msg.buttonClicked.connect(_on_button_clicked)
+    msg.setModal(False)
+    msg.show()
+    msg.raise_()
+    msg.activateWindow()
+    return msg
+
+
+def _relaunch_app(single_server=None) -> None:
+    """Re-exec Mouser so every subsystem restarts with the current
+    macOS permission grants in place.
+
+    macOS only hands a process its Accessibility (TCC) grant when the
+    process asks at startup; a CGEventTap that failed at the original
+    launch never revives in place. A clean re-exec is the reliable fix.
+    """
+    # os.execv keeps the PID and inherits open file descriptors, so the
+    # single-instance socket would otherwise stay bound -- the re-exec'd
+    # process would then connect to itself and exit as a duplicate.
+    # Drop the lock first; the fresh process re-acquires it cleanly.
+    if single_server is not None:
+        try:
+            single_server.close()
+        except Exception as exc:
+            print(f"[Mouser] Could not release single-instance lock: {exc}")
+    target = sys.executable
+    if getattr(sys, "frozen", False):
+        # Frozen build: argv[0] is already the executable itself.
+        argv = [target, *sys.argv[1:]]
+    else:
+        # Source run: hand the interpreter back its script and args.
+        argv = [target, *sys.argv]
+    print(f"[Mouser] Relaunching to apply updated permissions: {target}")
+    try:
+        os.execv(target, argv)
+    except OSError as exc:
+        print(f"[Mouser] Relaunch failed: {exc}")
+
+
+def _accessibility_grant_poll(timer, single_server) -> bool:
+    """Run one tick of the Accessibility-grant watcher.
+
+    Returns True once the grant is observed (and the relaunch is
+    triggered), False while still waiting. Kept separate from the timer
+    wiring so it can be unit-tested without a running event loop.
+    """
+    try:
+        granted = is_process_trusted(prompt=False)
+    except Exception as exc:
+        print(f"[Mouser] Accessibility re-check failed: {exc}")
+        return False
+    if not granted:
+        return False
+    # Stop before relaunching: if the re-exec somehow fails, the watcher
+    # must not keep firing it once per second.
+    timer.stop()
+    print("[Mouser] Accessibility granted -- relaunching Mouser")
+    _relaunch_app(single_server)
+    return True
+
+
+_ACCESSIBILITY_POLL_INTERVAL_MS = 1000
+
+
+def _watch_accessibility_grant(app, single_server) -> QTimer:
+    """Poll for the Accessibility grant and relaunch Mouser once it lands.
+
+    Without this, Mouser sits idle after the user grants permission --
+    macOS does not retro-activate the grant for the already-running
+    process, so the user would otherwise have to quit and reopen it by
+    hand.
+    """
+    timer = QTimer(app)
+    timer.setInterval(_ACCESSIBILITY_POLL_INTERVAL_MS)
+    timer.timeout.connect(
+        lambda: _accessibility_grant_poll(timer, single_server)
+    )
+    timer.start()
+    return timer
 
 
 def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
@@ -1112,13 +1222,23 @@ def main():
     print(f"[Startup] TOTAL to window:  {(_t8-_t0)*1000:7.1f} ms")
 
     # ── Accessibility check (macOS) ──────────────────────────────
-    accessibility_granted = _check_accessibility(locale_mgr)
+    accessibility_granted = _check_accessibility()
 
     if sys.platform == "linux":
         engine.set_ui_passthrough(not launch_hidden)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
-    _schedule_engine_start(engine, accessibility_granted=accessibility_granted)
+    engine_started = _schedule_engine_start(
+        engine, accessibility_granted=accessibility_granted
+    )
+    if not engine_started and sys.platform == "darwin":
+        # The Accessibility grant is missing, so the engine cannot run.
+        # Rather than leave Mouser idle until the user quits and reopens
+        # it by hand, prompt for the grant and relaunch automatically the
+        # moment it is given.
+        global _ACCESSIBILITY_PROMPT, _ACCESSIBILITY_WATCHER
+        _ACCESSIBILITY_PROMPT = _show_accessibility_prompt(locale_mgr)
+        _ACCESSIBILITY_WATCHER = _watch_accessibility_grant(app, single_server)
 
     # ── System Tray ────────────────────────────────────────────
     tray = QSystemTrayIcon(_tray_icon(), app)

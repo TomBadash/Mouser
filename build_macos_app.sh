@@ -11,7 +11,34 @@ SOURCE_ICON="$ROOT_DIR/images/logo_icon.png"
 ENTITLEMENTS="$ROOT_DIR/build_resources/Mouser.entitlements"
 TARGET_ARCH="${PYINSTALLER_TARGET_ARCH:-}"
 SIGN_IDENTITY="${MOUSER_SIGN_IDENTITY:-}"
-export PYINSTALLER_CONFIG_DIR="$BUILD_DIR/pyinstaller"
+# ── Build artifact location ─────────────────────────────────────────
+# codesign refuses to sign Mach-O files that carry a resource fork or
+# Finder-info metadata, and SMB/AFP network volumes attach exactly that to
+# files written to them.  When the repository itself lives on such a volume,
+# redirect every build artifact (PyInstaller cache, work dir, dist bundle) to
+# local disk so the in-build and post-build signing steps see clean files.
+# Set MOUSER_BUILD_DIR to choose the location explicitly.
+if [[ -n "${MOUSER_BUILD_DIR:-}" ]]; then
+  BUILD_OUTPUT_DIR="$MOUSER_BUILD_DIR"
+else
+  ROOT_DEVICE=""
+  if command -v df >/dev/null 2>&1 && command -v awk >/dev/null 2>&1; then
+    ROOT_DEVICE="$(df -P "$ROOT_DIR" 2>/dev/null | awk 'NR==2 {print $1}' 2>/dev/null || true)"
+  fi
+  # Empty (detection unavailable) or a /dev/* device → treat as local disk.
+  if [[ -z "$ROOT_DEVICE" || "$ROOT_DEVICE" == /dev/* ]]; then
+    BUILD_OUTPUT_DIR="$ROOT_DIR"
+  else
+    BUILD_OUTPUT_DIR="$HOME/Library/Caches/Mouser/macos-build"
+    echo "Repository volume ($ROOT_DEVICE) is not local disk;"
+    echo "building in $BUILD_OUTPUT_DIR to avoid codesign metadata errors."
+  fi
+fi
+DIST_DIR="$BUILD_OUTPUT_DIR/dist"
+WORK_DIR="$BUILD_OUTPUT_DIR/build"
+DIST_APP="$DIST_DIR/Mouser.app"
+mkdir -p "$DIST_DIR" "$WORK_DIR"
+export PYINSTALLER_CONFIG_DIR="$BUILD_OUTPUT_DIR/pyinstaller"
 PYTHON=""
 PYTHON_SOURCE=""
 
@@ -148,12 +175,17 @@ log_python_provenance() {
 run_pyinstaller() {
   # PYTHONHASHSEED=0 pins set iteration so PyInstaller's base_library.zip
   # layout is byte-identical across rebuilds for the same toolchain inputs.
-  PYTHONHASHSEED=0 "$PYTHON" -m PyInstaller "$ROOT_DIR/Mouser-mac.spec" --noconfirm
+  # Run inside ROOT_DIR so the spec's `ROOT = abspath(".")` resolves to the
+  # repo no matter where this script was invoked from, and pin work/dist
+  # paths to BUILD_OUTPUT_DIR (kept on local disk for network repos).
+  ( cd "$ROOT_DIR" && PYTHONHASHSEED=0 "$PYTHON" -m PyInstaller \
+      "$ROOT_DIR/Mouser-mac.spec" --noconfirm \
+      --workpath "$WORK_DIR" --distpath "$DIST_DIR" )
 }
 
 sign_ad_hoc() {
   echo "Signing mode: ad-hoc"
-  codesign --force --deep --sign - "$ROOT_DIR/dist/Mouser.app"
+  codesign --force --deep --sign - "$DIST_APP"
 }
 
 entitlements_sha256() {
@@ -161,7 +193,7 @@ entitlements_sha256() {
 }
 
 sign_nested_code() {
-  local frameworks_dir="$ROOT_DIR/dist/Mouser.app/Contents/Frameworks"
+  local frameworks_dir="$DIST_APP/Contents/Frameworks"
   [[ -d "$frameworks_dir" ]] || return 0
 
   while IFS= read -r -d '' nested; do
@@ -173,7 +205,7 @@ sign_nested_code() {
 }
 
 verify_bundle() {
-  codesign --verify --deep --strict --verbose=2 "$ROOT_DIR/dist/Mouser.app"
+  codesign --verify --deep --strict --verbose=2 "$DIST_APP"
 }
 
 sign_with_identity() {
@@ -188,7 +220,7 @@ sign_with_identity() {
   codesign --force --options runtime --timestamp=none \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" \
-    "$ROOT_DIR/dist/Mouser.app"
+    "$DIST_APP"
   verify_bundle
 }
 
@@ -211,4 +243,4 @@ log_python_provenance
 run_pyinstaller
 sign_app
 
-echo "Build complete: $ROOT_DIR/dist/Mouser.app"
+echo "Build complete: $DIST_APP"

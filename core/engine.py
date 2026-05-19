@@ -110,9 +110,9 @@ class Engine:
             enabled=any(mappings.get(key, "none") != "none"
                         for key in GESTURE_DIRECTION_BUTTONS),
             threshold=settings.get("gesture_threshold", 50),
-            deadzone=settings.get("gesture_deadzone", 40),
-            timeout_ms=settings.get("gesture_timeout_ms", 3000),
-            cooldown_ms=settings.get("gesture_cooldown_ms", 500),
+            commit_window_ms=settings.get("gesture_commit_window_ms", 400),
+            settle_ms=settings.get("gesture_settle_ms", 90),
+            cross_ratio=settings.get("gesture_cross_ratio", 0.5),
         )
         # Divert mode shift CID only when the device has the button and
         # at least one profile maps it to an action.  When no device is

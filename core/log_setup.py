@@ -9,6 +9,7 @@ import logging.handlers
 import os
 import sys
 import threading
+from collections import deque
 
 
 def _get_log_dir() -> str:
@@ -63,6 +64,75 @@ class _StreamToLogger:
         return False
 
 
+# ── In-memory log buffer ──────────────────────────────────────────────
+# A bounded ring of recent formatted log lines, plus fan-out to live
+# subscribers, so the UI can show the same console output that goes to
+# mouser.log. Capture is always on (it is cheap); the UI only displays it
+# while debug mode is enabled.
+_LOG_BUFFER_CAPACITY = 1000
+_log_buffer = deque(maxlen=_LOG_BUFFER_CAPACITY)
+_log_listeners = []
+_log_lock = threading.Lock()
+_log_reentry = threading.local()
+
+
+class _BufferLogHandler(logging.Handler):
+    """Keep the most recent formatted log lines in memory and notify
+    subscribers as each new line arrives.
+
+    Subscriber callbacks run on whichever thread emitted the log record, so
+    they must be fast, non-blocking, and must not log or print themselves —
+    a re-entrancy guard drops nested notifications if one does anyway.
+    """
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+        except Exception:  # pragma: no cover - logging must never crash
+            return
+        with _log_lock:
+            _log_buffer.append(line)
+            listeners = list(_log_listeners)
+        if getattr(_log_reentry, "active", False):
+            return
+        _log_reentry.active = True
+        try:
+            for listener in listeners:
+                try:
+                    listener(line)
+                except Exception:
+                    pass
+        finally:
+            _log_reentry.active = False
+
+
+def get_recent_logs() -> list:
+    """Return a snapshot of the most recent captured log lines."""
+    with _log_lock:
+        return list(_log_buffer)
+
+
+def add_log_listener(callback) -> list:
+    """Register a callback to be invoked with each new formatted log line.
+
+    Returns a snapshot of the lines already buffered, taken atomically with
+    the subscription so the caller sees every line exactly once — none
+    missed between the snapshot and the subscription, none delivered twice.
+    """
+    with _log_lock:
+        _log_listeners.append(callback)
+        return list(_log_buffer)
+
+
+def remove_log_listener(callback) -> None:
+    """Unregister a log listener added via add_log_listener (no-op if absent)."""
+    with _log_lock:
+        try:
+            _log_listeners.remove(callback)
+        except ValueError:
+            pass
+
+
 def setup_logging() -> str:
     """
     Configure rotating file log and redirect stdout to it.
@@ -106,6 +176,12 @@ def setup_logging() -> str:
         console_handler = logging.StreamHandler(sys.__stdout__)
         console_handler.setFormatter(fmt)
         root.addHandler(console_handler)
+
+    # In-memory ring buffer feeding the UI's "Application Log" view. Added
+    # unconditionally — it needs no file and works even if the log dir failed.
+    buffer_handler = _BufferLogHandler()
+    buffer_handler.setFormatter(fmt)
+    root.addHandler(buffer_handler)
 
     root.setLevel(logging.DEBUG)
 
