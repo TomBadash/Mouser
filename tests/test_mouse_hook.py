@@ -105,6 +105,35 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
 
         self.assertEqual(messages, ["Linux evdev remapping restored."])
 
+    def test_should_intercept_events_defaults_to_false(self):
+        """Fresh hook, no Logitech bound -- platform taps must stand
+        down so non-Logitech mice are not silently remapped."""
+        hook = BaseMouseHook()
+
+        self.assertFalse(hook._should_intercept_events())
+
+    def test_should_intercept_events_flips_on_hid_connect(self):
+        hook = BaseMouseHook()
+        device = SimpleNamespace(name="MX Master 3S")
+        hook._hid_gesture = SimpleNamespace(connected_device=device)
+
+        hook._on_hid_connect()
+
+        self.assertTrue(hook._should_intercept_events())
+
+    def test_should_intercept_events_flips_off_on_hid_disconnect(self):
+        """KVM switch / sleep wake: the moment HID++ drops the device,
+        the next OS event must pass through untouched."""
+        hook = BaseMouseHook()
+        device = SimpleNamespace(name="MX Master 3S")
+        hook._hid_gesture = SimpleNamespace(connected_device=device)
+        hook._on_hid_connect()
+        self.assertTrue(hook._should_intercept_events())
+
+        hook._on_hid_disconnect()
+
+        self.assertFalse(hook._should_intercept_events())
+
 
 
 class BaseMouseHookDispatchQueueTests(unittest.TestCase):
@@ -899,6 +928,15 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook.invert_vscroll = True
         hook.block(mouse_hook.MouseEvent.HSCROLL_LEFT)
         hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        # The event-tap callback now early-returns when no Logitech is bound
+        # (so KVM / cold-start scenarios never silently remap a trackpad or
+        # generic mouse). Pin a stub device here so the trackpad-filter
+        # tests exercise the path they actually mean to.
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_3s",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
         return hook
 
     def _mock_get_field(self, is_continuous, source_user_data=0):
@@ -993,6 +1031,92 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertFalse(hook._dispatch_queue.empty())
         event = hook._dispatch_queue.get_nowait()
         self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSPassthroughWhenNoDeviceTests(unittest.TestCase):
+    """End-to-end pin of the KVM pass-through contract on the macOS event
+    tap. The CGEventTap is global -- it sees events from every input
+    device the OS knows about -- so any failure here is a user-visible
+    regression: trackpad swipes get inverted, generic-mouse xbuttons
+    get swallowed, and so on."""
+
+    _kCGEventScrollWheel = 22
+    _kCGEventOtherMouseDown = 25
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _bare_hook(self):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook.invert_vscroll = True
+        hook.invert_hscroll = True
+        hook.block(mouse_hook.MouseEvent.XBUTTON1_DOWN)
+        hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        # No _connected_device assignment -- this is exactly the KVM state
+        # we are pinning behavior for.
+        return hook
+
+    def test_scroll_passes_through_when_no_logitech_connected(self):
+        hook = self._bare_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = 0
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_xbutton_passes_through_when_no_logitech_connected(self):
+        hook = self._bare_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = 0
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_intercept_resumes_after_logitech_reconnects(self):
+        """KVM switches back: the very next event after _on_hid_connect
+        must be intercepted, not waited-on for some other trigger."""
+        hook = self._bare_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = 0
+
+        first = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+        self.assertIs(first, cg_event)
+
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_3s",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
+
+        def _get(event, field):
+            if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
+                return 5 * 65536
+            return 0
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = _get
+
+        second = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(second)
+        self.assertFalse(hook._dispatch_queue.empty())
 
 
 if __name__ == "__main__":

@@ -400,6 +400,16 @@ class MouseHook(BaseMouseHook):
             if flags & INJECTED_FLAG:
                 return CallNextHookEx(self._hook, nCode, wParam, lParam)
 
+            # KVM / cold-start guard: when no Logitech is currently bound to
+            # this host, the WH_MOUSE_LL hook must be a complete pass-through.
+            # The hook sees events from every input device, so without this
+            # guard a trackpad scroll or generic USB mouse's xbutton click
+            # would still run through Mouser's remap pipeline -- the exact
+            # failure mode users hit when their KVM switches the Logitech
+            # to another machine while Mouser keeps running here.
+            if not self._should_intercept_events():
+                return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
             if wParam == WM_XBUTTONDOWN:
                 xbutton = hiword(mouse_data)
                 if xbutton == XBUTTON1:
