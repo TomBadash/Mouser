@@ -1,0 +1,64 @@
+name: Update Homebrew cask on release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync (defaults to latest release)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Capture release payload
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euxo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            cp "$GITHUB_EVENT_PATH" /tmp/mouser-release-event.json
+          elif [ -n "$INPUT_TAG" ]; then
+            python3 - <<'PY' > /tmp/mouser-release-event.json
+            import json, os
+            print(json.dumps({"tag_name": os.environ["INPUT_TAG"]}))
+            PY
+          fi
+
+      - name: Update cask for the target release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          if [ -f /tmp/mouser-release-event.json ]; then
+            python3 scripts/update_homebrew_cask.py --event-path /tmp/mouser-release-event.json
+          else
+            python3 scripts/update_homebrew_cask.py
+          fi
+
+      - name: Create pull request if needed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "ci: update Homebrew cask"
+          title: "ci: update Homebrew cask"
+          body: |
+            Updates the in-repo Homebrew cask to the latest published release.
+          branch: ci/update-homebrew-cask
+          delete-branch: true
