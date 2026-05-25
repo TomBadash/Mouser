@@ -909,6 +909,20 @@ class MacOSThumbButtonTests(unittest.TestCase):
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook._enqueue_dispatch_event = MagicMock(name="enqueue")
+        # Pin a stub ``_connected_device`` so this test class stays
+        # truthful (btn=6 / btn=3 only originate from a connected MX
+        # Master in production) and so it composes with the top-level
+        # ``_should_intercept_events`` early-return that lands in
+        # #185 (``fix(hooks): pass through OS mouse events when no
+        # Logitech is connected``). On this branch the gate is not yet
+        # consulted at the top of the CGEventTap callback, so this is a
+        # no-op against current master; it becomes load-bearing once
+        # #185 is integrated.
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_4",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
         return hook
 
     def _mock_field(self, button_number):
