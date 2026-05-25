@@ -132,6 +132,27 @@ class BaseMouseHook:
     # (raw-XY divertable) AND as OS btn=6 / BTN_TASK.
     SENSE_PANEL_CID = 0x01A0
 
+    def _should_intercept_events(self) -> bool:
+        """True only when the platform hook should block, remap, or dispatch
+        OS-level mouse events to the engine.
+
+        Mouser exists to remap a Logitech mouse's buttons. The global event
+        taps on macOS (CGEventTap) and Windows (WH_MOUSE_LL) see events
+        from every input device the OS knows about -- when no Logitech is
+        currently bound to this host (KVM switched to another machine,
+        the device is mid-reconnect after sleep, or the user simply has
+        not plugged one in) those hooks must stay completely out of the
+        way, otherwise xbutton clicks and scroll events from a trackpad
+        or generic USB mouse get swallowed and routed through Mouser's
+        remap pipeline.
+
+        Linux's evdev hook only attaches once a Logitech source device
+        has been resolved, so it is naturally gated -- but consult this
+        helper defensively before dispatching there as well so the
+        contract stays platform-uniform.
+        """
+        return self._connected_device is not None
+
     def _apply_vscroll_invert_fallback(self) -> bool:
         """True only when the OS-layer vertical-scroll inversion fallback
         should fire on the current event.
@@ -141,15 +162,16 @@ class BaseMouseHook:
         rest. When no Logitech is currently connected we have no source-of-
         truth that the event came from a device the toggle applies to, so the
         fallback must stand down rather than invert every trackpad / generic
-        USB mouse scroll the OS forwards through us. The three platform
-        guards live in one place so future hooks (X11, BSD, etc.) inherit
-        the same contract.
+        USB mouse scroll the OS forwards through us. The "no Logitech bound"
+        gate is delegated to :meth:`_should_intercept_events` so this fallback
+        and the platform hooks' top-level early-return share one source of
+        truth.
         """
         if not self.invert_vscroll:
             return False
         if self.wheel_native_invert_active:
             return False
-        return self._connected_device is not None
+        return self._should_intercept_events()
 
     def _apply_hscroll_invert_fallback(self) -> bool:
         """Horizontal twin of :meth:`_apply_vscroll_invert_fallback`."""
@@ -157,7 +179,7 @@ class BaseMouseHook:
             return False
         if self.wheel_native_invert_active:
             return False
-        return self._connected_device is not None
+        return self._should_intercept_events()
 
     @property
     def _thumb_button_via_hid(self) -> bool:
