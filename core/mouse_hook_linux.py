@@ -122,6 +122,8 @@ class MouseHook(BaseMouseHook):
         self._evdev_grabbed = False
         self._evdev_remap_ready = False
         self._evdev_remap_status_state = (False, None)
+        self._keyboard_devices = []
+        self._keyboard_devices_initialised = False
 
     @property
     def evdev_ready(self):
@@ -695,24 +697,116 @@ class MouseHook(BaseMouseHook):
                 caps.pop(filtered_type, None)
         rel_type = _ecodes.EV_REL
         rel_caps = list(caps.get(rel_type, []))
-        if not rel_caps:
-            return caps
         hi_res_codes = {
             getattr(_ecodes, "REL_WHEEL_HI_RES", None),
             getattr(_ecodes, "REL_HWHEEL_HI_RES", None),
         }
         filtered_rel_caps = [code for code in rel_caps if code not in hi_res_codes]
-        if filtered_rel_caps == rel_caps:
-            return caps
-        if filtered_rel_caps:
+        # Ensure REL_HWHEEL is available so Shift+wheel translation can emit
+        # horizontal scroll even on mice without a tilt wheel.  Only add when
+        # the source already exposes REL events (i.e. is a mouse-like device).
+        if rel_caps and _ecodes.REL_HWHEEL not in filtered_rel_caps:
+            filtered_rel_caps.append(_ecodes.REL_HWHEEL)
+        if filtered_rel_caps != rel_caps:
             caps[rel_type] = filtered_rel_caps
-        else:
-            caps.pop(rel_type, None)
-        print(
-            "[MouseHook] Filtering REL_WHEEL_HI_RES / "
-            "REL_HWHEEL_HI_RES from Mouser Virtual Mouse"
-        )
+            if rel_caps and any(c in hi_res_codes for c in rel_caps):
+                print(
+                    "[MouseHook] Filtering REL_WHEEL_HI_RES / "
+                    "REL_HWHEEL_HI_RES from Mouser Virtual Mouse"
+                )
         return caps
+
+    def _ensure_keyboard_devices(self):
+        """Open keyboard evdev devices (read-only) for Shift detection."""
+        if self._keyboard_devices_initialised or not _EVDEV_OK:
+            return
+        self._keyboard_devices_initialised = True
+        try:
+            paths = list(_evdev_mod.list_devices())
+        except Exception as exc:
+            _log_once(
+                ("evdev-keyboard-list-error", type(exc).__name__, str(exc)),
+                f"[MouseHook] Cannot list evdev devices for Shift detection: {exc}",
+            )
+            return
+        shift_codes = {
+            _ecodes.KEY_LEFTSHIFT,
+            _ecodes.KEY_RIGHTSHIFT,
+        }
+        keyboards = []
+        for path in paths:
+            try:
+                dev = _InputDevice(path)
+            except PermissionError:
+                continue
+            except Exception:
+                continue
+            try:
+                caps = dev.capabilities(absinfo=False)
+                key_caps = set(caps.get(_ecodes.EV_KEY, []))
+                if key_caps & shift_codes:
+                    keyboards.append(dev)
+                    continue
+            except Exception:
+                pass
+            try:
+                dev.close()
+            except Exception:
+                pass
+        self._keyboard_devices = keyboards
+        if keyboards:
+            print(
+                f"[MouseHook] Tracking {len(keyboards)} keyboard device(s) "
+                "for Shift+wheel detection"
+            )
+
+    def _close_keyboard_devices(self):
+        for dev in self._keyboard_devices:
+            try:
+                dev.close()
+            except Exception:
+                pass
+        self._keyboard_devices = []
+        self._keyboard_devices_initialised = False
+
+    def _shift_held(self):
+        """Return True if any Shift key is currently held."""
+        if not self._keyboard_devices_initialised:
+            self._ensure_keyboard_devices()
+        if not self._keyboard_devices:
+            return False
+        shift_codes = (
+            _ecodes.KEY_LEFTSHIFT,
+            _ecodes.KEY_RIGHTSHIFT,
+        )
+        stale = []
+        for dev in self._keyboard_devices:
+            try:
+                active = dev.active_keys()
+            except OSError:
+                stale.append(dev)
+                continue
+            except Exception:
+                continue
+            for code in shift_codes:
+                if code in active:
+                    if stale:
+                        self._drop_stale_keyboards(stale)
+                    return True
+        if stale:
+            self._drop_stale_keyboards(stale)
+        return False
+
+    def _drop_stale_keyboards(self, stale):
+        for dev in stale:
+            try:
+                dev.close()
+            except Exception:
+                pass
+            try:
+                self._keyboard_devices.remove(dev)
+            except ValueError:
+                pass
 
     def _cleanup_evdev(self):
         self._disable_evdev_remapping()
@@ -849,6 +943,14 @@ class MouseHook(BaseMouseHook):
 
         rel_wheel_hi_res = getattr(_ecodes, "REL_WHEEL_HI_RES", 0x0B)
         if code == _ecodes.REL_WHEEL or code == rel_wheel_hi_res:
+            if value != 0 and self._shift_held():
+                if code == _ecodes.REL_WHEEL:
+                    h_value = -value if self.invert_hscroll else value
+                    self._uinput.write(_ecodes.EV_REL, _ecodes.REL_HWHEEL, h_value)
+                # REL_WHEEL_HI_RES events are suppressed while Shift is held so
+                # the vertical scroll doesn't double-fire alongside the
+                # translated horizontal scroll.
+                return
             if self.invert_vscroll:
                 self._uinput.write(_ecodes.EV_REL, code, -value)
             else:
@@ -926,6 +1028,7 @@ class MouseHook(BaseMouseHook):
             self._evdev_thread.join(timeout=2)
             self._evdev_thread = None
         self._cleanup_evdev()
+        self._close_keyboard_devices()
 
 
 MouseHook._platform_module = sys.modules[__name__]

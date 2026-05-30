@@ -12,7 +12,8 @@ from core.mouse_hook_types import HidRuntimeState
 
 
 class _FakeEvdevDevice:
-    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11):
+    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11,
+                 active_keys=()):
         self.name = name
         self.path = path
         self.fd = fd
@@ -23,6 +24,7 @@ class _FakeEvdevDevice:
             bustype=0x03,
         )
         self._capabilities = capabilities
+        self._active_keys = list(active_keys)
         self.grab = Mock()
         self.ungrab = Mock()
         self.close = Mock()
@@ -30,6 +32,12 @@ class _FakeEvdevDevice:
 
     def capabilities(self, absinfo=False):
         return self._capabilities
+
+    def active_keys(self, verbose=False):
+        return list(self._active_keys)
+
+    def set_active_keys(self, keys):
+        self._active_keys = list(keys)
 
 
 class _CapturingListener:
@@ -61,11 +69,15 @@ class _FakeLinuxEcodes:
     REL_Y = 0x01
     REL_WHEEL = 0x08
     REL_HWHEEL = 0x06
+    REL_WHEEL_HI_RES = 0x0B
+    REL_HWHEEL_HI_RES = 0x0C
     BTN_LEFT = 0x110
     BTN_RIGHT = 0x111
     BTN_MIDDLE = 0x112
     BTN_SIDE = 0x113
     BTN_EXTRA = 0x114
+    KEY_LEFTSHIFT = 42
+    KEY_RIGHTSHIFT = 54
 
 
 class _FakeLinuxUInput:
@@ -824,6 +836,214 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
                 module.MouseEvent.MODE_SHIFT_UP,
             ],
         )
+
+
+class LinuxShiftWheelHScrollTests(unittest.TestCase):
+    """Verify Linux REL_WHEEL is translated to REL_HWHEEL when Shift is held."""
+
+    def _reload_for_linux(self):
+        fake_evdev = SimpleNamespace(
+            ecodes=_FakeLinuxEcodes,
+            UInput=_FakeLinuxUInput,
+            InputDevice=Mock(name="InputDevice"),
+        )
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"evdev": fake_evdev}),
+        ):
+            sys.modules.pop("core.mouse_hook_linux", None)
+            if hasattr(core, "mouse_hook_linux"):
+                delattr(core, "mouse_hook_linux")
+            importlib.import_module("core.mouse_hook_linux")
+            importlib.reload(mouse_hook)
+
+        def cleanup():
+            sys.modules.pop("core.mouse_hook_linux", None)
+            if hasattr(core, "mouse_hook_linux"):
+                delattr(core, "mouse_hook_linux")
+            importlib.reload(mouse_hook)
+
+        self.addCleanup(cleanup)
+        return mouse_hook
+
+    def _make_keyboard(self, *, path="/dev/input/event5", active_keys=()):
+        ecodes = _FakeLinuxEcodes
+        return _FakeEvdevDevice(
+            name="Fake Keyboard",
+            path=path,
+            vendor=0x1234,
+            capabilities={
+                ecodes.EV_KEY: [
+                    ecodes.KEY_LEFTSHIFT,
+                    ecodes.KEY_RIGHTSHIFT,
+                ],
+            },
+            active_keys=active_keys,
+        )
+
+    def _install_hook(self, module, *, keyboards, mouse_hi_res=False):
+        ecodes = module._ecodes
+        rel_caps = [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL]
+        if mouse_hi_res:
+            rel_caps.extend([ecodes.REL_WHEEL_HI_RES, ecodes.REL_HWHEEL_HI_RES])
+        mouse = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event1",
+            vendor=module._LOGI_VENDOR,
+            capabilities={
+                ecodes.EV_REL: rel_caps,
+                ecodes.EV_KEY: [
+                    ecodes.BTN_LEFT,
+                    ecodes.BTN_RIGHT,
+                    ecodes.BTN_MIDDLE,
+                ],
+            },
+        )
+        devices_by_path = {kb.path: kb for kb in keyboards}
+        devices_by_path[mouse.path] = mouse
+        fake_evdev_mod = SimpleNamespace(
+            list_devices=lambda: list(devices_by_path)
+        )
+
+        def fake_input_device(path):
+            return devices_by_path[path]
+
+        hook = module.MouseHook()
+        hook._evdev_device = mouse
+        hook._uinput = _FakeLinuxUInput()
+        hook._set_evdev_remap_ready(True)
+        patches = (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module, "_InputDevice", side_effect=fake_input_device),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return hook, mouse
+
+    def _make_rel_event(self, code, value):
+        return SimpleNamespace(type=_FakeLinuxEcodes.EV_REL, code=code, value=value)
+
+    def test_keyboard_devices_with_shift_are_opened(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard()
+        non_keyboard = _FakeEvdevDevice(
+            name="Random Sensor",
+            path="/dev/input/event9",
+            vendor=0x0000,
+            capabilities={ecodes.EV_KEY: [ecodes.BTN_LEFT]},
+        )
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        # Add the non-keyboard candidate alongside the keyboard.
+        fake_paths = {
+            "/dev/input/event5": keyboard,
+            "/dev/input/event9": non_keyboard,
+            "/dev/input/event1": hook._evdev_device,
+        }
+        with (
+            patch.object(
+                module, "_evdev_mod",
+                SimpleNamespace(list_devices=lambda: list(fake_paths)),
+            ),
+            patch.object(
+                module, "_InputDevice", side_effect=lambda p: fake_paths[p],
+            ),
+        ):
+            hook._ensure_keyboard_devices()
+
+        self.assertIn(keyboard, hook._keyboard_devices)
+        self.assertNotIn(non_keyboard, hook._keyboard_devices)
+        self.assertTrue(non_keyboard.close.called)
+
+    def test_shift_held_reflects_active_keys(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        self.assertTrue(hook._shift_held())
+
+        keyboard.set_active_keys([])
+        self.assertFalse(hook._shift_held())
+
+        keyboard.set_active_keys([ecodes.KEY_RIGHTSHIFT])
+        self.assertTrue(hook._shift_held())
+
+    def test_rel_wheel_with_shift_translates_to_hwheel(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 1)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_called_once_with(
+            ecodes.EV_REL, ecodes.REL_HWHEEL, 1
+        )
+        hook._uinput.write_event.assert_not_called()
+
+    def test_rel_wheel_without_shift_passes_through(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 1)
+        hook._handle_rel(event)
+
+        hook._uinput.write_event.assert_called_once_with(event)
+        hook._uinput.write.assert_not_called()
+
+    def test_invert_hscroll_flips_translated_direction(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook.invert_hscroll = True
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 2)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_called_once_with(
+            ecodes.EV_REL, ecodes.REL_HWHEEL, -2
+        )
+
+    def test_rel_wheel_hi_res_with_shift_is_suppressed(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard], mouse_hi_res=True)
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL_HI_RES, 60)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_not_called()
+        hook._uinput.write_event.assert_not_called()
+
+    def test_filtered_uinput_events_always_adds_rel_hwheel(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        hook = module.MouseHook()
+        dev_no_tilt = _FakeEvdevDevice(
+            name="Basic Mouse",
+            path="/dev/input/event2",
+            vendor=module._LOGI_VENDOR,
+            capabilities={
+                ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL],
+                ecodes.EV_KEY: [ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE],
+            },
+        )
+
+        events = hook._filtered_uinput_events(dev_no_tilt)
+
+        self.assertIn(ecodes.REL_HWHEEL, events[ecodes.EV_REL])
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
