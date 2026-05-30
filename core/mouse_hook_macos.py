@@ -44,6 +44,7 @@ _BTN_BACK = 3
 _BTN_FORWARD = 4
 _SCROLL_INVERT_MARKER = 0x4D4F5553
 _INJECTED_EVENT_MARKER = 0x4D4F5554
+_SHIFT_WHEEL_HSCROLL_MARKER = 0x4D4F5556
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -79,6 +80,77 @@ class MouseHook(BaseMouseHook):
             value = Quartz.CGEventGetIntegerValueField(cg_event, field)
             if value:
                 Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
+
+    def _post_shift_hscroll_event(self, cg_event):
+        """Translate Shift+vertical-wheel into a horizontal scroll event.
+
+        The translated event has axis-1 zeroed and axis-1 deltas copied onto
+        axis-2.  The Shift modifier is stripped so that apps which already
+        translate Shift+scroll themselves do not double-translate.  The
+        `invert_hscroll` setting flips the direction.
+        """
+        v_line = Quartz.CGEventGetIntegerValueField(
+            cg_event, Quartz.kCGScrollWheelEventDeltaAxis1
+        )
+        v_fixed = Quartz.CGEventGetIntegerValueField(
+            cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis1
+        )
+        v_point = Quartz.CGEventGetIntegerValueField(
+            cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis1
+        )
+
+        if self.invert_hscroll:
+            v_line = -v_line
+            v_fixed = -v_fixed
+            v_point = -v_point
+
+        is_continuous = Quartz.CGEventGetIntegerValueField(cg_event, 88)
+        if is_continuous:
+            unit = Quartz.kCGScrollEventUnitPixel
+            primary_delta = v_point
+        else:
+            unit = Quartz.kCGScrollEventUnitLine
+            primary_delta = v_line
+
+        new_event = Quartz.CGEventCreateScrollWheelEvent(
+            None, unit, 2, 0, primary_delta
+        )
+        if not new_event:
+            return False
+
+        flags = Quartz.CGEventGetFlags(cg_event)
+        Quartz.CGEventSetFlags(new_event, flags & ~Quartz.kCGEventFlagMaskShift)
+        Quartz.CGEventSetIntegerValueField(
+            new_event,
+            Quartz.kCGEventSourceUserData,
+            _SHIFT_WHEEL_HSCROLL_MARKER,
+        )
+
+        for field_name, value in (
+            ("kCGScrollWheelEventDeltaAxis2", v_line),
+            ("kCGScrollWheelEventFixedPtDeltaAxis2", v_fixed),
+            ("kCGScrollWheelEventPointDeltaAxis2", v_point),
+            ("kCGScrollWheelEventDeltaAxis1", 0),
+            ("kCGScrollWheelEventFixedPtDeltaAxis1", 0),
+            ("kCGScrollWheelEventPointDeltaAxis1", 0),
+        ):
+            field = getattr(Quartz, field_name, None)
+            if field is None:
+                continue
+            Quartz.CGEventSetIntegerValueField(new_event, field, value)
+
+        for field_name in (
+            "kCGScrollWheelEventScrollPhase",
+            "kCGScrollWheelEventMomentumPhase",
+        ):
+            field = getattr(Quartz, field_name, None)
+            if field is None:
+                continue
+            value = Quartz.CGEventGetIntegerValueField(cg_event, field)
+            Quartz.CGEventSetIntegerValueField(new_event, field, value)
+
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, new_event)
+        return True
 
     def _post_inverted_scroll_event(self, cg_event):
         v_point = Quartz.CGEventGetIntegerValueField(
@@ -365,11 +437,12 @@ class MouseHook(BaseMouseHook):
                     should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
 
             elif event_type == Quartz.kCGEventScrollWheel:
-                if (
-                    Quartz.CGEventGetIntegerValueField(
-                        cg_event, Quartz.kCGEventSourceUserData
-                    )
-                    == _SCROLL_INVERT_MARKER
+                source_marker = Quartz.CGEventGetIntegerValueField(
+                    cg_event, Quartz.kCGEventSourceUserData
+                )
+                if source_marker in (
+                    _SCROLL_INVERT_MARKER,
+                    _SHIFT_WHEEL_HSCROLL_MARKER,
                 ):
                     return cg_event
                 if self.ignore_trackpad:
@@ -392,6 +465,15 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"ScrollWheel v={v_delta} h={h_delta}")
                     except Exception:
                         pass
+                if h_delta == 0:
+                    flags = Quartz.CGEventGetFlags(cg_event)
+                    if flags & Quartz.kCGEventFlagMaskShift:
+                        v_fixed = Quartz.CGEventGetIntegerValueField(
+                            cg_event,
+                            Quartz.kCGScrollWheelEventFixedPtDeltaAxis1,
+                        )
+                        if v_fixed != 0 and self._post_shift_hscroll_event(cg_event):
+                            return None
                 if h_delta != 0:
                     if h_delta > 0:
                         mouse_event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(h_delta))
@@ -637,6 +719,7 @@ __all__ = [
     "_BTN_FORWARD",
     "_SCROLL_INVERT_MARKER",
     "_INJECTED_EVENT_MARKER",
+    "_SHIFT_WHEEL_HSCROLL_MARKER",
     "_kCGEventTapDisabledByTimeout",
     "_kCGEventTapDisabledByUserInput",
 ]

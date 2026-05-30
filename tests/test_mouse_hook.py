@@ -995,5 +995,211 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSShiftWheelHScrollTests(unittest.TestCase):
+    """Verify Shift+wheel translates into a horizontal scroll event."""
+
+    _kCGScrollWheelEventIsContinuous = 88
+    _kCGEventScrollWheel = 22
+    _kCGEventFlagMaskShift = 0x00020000
+    _kCGScrollEventUnitLine = 0
+    _kCGScrollEventUnitPixel = 1
+    _AXIS1_DELTA = "kCGScrollWheelEventDeltaAxis1"
+    _AXIS1_FIXED = "kCGScrollWheelEventFixedPtDeltaAxis1"
+    _AXIS1_POINT = "kCGScrollWheelEventPointDeltaAxis1"
+    _AXIS2_DELTA = "kCGScrollWheelEventDeltaAxis2"
+    _AXIS2_FIXED = "kCGScrollWheelEventFixedPtDeltaAxis2"
+    _AXIS2_POINT = "kCGScrollWheelEventPointDeltaAxis2"
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGEventFlagMaskShift = self._kCGEventFlagMaskShift
+        self.mock_quartz.kCGScrollEventUnitLine = self._kCGScrollEventUnitLine
+        self.mock_quartz.kCGScrollEventUnitPixel = self._kCGScrollEventUnitPixel
+        for axis_attr in (
+            self._AXIS1_DELTA, self._AXIS1_FIXED, self._AXIS1_POINT,
+            self._AXIS2_DELTA, self._AXIS2_FIXED, self._AXIS2_POINT,
+        ):
+            setattr(self.mock_quartz, axis_attr, axis_attr)
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _make_hook(self, *, block_hscroll=True):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        if block_hscroll:
+            hook.block(mouse_hook.MouseEvent.HSCROLL_LEFT)
+            hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        return hook
+
+    def _field_getter(self, *, shift=False, h_fixed=0, v_line=0, v_fixed=0,
+                      v_point=0, is_continuous=0, source_user_data=0):
+        def _get(event, field):
+            if field == self._kCGScrollWheelEventIsContinuous:
+                return is_continuous
+            if field == self.mock_quartz.kCGEventSourceUserData:
+                return source_user_data
+            if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
+                return h_fixed
+            if field == self._AXIS1_DELTA:
+                return v_line
+            if field == self._AXIS1_FIXED:
+                return v_fixed
+            if field == self._AXIS1_POINT:
+                return v_point
+            return 0
+        return _get
+
+    def test_shift_wheel_up_translates_to_horizontal_scroll(self):
+        """Shift held + vertical wheel scroll posts a horizontal-scroll event."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(result, "original vertical scroll must be blocked")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_called_once()
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        # (source, unit, wheelCount, delta1, delta2)
+        self.assertEqual(create_args.args[2], 2,
+                         "must create a two-axis scroll event")
+        self.assertEqual(create_args.args[3], 0,
+                         "vertical delta on translated event must be 0")
+        self.assertNotEqual(create_args.args[4], 0,
+                            "horizontal delta on translated event must be set")
+        self.mock_quartz.CGEventPost.assert_called_once()
+
+    def test_shift_wheel_strips_shift_modifier_from_translated_event(self):
+        """Translated event must clear Shift so apps don't double-translate."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift | 0x00010000)  # Shift + something else
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        # Find the CGEventSetFlags call on the translated event
+        set_flags_calls = [
+            c for c in self.mock_quartz.CGEventSetFlags.call_args_list
+            if c.args[0] is new_event
+        ]
+        self.assertEqual(len(set_flags_calls), 1)
+        applied_flags = set_flags_calls[0].args[1]
+        self.assertEqual(applied_flags & self._kCGEventFlagMaskShift, 0,
+                         "Shift mask must be stripped from translated event")
+        self.assertEqual(applied_flags & 0x00010000, 0x00010000,
+                         "other modifier flags must be preserved")
+
+    def test_translated_event_passes_through_tap_on_reentry(self):
+        """The marker on the translated event makes the tap pass it through."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="re_entered_event")
+        # Source user data set to the shift-wheel marker
+        marker = mouse_hook._SHIFT_WHEEL_HSCROLL_MARKER
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(source_user_data=marker)
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        # No new event should be created for a re-entered marker event
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_no_shift_means_no_translation(self):
+        """A plain vertical scroll without Shift must not be translated."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = 0  # no modifiers
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event, "event must pass through unchanged")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_shift_with_zero_vertical_delta_is_noop(self):
+        """Shift held but no vertical delta (e.g. axis-2 only) does not translate."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        # h_fixed != 0 means the existing hscroll path takes over, not our shift path.
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(h_fixed=3 * 65536)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        # Existing hscroll path: blocked + dispatched, but NOT translated.
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_invert_hscroll_flips_translated_direction(self):
+        """`invert_hscroll` must flip the sign of the translated horizontal delta."""
+        hook = self._make_hook()
+        hook.invert_hscroll = True
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(result)
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        # delta2 passed to CGEventCreateScrollWheelEvent should be negated (-1 line)
+        self.assertEqual(create_args.args[4], -1)
+        # And the explicit axis-2 set calls should also use negated values.
+        axis2_fixed_calls = [
+            c for c in self.mock_quartz.CGEventSetIntegerValueField.call_args_list
+            if c.args[0] is new_event
+            and c.args[1] == self._AXIS2_FIXED
+        ]
+        self.assertEqual(len(axis2_fixed_calls), 1)
+        self.assertEqual(axis2_fixed_calls[0].args[2], -65536)
+
+    def test_invert_hscroll_off_preserves_translated_direction(self):
+        """Default (invert_hscroll=False) keeps the original sign on translation."""
+        hook = self._make_hook()
+        hook.invert_hscroll = False
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        self.assertEqual(create_args.args[4], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
