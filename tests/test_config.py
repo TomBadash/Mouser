@@ -239,6 +239,82 @@ class ConfigMigrationTests(unittest.TestCase):
             )
 
 
+class SaveConfigTests(unittest.TestCase):
+    def test_save_config_writes_atomically_to_regular_file(self):
+        cfg = {"version": 9, "settings": {}, "profiles": {}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "config.json"
+            with (
+                patch.object(config, "CONFIG_DIR", temp_dir),
+                patch.object(config, "CONFIG_FILE", str(config_file)),
+            ):
+                config.save_config(cfg)
+
+            self.assertTrue(config_file.is_file())
+            self.assertFalse(config_file.is_symlink())
+            self.assertEqual(
+                json.loads(config_file.read_text(encoding="utf-8")), cfg
+            )
+
+    def test_save_config_preserves_symlinked_config_file(self):
+        """When CONFIG_FILE is a symlink (e.g. via GNU stow), save_config must
+        update the link target in place rather than replacing the link with a
+        regular file."""
+        cfg = {"version": 9, "settings": {}, "profiles": {}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / "Application Support" / "Mouser"
+            config_dir.mkdir(parents=True)
+            real_dir = Path(temp_dir) / "dotfiles" / "mouser"
+            real_dir.mkdir(parents=True)
+            real_target = real_dir / "config.json"
+            real_target.write_text("{}", encoding="utf-8")
+
+            symlink_path = config_dir / "config.json"
+            symlink_path.symlink_to(real_target)
+
+            with (
+                patch.object(config, "CONFIG_DIR", str(config_dir)),
+                patch.object(config, "CONFIG_FILE", str(symlink_path)),
+            ):
+                config.save_config(cfg)
+
+            self.assertTrue(
+                symlink_path.is_symlink(),
+                "save_config replaced the symlink with a regular file",
+            )
+            self.assertEqual(
+                os.readlink(str(symlink_path)), str(real_target)
+            )
+            self.assertEqual(
+                json.loads(real_target.read_text(encoding="utf-8")), cfg
+            )
+
+    def test_save_config_follows_broken_symlink_target(self):
+        """A dangling symlink should be repaired in place: the link survives and
+        now points at a valid file with the saved contents."""
+        cfg = {"version": 9, "settings": {}, "profiles": {}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / "cfg"
+            config_dir.mkdir()
+            real_dir = Path(temp_dir) / "real"
+            real_dir.mkdir()
+            real_target = real_dir / "config.json"  # does NOT exist yet
+            symlink_path = config_dir / "config.json"
+            symlink_path.symlink_to(real_target)
+
+            with (
+                patch.object(config, "CONFIG_DIR", str(config_dir)),
+                patch.object(config, "CONFIG_FILE", str(symlink_path)),
+            ):
+                config.save_config(cfg)
+
+            self.assertTrue(symlink_path.is_symlink())
+            self.assertTrue(real_target.is_file())
+            self.assertEqual(
+                json.loads(real_target.read_text(encoding="utf-8")), cfg
+            )
+
+
 class AppCatalogTests(unittest.TestCase):
     def test_resolve_app_spec_uses_catalog_alias(self):
         fake_catalog = [

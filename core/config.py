@@ -176,7 +176,12 @@ def load_config():
 def save_config(cfg):
     """Persist config to disk via atomic write with restrictive permissions."""
     ensure_config_dir()
-    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=CONFIG_DIR)
+    # Resolve symlinks so an atomic rename updates the link's target rather than
+    # clobbering the link itself — preserves setups like GNU stow that symlink
+    # config.json into a dotfiles repo.
+    target_path = os.path.realpath(CONFIG_FILE)
+    target_dir = os.path.dirname(target_path) or CONFIG_DIR
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=target_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
@@ -184,7 +189,7 @@ def save_config(cfg):
             os.fsync(f.fileno())
         if sys.platform != "win32":
             os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(tmp_path, CONFIG_FILE)
+        os.replace(tmp_path, target_path)
     except BaseException:
         try:
             os.unlink(tmp_path)
