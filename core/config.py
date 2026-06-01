@@ -244,23 +244,27 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
-def _identity_specs(app_identity: str | tuple[str, ...] | None) -> list[str]:
-    if not app_identity:
-        return []
-    if isinstance(app_identity, str):
-        candidates = [app_identity]
-    else:
-        candidates = [str(item) for item in app_identity if item]
-
+def _dedupe_specs(candidates) -> list[str]:
     result = []
     seen = set()
     for candidate in candidates:
+        if not candidate:
+            continue
+        candidate = str(candidate)
         key = candidate.casefold()
         if key in seen:
             continue
         seen.add(key)
         result.append(candidate)
     return result
+
+
+def _identity_specs(app_identity: tuple[str, ...] | None) -> list[str]:
+    return _dedupe_specs(app_identity or ())
+
+
+def _configured_app_specs(app_spec: str | None) -> list[str]:
+    return _dedupe_specs((app_spec,) if app_spec else ())
 
 
 def _app_identity_aliases(spec: str) -> set[str]:
@@ -298,7 +302,7 @@ def get_profile_for_app_identity(cfg, app_identity: tuple[str, ...] | None) -> s
         aliases = aliases_for(identity)
         for pname, pdata in profiles:
             for app in pdata.get("apps", []):
-                for app_spec in _identity_specs(app):
+                for app_spec in _configured_app_specs(app):
                     if aliases & aliases_for(app_spec):
                         return pname
     return "default"

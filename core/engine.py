@@ -380,7 +380,7 @@ class Engine:
     # ------------------------------------------------------------------
     # Per-app auto-switching
     # ------------------------------------------------------------------
-    def _on_app_change(self, app_identity):
+    def _on_app_change(self, app_identity: tuple[str, ...]):
         """Called by AppDetector when foreground window changes."""
         target = get_profile_for_app_identity(self.cfg, app_identity)
         if target == self._current_profile:
