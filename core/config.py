@@ -11,6 +11,8 @@ import tempfile
 from urllib.parse import quote
 from core import app_catalog
 
+AppIdentity = str | list[str] | tuple[str, ...]
+
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
 elif sys.platform == "linux":
@@ -244,7 +246,28 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
-def _app_identity_aliases(spec: str):
+def _identity_specs(app_identity: AppIdentity | None) -> list[str]:
+    if not app_identity:
+        return []
+    if isinstance(app_identity, str):
+        candidates = [app_identity]
+    elif isinstance(app_identity, (list, tuple)):
+        candidates = [str(item) for item in app_identity if item]
+    else:
+        candidates = [str(app_identity)]
+
+    result = []
+    seen = set()
+    for candidate in candidates:
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
+
+
+def _app_identity_aliases(spec: str) -> set[str]:
     if not spec:
         return set()
     entry = resolve_app_for_config(spec)
@@ -254,16 +277,40 @@ def _app_identity_aliases(spec: str):
     return {alias.casefold() for alias in aliases if alias}
 
 
-def get_profile_for_app(cfg, exe_name):
-    """Return the profile name that matches the given executable, or 'default'."""
-    if not exe_name:
+def get_profile_for_app_identity(cfg, app_identity: AppIdentity | None) -> str:
+    """
+    Return the profile name that matches an app identity, or 'default'.
+
+    ``app_identity`` may be a single identifier/path or an ordered list of
+    identifiers. Ordered identities are matched most-specific first, allowing a
+    nested app profile to win before falling back to its host app profile.
+    """
+    identities = _identity_specs(app_identity)
+    if not identities:
         return "default"
-    aliases = _app_identity_aliases(exe_name)
-    for pname, pdata in cfg.get("profiles", {}).items():
-        for app in pdata.get("apps", []):
-            if aliases & _app_identity_aliases(app):
-                return pname
+
+    alias_cache = {}
+
+    def aliases_for(spec: str) -> set[str]:
+        key = spec.casefold()
+        if key not in alias_cache:
+            alias_cache[key] = _app_identity_aliases(spec)
+        return alias_cache[key]
+
+    profiles = list(cfg.get("profiles", {}).items())
+    for identity in identities:
+        aliases = aliases_for(identity)
+        for pname, pdata in profiles:
+            for app in pdata.get("apps", []):
+                for app_spec in _identity_specs(app):
+                    if aliases & aliases_for(app_spec):
+                        return pname
     return "default"
+
+
+def get_profile_for_app(cfg, exe_name):
+    """Compatibility wrapper for the historical executable-name API."""
+    return get_profile_for_app_identity(cfg, exe_name)
 
 
 def _migrate(cfg):

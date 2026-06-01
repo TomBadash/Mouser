@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+AppIdentity = str | tuple[str, ...]
+
 
 def _path_from_nsurl(url) -> str | None:
     if url is None:
@@ -32,19 +34,38 @@ def _call_ns_method(obj, name: str):
         return None
 
 
-def _outer_macos_app_bundle(path: str | None) -> str | None:
-    """Return the outermost .app bundle for a path inside a macOS app."""
+def _dedupe_keep_order(values) -> tuple[str, ...]:
+    result = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return tuple(result)
+
+
+def _macos_app_bundles_in_path(path: str | None) -> tuple[str, ...]:
+    """Return containing .app bundles ordered inner-most to outer-most."""
     if not path:
-        return None
+        return ()
 
     normalized = os.path.abspath(path)
     parts = normalized.split(os.sep)
+    bundles = []
     for idx, part in enumerate(parts):
         if part.endswith(".app"):
             if normalized.startswith(os.sep):
-                return os.path.join(os.sep, *parts[1:idx + 1])
-            return os.path.join(*parts[:idx + 1])
-    return normalized if normalized.endswith(".app") else None
+                bundles.append(os.path.join(os.sep, *parts[1:idx + 1]))
+            else:
+                bundles.append(os.path.join(*parts[:idx + 1]))
+    return tuple(reversed(bundles))
 
 
 @functools.lru_cache(maxsize=256)
@@ -61,33 +82,40 @@ def _read_macos_bundle_identifier(app_path: str | None) -> str | None:
         return None
 
 
-def _macos_running_app_identity(app) -> str | None:
-    """Return the profile-matching identity for an NSRunningApplication."""
+def _macos_running_app_identities(app) -> tuple[str, ...]:
+    """Return profile-matching identities, ordered most-specific first."""
     bundle_path = _path_from_nsurl(_call_ns_method(app, "bundleURL"))
-    outer_bundle_path = _outer_macos_app_bundle(bundle_path)
-    outer_ident = _read_macos_bundle_identifier(outer_bundle_path)
-    if outer_ident:
-        return outer_ident
-
-    ident = _call_ns_method(app, "bundleIdentifier")
-    if ident:
-        return str(ident)
-
     executable_path = _path_from_nsurl(_call_ns_method(app, "executableURL"))
-    outer_executable_bundle = _outer_macos_app_bundle(executable_path)
-    outer_executable_ident = _read_macos_bundle_identifier(outer_executable_bundle)
-    if outer_executable_ident:
-        return outer_executable_ident
-    if outer_executable_bundle:
-        return outer_executable_bundle
-    if executable_path:
-        return os.path.basename(executable_path)
+    ident = _call_ns_method(app, "bundleIdentifier")
     localized_name = _call_ns_method(app, "localizedName")
-    return str(localized_name) if localized_name else None
+
+    identities = []
+    if ident:
+        identities.append(str(ident))
+
+    bundles = _dedupe_keep_order([
+        *_macos_app_bundles_in_path(bundle_path),
+        *_macos_app_bundles_in_path(executable_path),
+    ])
+    for app_path in bundles:
+        bundle_ident = _read_macos_bundle_identifier(app_path)
+        if bundle_ident:
+            identities.append(bundle_ident)
+        identities.append(app_path)
+        identities.append(os.path.basename(app_path))
+        identities.append(os.path.splitext(os.path.basename(app_path))[0])
+
+    if executable_path:
+        identities.append(executable_path)
+        identities.append(os.path.basename(executable_path))
+    if localized_name:
+        identities.append(str(localized_name))
+
+    return _dedupe_keep_order(identities)
 
 
 # ==================================================================
-# Platform-specific get_foreground_exe()
+# Platform-specific foreground app identity resolution
 # ==================================================================
 
 if sys.platform == "win32":
@@ -208,7 +236,7 @@ if sys.platform == "win32":
         user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
-    def get_foreground_exe() -> str | None:
+    def _get_foreground_app_identity() -> str | None:
         """Return the foreground app path on Windows, or None."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
@@ -255,14 +283,15 @@ elif sys.platform == "darwin":
         return wrapper
 
     @_autoreleased
-    def get_foreground_exe() -> str | None:
-        """Return a stable app identifier for the frontmost app on macOS."""
+    def _get_foreground_app_identity() -> tuple[str, ...] | None:
+        """Return stable frontmost app identities on macOS."""
         try:
             from AppKit import NSWorkspace
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
                 return None
-            return _macos_running_app_identity(app)
+            identities = _macos_running_app_identities(app)
+            return identities or None
         except Exception:
             return None
 
@@ -304,7 +333,7 @@ elif sys.platform == "linux":
             pass
         return None
 
-    def get_foreground_exe() -> str | None:
+    def _get_foreground_app_identity() -> str | None:
         """Return the foreground app executable path on Linux."""
         if _WAYLAND:
             if _KDE:
@@ -319,20 +348,37 @@ elif sys.platform == "linux":
         return _get_foreground_xdotool()
 
 else:
-    def get_foreground_exe() -> str | None:
+    def _get_foreground_app_identity() -> str | None:
         return None
+
+
+def get_foreground_app_identity() -> AppIdentity | None:
+    """
+    Return the foreground app identity used for profile matching.
+
+    Most platforms return one stable identifier. macOS may return an ordered
+    tuple, from the most-specific nested app identity to broader host app
+    identities, so embedded app windows can match their own profile first and
+    fall back to the host app profile.
+    """
+    return _get_foreground_app_identity()
+
+
+def get_foreground_exe() -> AppIdentity | None:
+    """Compatibility wrapper for callers/tests using the historical name."""
+    return get_foreground_app_identity()
 
 
 class AppDetector:
     """
     Polls the foreground window every *interval* seconds.
-    Calls ``on_change(exe_name: str)`` when the foreground app changes.
+    Calls ``on_change(app_identity)`` when the foreground app changes.
     """
 
     def __init__(self, on_change, interval: float = 0.3):
         self._on_change = on_change
         self._interval = interval
-        self._last_exe: str | None = None
+        self._last_app_identity_key: tuple[str | None, ...] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -352,10 +398,15 @@ class AppDetector:
     def _poll(self):
         while not self._stop.is_set():
             try:
-                exe = get_foreground_exe()
-                if exe and exe != self._last_exe:
-                    self._last_exe = exe
-                    self._on_change(exe)
+                app_identity = get_foreground_app_identity()
+                key = (
+                    tuple(app_identity)
+                    if isinstance(app_identity, (list, tuple))
+                    else (app_identity,)
+                )
+                if app_identity and key != self._last_app_identity_key:
+                    self._last_app_identity_key = key
+                    self._on_change(app_identity)
             except Exception:
                 pass
             self._stop.wait(self._interval)

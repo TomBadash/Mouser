@@ -6,35 +6,33 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-with (
-    patch.object(sys, "platform", "linux"),
-    patch.dict(
-        os.environ,
-        {
-            "XDG_SESSION_TYPE": "x11",
-            "XDG_CURRENT_DESKTOP": "KDE",
-        },
-        clear=False,
-    ),
-):
-    from core import app_detector
+
+def _unload_app_detector():
+    sys.modules.pop("core.app_detector", None)
+    core_module = sys.modules.get("core")
+    if core_module is not None and hasattr(core_module, "app_detector"):
+        delattr(core_module, "app_detector")
+
+
+def _load_app_detector(platform: str, env: dict[str, str] | None = None):
+    _unload_app_detector()
+    with (
+        patch.object(sys, "platform", platform),
+        patch.dict(os.environ, env or {}, clear=False),
+    ):
+        return importlib.import_module("core.app_detector")
 
 
 class AppDetectorLinuxTests(unittest.TestCase):
     def _reload_for_linux(self, session_type: str, desktop: str):
-        with (
-            patch.object(sys, "platform", "linux"),
-            patch.dict(
-                os.environ,
-                {
-                    "XDG_SESSION_TYPE": session_type,
-                    "XDG_CURRENT_DESKTOP": desktop,
-                },
-                clear=False,
-            ),
-        ):
-            importlib.reload(app_detector)
-        return app_detector
+        self.addCleanup(_unload_app_detector)
+        return _load_app_detector(
+            "linux",
+            {
+                "XDG_SESSION_TYPE": session_type,
+                "XDG_CURRENT_DESKTOP": desktop,
+            },
+        )
 
     def test_kde_wayland_prefers_kdotool(self):
         module = self._reload_for_linux("wayland", "KDE")
@@ -72,13 +70,23 @@ class AppDetectorLinuxTests(unittest.TestCase):
 
 
 class AppDetectorMacOSTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(_unload_app_detector)
+        self.module = _load_app_detector(
+            "linux",
+            {
+                "XDG_SESSION_TYPE": "x11",
+                "XDG_CURRENT_DESKTOP": "KDE",
+            },
+        )
+
     def _write_bundle_info(self, app_path: str, bundle_id: str):
         info_dir = os.path.join(app_path, "Contents")
         os.makedirs(info_dir, exist_ok=True)
         with open(os.path.join(info_dir, "Info.plist"), "wb") as f:
             plistlib.dump({"CFBundleIdentifier": bundle_id}, f)
 
-    def test_nested_helper_bundle_resolves_to_outer_app_identity(self):
+    def test_nested_app_identities_include_inner_then_outer_app(self):
         class FakeURL:
             def __init__(self, path):
                 self._path = path
@@ -114,10 +122,19 @@ class AppDetectorMacOSTests(unittest.TestCase):
             self._write_bundle_info(helper_app, "com.example.Editor.helper")
 
             self.assertEqual(
-                app_detector._macos_running_app_identity(
+                self.module._macos_running_app_identities(
                     FakeRunningApplication(helper_app)
                 ),
-                "com.example.Editor",
+                (
+                    "com.example.Editor.helper",
+                    helper_app,
+                    "Editor Helper.app",
+                    "Editor Helper",
+                    "com.example.Editor",
+                    outer_app,
+                    "Editor.app",
+                    "Editor",
+                ),
             )
 
 

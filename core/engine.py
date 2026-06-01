@@ -12,7 +12,7 @@ from core.key_simulator import (
     inject_mouse_down, inject_mouse_up,
 )
 from core.config import (
-    load_config, get_active_mappings, get_profile_for_app,
+    load_config, get_active_mappings, get_profile_for_app_identity,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
 from core.app_detector import AppDetector
@@ -380,12 +380,16 @@ class Engine:
     # ------------------------------------------------------------------
     # Per-app auto-switching
     # ------------------------------------------------------------------
-    def _on_app_change(self, exe_name: str):
+    def _on_app_change(self, app_identity):
         """Called by AppDetector when foreground window changes."""
-        target = get_profile_for_app(self.cfg, exe_name)
+        target = get_profile_for_app_identity(self.cfg, app_identity)
         if target == self._current_profile:
             return
-        print(f"[Engine] App changed to {exe_name} -> profile '{target}'")
+        if isinstance(app_identity, (list, tuple)):
+            app_label = app_identity[0] if app_identity else ""
+        else:
+            app_label = app_identity
+        print(f"[Engine] App changed to {app_label} -> profile '{target}'")
         self._switch_profile(target)
 
     def _switch_profile(self, profile_name: str):

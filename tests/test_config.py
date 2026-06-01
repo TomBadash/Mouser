@@ -402,6 +402,33 @@ class AppCatalogTests(unittest.TestCase):
                     "windowed",
                 )
 
+    def test_get_profile_for_app_prefers_specific_nested_identity(self):
+        cfg = {
+            "profiles": {
+                "default": {"apps": []},
+                "outer": {"apps": ["START"]},
+                "inner": {"apps": ["STGame"]},
+            }
+        }
+
+        self.assertEqual(
+            config.get_profile_for_app(cfg, ("STGame", "START")),
+            "inner",
+        )
+
+    def test_get_profile_for_app_falls_back_to_outer_nested_identity(self):
+        cfg = {
+            "profiles": {
+                "default": {"apps": []},
+                "outer": {"apps": ["START"]},
+            }
+        }
+
+        self.assertEqual(
+            config.get_profile_for_app(cfg, ("STGame", "START")),
+            "outer",
+        )
+
     def test_resolve_app_spec_for_windows_exe_path_uses_curated_label(self):
         app_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
