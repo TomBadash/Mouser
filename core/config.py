@@ -11,8 +11,6 @@ import tempfile
 from urllib.parse import quote
 from core import app_catalog
 
-AppIdentity = tuple[str, ...]
-
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
 elif sys.platform == "linux":
@@ -246,15 +244,13 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
-def _identity_specs(app_identity: AppIdentity | str | list[str] | None) -> list[str]:
+def _identity_specs(app_identity: str | tuple[str, ...] | None) -> list[str]:
     if not app_identity:
         return []
     if isinstance(app_identity, str):
         candidates = [app_identity]
-    elif isinstance(app_identity, (list, tuple)):
-        candidates = [str(item) for item in app_identity if item]
     else:
-        candidates = [str(app_identity)]
+        candidates = [str(item) for item in app_identity if item]
 
     result = []
     seen = set()
@@ -277,13 +273,13 @@ def _app_identity_aliases(spec: str) -> set[str]:
     return {alias.casefold() for alias in aliases if alias}
 
 
-def get_profile_for_app_identity(cfg, app_identity: AppIdentity | None) -> str:
+def get_profile_for_app_identity(cfg, app_identity: tuple[str, ...] | None) -> str:
     """
     Return the profile name that matches an app identity, or 'default'.
 
     ``app_identity`` is an ordered tuple of identifiers. Identifiers are matched
-    most-specific first, allowing a
-    nested app profile to win before falling back to its host app profile.
+    most-specific first, allowing a nested app profile to win before falling
+    back to its host app profile.
     """
     identities = _identity_specs(app_identity)
     if not identities:
@@ -306,11 +302,6 @@ def get_profile_for_app_identity(cfg, app_identity: AppIdentity | None) -> str:
                     if aliases & aliases_for(app_spec):
                         return pname
     return "default"
-
-
-def get_profile_for_app(cfg, exe_name):
-    """Compatibility wrapper for the historical executable-name API."""
-    return get_profile_for_app_identity(cfg, exe_name)
 
 
 def _migrate(cfg):

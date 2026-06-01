@@ -12,8 +12,6 @@ import sys
 import threading
 import time
 
-AppIdentity = tuple[str, ...]
-
 
 def _path_from_nsurl(url) -> str | None:
     if url is None:
@@ -49,6 +47,10 @@ def _dedupe_keep_order(values) -> tuple[str, ...]:
         seen.add(key)
         result.append(text)
     return tuple(result)
+
+
+def _single_identity(value: str | None) -> tuple[str, ...]:
+    return (value,) if value else ()
 
 
 def _macos_app_bundles_in_path(path: str | None) -> tuple[str, ...]:
@@ -236,7 +238,7 @@ if sys.platform == "win32":
         user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
-    def _get_foreground_app_identity() -> AppIdentity:
+    def _get_foreground_app_identity() -> tuple[str, ...]:
         """Return the foreground app path on Windows, or an empty tuple."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
@@ -253,7 +255,7 @@ if sys.platform == "win32":
             real = _resolve_uwp_child(hwnd)
             # If we can't resolve the real app (e.g. fullscreen UWP), return
             # an empty tuple so the detector keeps the last known profile.
-            return (real,) if real else ()
+            return _single_identity(real)
         if exe_lower == "explorer.exe":
             wc = _get_window_class(hwnd)
             if wc not in _EXPLORER_CLASSES:
@@ -261,10 +263,10 @@ if sys.platform == "win32":
                 print(f"[AppDetect] FG: explorer.exe class={wc} title='{title}'")
                 real = _resolve_uwp_child(hwnd)
                 if real:
-                    return (real,)
+                    return _single_identity(real)
                 real = _find_uwp_app_global()
-                return (real,) if real else ()
-        return (exe_path,)
+                return _single_identity(real)
+        return _single_identity(exe_path)
 
 elif sys.platform == "darwin":
     try:
@@ -283,7 +285,7 @@ elif sys.platform == "darwin":
         return wrapper
 
     @_autoreleased
-    def _get_foreground_app_identity() -> AppIdentity:
+    def _get_foreground_app_identity() -> tuple[str, ...]:
         """Return stable frontmost app identities on macOS."""
         try:
             from AppKit import NSWorkspace
@@ -332,28 +334,28 @@ elif sys.platform == "linux":
             pass
         return None
 
-    def _get_foreground_app_identity() -> AppIdentity:
+    def _get_foreground_app_identity() -> tuple[str, ...]:
         """Return the foreground app executable path on Linux."""
         if _WAYLAND:
             if _KDE:
                 exe = _get_foreground_kdotool()
                 if exe:
-                    return (exe,)
+                    return _single_identity(exe)
                 # Fall back to xdotool so XWayland apps still work when
                 # kdotool is unavailable or cannot resolve the active window.
                 exe = _get_foreground_xdotool()
-                return (exe,) if exe else ()
+                return _single_identity(exe)
             # GNOME / other Wayland compositors: not yet supported
             return ()
         exe = _get_foreground_xdotool()
-        return (exe,) if exe else ()
+        return _single_identity(exe)
 
 else:
-    def _get_foreground_app_identity() -> AppIdentity:
+    def _get_foreground_app_identity() -> tuple[str, ...]:
         return ()
 
 
-def get_foreground_app_identity() -> AppIdentity:
+def get_foreground_app_identity() -> tuple[str, ...]:
     """
     Return the foreground app identity used for profile matching.
 
@@ -381,7 +383,7 @@ class AppDetector:
     def __init__(self, on_change, interval: float = 0.3):
         self._on_change = on_change
         self._interval = interval
-        self._last_app_identity: AppIdentity | None = None
+        self._last_app_identity: tuple[str, ...] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 

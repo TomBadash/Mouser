@@ -165,7 +165,7 @@ class ConfigMigrationTests(unittest.TestCase):
             "switch_scroll_mode",
         )
 
-    def test_get_profile_for_app_matches_aliases(self):
+    def test_get_profile_for_app_identity_matches_aliases(self):
         cfg = {
             "app_overrides": {},
             "profiles": {
@@ -183,11 +183,11 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         ):
             self.assertEqual(
-                config.get_profile_for_app(cfg, "com.google.Chrome"),
+                config.get_profile_for_app_identity(cfg, ("com.google.Chrome",)),
                 "chrome",
             )
 
-    def test_get_profile_for_app_matches_linux_desktop_id_from_runtime_path(self):
+    def test_get_profile_for_app_identity_matches_linux_desktop_id_from_runtime_path(self):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
@@ -209,11 +209,14 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         ):
             self.assertEqual(
-                config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
+                config.get_profile_for_app_identity(
+                    cfg,
+                    ("/usr/lib64/firefox/firefox",),
+                ),
                 "firefox",
             )
 
-    def test_get_profile_for_app_matches_linux_legacy_launcher_path(self):
+    def test_get_profile_for_app_identity_matches_linux_legacy_launcher_path(self):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
@@ -235,7 +238,10 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         ):
             self.assertEqual(
-                config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
+                config.get_profile_for_app_identity(
+                    cfg,
+                    ("/usr/lib64/firefox/firefox",),
+                ),
                 "firefox",
             )
 
@@ -354,7 +360,7 @@ class AppCatalogTests(unittest.TestCase):
 
         self.assertEqual(resolved["id"], "com.example.electron")
 
-    def test_get_profile_for_app_matches_mac_bundle_identity(self):
+    def test_get_profile_for_app_identity_matches_mac_bundle_identity(self):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
@@ -366,19 +372,25 @@ class AppCatalogTests(unittest.TestCase):
 
         with _platform_catalog("darwin"):
             self.assertEqual(
-                config.get_profile_for_app(cfg, "org.mozilla.firefox"),
+                config.get_profile_for_app_identity(cfg, ("org.mozilla.firefox",)),
                 "firefox",
             )
             self.assertEqual(
-                config.get_profile_for_app(cfg, "com.todesktop.230313mzl4w4u92"),
+                config.get_profile_for_app_identity(
+                    cfg,
+                    ("com.todesktop.230313mzl4w4u92",),
+                ),
                 "cursor",
             )
             self.assertEqual(
-                config.get_profile_for_app(cfg, "com.microsoft.VSCodeInsiders"),
+                config.get_profile_for_app_identity(
+                    cfg,
+                    ("com.microsoft.VSCodeInsiders",),
+                ),
                 "code",
             )
 
-    def test_get_profile_for_app_matches_mac_app_path_to_runtime_bundle_id(self):
+    def test_get_profile_for_app_identity_matches_mac_app_path_to_runtime_bundle_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             app_path = os.path.join(tmp, "Windowed.app")
             contents = os.path.join(app_path, "Contents")
@@ -398,11 +410,14 @@ class AppCatalogTests(unittest.TestCase):
                 patch.object(app_catalog, "get_app_catalog", return_value=[]),
             ):
                 self.assertEqual(
-                    config.get_profile_for_app(cfg, "com.example.Windowed"),
+                    config.get_profile_for_app_identity(
+                        cfg,
+                        ("com.example.Windowed",),
+                    ),
                     "windowed",
                 )
 
-    def test_get_profile_for_app_prefers_specific_nested_identity(self):
+    def test_get_profile_for_app_identity_prefers_specific_nested_identity(self):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
@@ -412,11 +427,11 @@ class AppCatalogTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            config.get_profile_for_app(cfg, ("InnerTool", "OuterHost")),
+            config.get_profile_for_app_identity(cfg, ("InnerTool", "OuterHost")),
             "inner",
         )
 
-    def test_get_profile_for_app_falls_back_to_outer_nested_identity(self):
+    def test_get_profile_for_app_identity_falls_back_to_outer_nested_identity(self):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
@@ -425,7 +440,7 @@ class AppCatalogTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            config.get_profile_for_app(cfg, ("InnerTool", "OuterHost")),
+            config.get_profile_for_app_identity(cfg, ("InnerTool", "OuterHost")),
             "outer",
         )
 
@@ -453,7 +468,7 @@ class AppCatalogTests(unittest.TestCase):
         self.assertEqual(resolved["id"], "WindowsTerminal.exe")
         self.assertEqual(resolved["label"], "Windows Terminal")
 
-    def test_get_profile_for_app_matches_windows_full_path(self):
+    def test_get_profile_for_app_identity_matches_windows_full_path(self):
         cfg = {
             "app_overrides": {},
             "profiles": {
@@ -475,9 +490,11 @@ class AppCatalogTests(unittest.TestCase):
             },
         ):
             self.assertEqual(
-                config.get_profile_for_app(
+                config.get_profile_for_app_identity(
                     cfg,
-                    r"C:\\Users\\luca\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe",
+                    (
+                        r"C:\\Users\\luca\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe",
+                    ),
                 ),
                 "terminal",
             )
