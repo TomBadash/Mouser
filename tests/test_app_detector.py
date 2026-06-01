@@ -1,10 +1,23 @@
 import importlib
 import os
+import plistlib
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from core import app_detector
+with (
+    patch.object(sys, "platform", "linux"),
+    patch.dict(
+        os.environ,
+        {
+            "XDG_SESSION_TYPE": "x11",
+            "XDG_CURRENT_DESKTOP": "KDE",
+        },
+        clear=False,
+    ),
+):
+    from core import app_detector
 
 
 class AppDetectorLinuxTests(unittest.TestCase):
@@ -21,7 +34,6 @@ class AppDetectorLinuxTests(unittest.TestCase):
             ),
         ):
             importlib.reload(app_detector)
-        self.addCleanup(importlib.reload, app_detector)
         return app_detector
 
     def test_kde_wayland_prefers_kdotool(self):
@@ -57,6 +69,56 @@ class AppDetectorLinuxTests(unittest.TestCase):
         with patch.object(module, "_get_foreground_xdotool", return_value="/tmp/x11-app") as xdotool:
             self.assertEqual(module.get_foreground_exe(), "/tmp/x11-app")
             xdotool.assert_called_once_with()
+
+
+class AppDetectorMacOSTests(unittest.TestCase):
+    def _write_bundle_info(self, app_path: str, bundle_id: str):
+        info_dir = os.path.join(app_path, "Contents")
+        os.makedirs(info_dir, exist_ok=True)
+        with open(os.path.join(info_dir, "Info.plist"), "wb") as f:
+            plistlib.dump({"CFBundleIdentifier": bundle_id}, f)
+
+    def test_nested_helper_bundle_resolves_to_outer_app_identity(self):
+        class FakeURL:
+            def __init__(self, path):
+                self._path = path
+
+            def path(self):
+                return self._path
+
+        class FakeRunningApplication:
+            def __init__(self, bundle_path):
+                self._bundle_path = bundle_path
+
+            def bundleURL(self):
+                return FakeURL(self._bundle_path)
+
+            def bundleIdentifier(self):
+                return "com.example.Editor.helper"
+
+            def executableURL(self):
+                return None
+
+            def localizedName(self):
+                return "Editor Helper"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outer_app = os.path.join(tmp, "Editor.app")
+            helper_app = os.path.join(
+                outer_app,
+                "Contents",
+                "Frameworks",
+                "Editor Helper.app",
+            )
+            self._write_bundle_info(outer_app, "com.example.Editor")
+            self._write_bundle_info(helper_app, "com.example.Editor.helper")
+
+            self.assertEqual(
+                app_detector._macos_running_app_identity(
+                    FakeRunningApplication(helper_app)
+                ),
+                "com.example.Editor",
+            )
 
 
 if __name__ == "__main__":

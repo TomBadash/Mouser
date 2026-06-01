@@ -244,15 +244,24 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
+def _app_identity_aliases(spec: str):
+    if not spec:
+        return set()
+    entry = resolve_app_for_config(spec)
+    if not entry:
+        return {spec.casefold()}
+    aliases = [entry.get("id", ""), *entry.get("aliases", [])]
+    return {alias.casefold() for alias in aliases if alias}
+
+
 def get_profile_for_app(cfg, exe_name):
     """Return the profile name that matches the given executable, or 'default'."""
     if not exe_name:
         return "default"
-    entry = resolve_app_for_config(exe_name)
-    aliases = {a.lower() for a in ([entry["id"]] + entry.get("aliases", []))} if entry else {exe_name.lower()}
+    aliases = _app_identity_aliases(exe_name)
     for pname, pdata in cfg.get("profiles", {}).items():
         for app in pdata.get("apps", []):
-            if app.lower() in aliases:
+            if aliases & _app_identity_aliases(app):
                 return pname
     return "default"
 

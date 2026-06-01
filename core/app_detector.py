@@ -5,10 +5,85 @@ Windows: GetForegroundWindow + QueryFullProcessImageNameW (with UWP resolution).
 macOS:   NSWorkspace.sharedWorkspace().frontmostApplication().
 """
 
+import functools
 import os
+import plistlib
 import sys
 import threading
 import time
+
+
+def _path_from_nsurl(url) -> str | None:
+    if url is None:
+        return None
+    try:
+        path_attr = getattr(url, "path", None)
+        path = path_attr() if callable(path_attr) else path_attr
+        return str(path) if path else None
+    except Exception:
+        return None
+
+
+def _call_ns_method(obj, name: str):
+    try:
+        attr = getattr(obj, name, None)
+        return attr() if callable(attr) else attr
+    except Exception:
+        return None
+
+
+def _outer_macos_app_bundle(path: str | None) -> str | None:
+    """Return the outermost .app bundle for a path inside a macOS app."""
+    if not path:
+        return None
+
+    normalized = os.path.abspath(path)
+    parts = normalized.split(os.sep)
+    for idx, part in enumerate(parts):
+        if part.endswith(".app"):
+            if normalized.startswith(os.sep):
+                return os.path.join(os.sep, *parts[1:idx + 1])
+            return os.path.join(*parts[:idx + 1])
+    return normalized if normalized.endswith(".app") else None
+
+
+@functools.lru_cache(maxsize=256)
+def _read_macos_bundle_identifier(app_path: str | None) -> str | None:
+    if not app_path:
+        return None
+    info_path = os.path.join(app_path, "Contents", "Info.plist")
+    try:
+        with open(info_path, "rb") as f:
+            info = plistlib.load(f)
+        ident = info.get("CFBundleIdentifier")
+        return str(ident) if ident else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _macos_running_app_identity(app) -> str | None:
+    """Return the profile-matching identity for an NSRunningApplication."""
+    bundle_path = _path_from_nsurl(_call_ns_method(app, "bundleURL"))
+    outer_bundle_path = _outer_macos_app_bundle(bundle_path)
+    outer_ident = _read_macos_bundle_identifier(outer_bundle_path)
+    if outer_ident:
+        return outer_ident
+
+    ident = _call_ns_method(app, "bundleIdentifier")
+    if ident:
+        return str(ident)
+
+    executable_path = _path_from_nsurl(_call_ns_method(app, "executableURL"))
+    outer_executable_bundle = _outer_macos_app_bundle(executable_path)
+    outer_executable_ident = _read_macos_bundle_identifier(outer_executable_bundle)
+    if outer_executable_ident:
+        return outer_executable_ident
+    if outer_executable_bundle:
+        return outer_executable_bundle
+    if executable_path:
+        return os.path.basename(executable_path)
+    localized_name = _call_ns_method(app, "localizedName")
+    return str(localized_name) if localized_name else None
 
 
 # ==================================================================
@@ -164,8 +239,6 @@ if sys.platform == "win32":
         return exe_path
 
 elif sys.platform == "darwin":
-    import functools
-
     try:
         import objc as _objc
     except ImportError as exc:
@@ -189,13 +262,7 @@ elif sys.platform == "darwin":
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
                 return None
-            ident = app.bundleIdentifier()
-            if ident:
-                return ident
-            url = app.executableURL()
-            if url:
-                return os.path.basename(url.path())
-            return app.localizedName()
+            return _macos_running_app_identity(app)
         except Exception:
             return None
 

@@ -1,6 +1,7 @@
 import json
 import ntpath
 import os
+import plistlib
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -376,6 +377,30 @@ class AppCatalogTests(unittest.TestCase):
                 config.get_profile_for_app(cfg, "com.microsoft.VSCodeInsiders"),
                 "code",
             )
+
+    def test_get_profile_for_app_matches_mac_app_path_to_runtime_bundle_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path = os.path.join(tmp, "Windowed.app")
+            contents = os.path.join(app_path, "Contents")
+            os.makedirs(contents)
+            with open(os.path.join(contents, "Info.plist"), "wb") as f:
+                plistlib.dump({"CFBundleIdentifier": "com.example.Windowed"}, f)
+
+            cfg = {
+                "profiles": {
+                    "default": {"apps": []},
+                    "windowed": {"apps": [app_path]},
+                }
+            }
+
+            with (
+                _platform_catalog("darwin"),
+                patch.object(app_catalog, "get_app_catalog", return_value=[]),
+            ):
+                self.assertEqual(
+                    config.get_profile_for_app(cfg, "com.example.Windowed"),
+                    "windowed",
+                )
 
     def test_resolve_app_spec_for_windows_exe_path_uses_curated_label(self):
         app_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
