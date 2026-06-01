@@ -42,7 +42,6 @@ class AppDetectorLinuxTests(unittest.TestCase):
             patch.object(module, "_get_foreground_xdotool", return_value="/tmp/x11-app") as xdotool,
         ):
             self.assertEqual(module.get_foreground_app_identity(), ("/tmp/kde-app",))
-            self.assertEqual(module.get_foreground_exe(), "/tmp/kde-app")
             xdotool.assert_not_called()
 
     def test_kde_wayland_falls_back_to_xdotool(self):
@@ -55,19 +54,11 @@ class AppDetectorLinuxTests(unittest.TestCase):
             self.assertEqual(module.get_foreground_app_identity(), ("/tmp/xwayland-app",))
             xdotool.assert_called_once_with()
 
-        with (
-            patch.object(module, "_get_foreground_kdotool", return_value=None),
-            patch.object(module, "_get_foreground_xdotool", return_value="/tmp/xwayland-app") as xdotool,
-        ):
-            self.assertEqual(module.get_foreground_exe(), "/tmp/xwayland-app")
-            xdotool.assert_called_once_with()
-
     def test_non_kde_wayland_returns_none(self):
         module = self._reload_for_linux("wayland", "GNOME")
 
         with patch.object(module, "_get_foreground_xdotool", return_value="/tmp/x11-app") as xdotool:
             self.assertEqual(module.get_foreground_app_identity(), ())
-            self.assertIsNone(module.get_foreground_exe())
             xdotool.assert_not_called()
 
     def test_x11_uses_xdotool(self):
@@ -75,10 +66,6 @@ class AppDetectorLinuxTests(unittest.TestCase):
 
         with patch.object(module, "_get_foreground_xdotool", return_value="/tmp/x11-app") as xdotool:
             self.assertEqual(module.get_foreground_app_identity(), ("/tmp/x11-app",))
-            xdotool.assert_called_once_with()
-
-        with patch.object(module, "_get_foreground_xdotool", return_value="/tmp/x11-app") as xdotool:
-            self.assertEqual(module.get_foreground_exe(), "/tmp/x11-app")
             xdotool.assert_called_once_with()
 
 

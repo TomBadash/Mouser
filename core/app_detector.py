@@ -238,7 +238,7 @@ if sys.platform == "win32":
         user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
-    def _get_foreground_app_identity() -> tuple[str, ...]:
+    def get_foreground_app_identity() -> tuple[str, ...]:
         """Return the foreground app path on Windows, or an empty tuple."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
@@ -285,7 +285,7 @@ elif sys.platform == "darwin":
         return wrapper
 
     @_autoreleased
-    def _get_foreground_app_identity() -> tuple[str, ...]:
+    def get_foreground_app_identity() -> tuple[str, ...]:
         """Return stable frontmost app identities on macOS."""
         try:
             from AppKit import NSWorkspace
@@ -334,7 +334,7 @@ elif sys.platform == "linux":
             pass
         return None
 
-    def _get_foreground_app_identity() -> tuple[str, ...]:
+    def get_foreground_app_identity() -> tuple[str, ...]:
         """Return the foreground app executable path on Linux."""
         if _WAYLAND:
             if _KDE:
@@ -351,27 +351,8 @@ elif sys.platform == "linux":
         return _single_identity(exe)
 
 else:
-    def _get_foreground_app_identity() -> tuple[str, ...]:
+    def get_foreground_app_identity() -> tuple[str, ...]:
         return ()
-
-
-def get_foreground_app_identity() -> tuple[str, ...]:
-    """
-    Return the foreground app identity used for profile matching.
-
-    An empty tuple means no foreground app could be resolved. Most platforms
-    return a single-item tuple. macOS may return an ordered tuple, from the
-    most-specific nested app identity to broader host app identities, so
-    embedded app windows can match their own profile first and fall back to the
-    host app profile.
-    """
-    return _get_foreground_app_identity()
-
-
-def get_foreground_exe() -> str | None:
-    """Compatibility wrapper for callers/tests using the historical name."""
-    identities = get_foreground_app_identity()
-    return identities[0] if identities else None
 
 
 class AppDetector:
