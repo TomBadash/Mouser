@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-AppIdentity = str | tuple[str, ...]
+AppIdentity = tuple[str, ...]
 
 
 def _path_from_nsurl(url) -> str | None:
@@ -236,24 +236,24 @@ if sys.platform == "win32":
         user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
-    def _get_foreground_app_identity() -> str | None:
-        """Return the foreground app path on Windows, or None."""
+    def _get_foreground_app_identity() -> AppIdentity:
+        """Return the foreground app path on Windows, or an empty tuple."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return None
+            return ()
         pid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == 0:
-            return None
+            return ()
         exe_path = _path_from_pid(pid.value)
         if not exe_path:
-            return None
+            return ()
         exe_lower = os.path.basename(exe_path).lower()
         if exe_lower == "applicationframehost.exe":
             real = _resolve_uwp_child(hwnd)
-            # If we can't resolve the real app (e.g. fullscreen UWP),
-            # return None so the detector keeps the last known profile.
-            return real
+            # If we can't resolve the real app (e.g. fullscreen UWP), return
+            # an empty tuple so the detector keeps the last known profile.
+            return (real,) if real else ()
         if exe_lower == "explorer.exe":
             wc = _get_window_class(hwnd)
             if wc not in _EXPLORER_CLASSES:
@@ -261,10 +261,10 @@ if sys.platform == "win32":
                 print(f"[AppDetect] FG: explorer.exe class={wc} title='{title}'")
                 real = _resolve_uwp_child(hwnd)
                 if real:
-                    return real
+                    return (real,)
                 real = _find_uwp_app_global()
-                return real  # None keeps last profile
-        return exe_path
+                return (real,) if real else ()
+        return (exe_path,)
 
 elif sys.platform == "darwin":
     try:
@@ -283,17 +283,16 @@ elif sys.platform == "darwin":
         return wrapper
 
     @_autoreleased
-    def _get_foreground_app_identity() -> tuple[str, ...] | None:
+    def _get_foreground_app_identity() -> AppIdentity:
         """Return stable frontmost app identities on macOS."""
         try:
             from AppKit import NSWorkspace
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
-                return None
-            identities = _macos_running_app_identities(app)
-            return identities or None
+                return ()
+            return _macos_running_app_identities(app)
         except Exception:
-            return None
+            return ()
 
 elif sys.platform == "linux":
     import subprocess as _subprocess
@@ -333,40 +332,44 @@ elif sys.platform == "linux":
             pass
         return None
 
-    def _get_foreground_app_identity() -> str | None:
+    def _get_foreground_app_identity() -> AppIdentity:
         """Return the foreground app executable path on Linux."""
         if _WAYLAND:
             if _KDE:
                 exe = _get_foreground_kdotool()
                 if exe:
-                    return exe
+                    return (exe,)
                 # Fall back to xdotool so XWayland apps still work when
                 # kdotool is unavailable or cannot resolve the active window.
-                return _get_foreground_xdotool()
+                exe = _get_foreground_xdotool()
+                return (exe,) if exe else ()
             # GNOME / other Wayland compositors: not yet supported
-            return None
-        return _get_foreground_xdotool()
+            return ()
+        exe = _get_foreground_xdotool()
+        return (exe,) if exe else ()
 
 else:
-    def _get_foreground_app_identity() -> str | None:
-        return None
+    def _get_foreground_app_identity() -> AppIdentity:
+        return ()
 
 
-def get_foreground_app_identity() -> AppIdentity | None:
+def get_foreground_app_identity() -> AppIdentity:
     """
     Return the foreground app identity used for profile matching.
 
-    Most platforms return one stable identifier. macOS may return an ordered
-    tuple, from the most-specific nested app identity to broader host app
-    identities, so embedded app windows can match their own profile first and
-    fall back to the host app profile.
+    An empty tuple means no foreground app could be resolved. Most platforms
+    return a single-item tuple. macOS may return an ordered tuple, from the
+    most-specific nested app identity to broader host app identities, so
+    embedded app windows can match their own profile first and fall back to the
+    host app profile.
     """
     return _get_foreground_app_identity()
 
 
-def get_foreground_exe() -> AppIdentity | None:
+def get_foreground_exe() -> str | None:
     """Compatibility wrapper for callers/tests using the historical name."""
-    return get_foreground_app_identity()
+    identities = get_foreground_app_identity()
+    return identities[0] if identities else None
 
 
 class AppDetector:
@@ -378,7 +381,7 @@ class AppDetector:
     def __init__(self, on_change, interval: float = 0.3):
         self._on_change = on_change
         self._interval = interval
-        self._last_app_identity_key: tuple[str | None, ...] | None = None
+        self._last_app_identity: AppIdentity | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -399,13 +402,8 @@ class AppDetector:
         while not self._stop.is_set():
             try:
                 app_identity = get_foreground_app_identity()
-                key = (
-                    tuple(app_identity)
-                    if isinstance(app_identity, (list, tuple))
-                    else (app_identity,)
-                )
-                if app_identity and key != self._last_app_identity_key:
-                    self._last_app_identity_key = key
+                if app_identity and app_identity != self._last_app_identity:
+                    self._last_app_identity = app_identity
                     self._on_change(app_identity)
             except Exception:
                 pass

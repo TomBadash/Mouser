@@ -406,13 +406,13 @@ class AppCatalogTests(unittest.TestCase):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
-                "outer": {"apps": ["START"]},
-                "inner": {"apps": ["STGame"]},
+                "outer": {"apps": ["OuterHost"]},
+                "inner": {"apps": ["InnerTool"]},
             }
         }
 
         self.assertEqual(
-            config.get_profile_for_app(cfg, ("STGame", "START")),
+            config.get_profile_for_app(cfg, ("InnerTool", "OuterHost")),
             "inner",
         )
 
@@ -420,12 +420,12 @@ class AppCatalogTests(unittest.TestCase):
         cfg = {
             "profiles": {
                 "default": {"apps": []},
-                "outer": {"apps": ["START"]},
+                "outer": {"apps": ["OuterHost"]},
             }
         }
 
         self.assertEqual(
-            config.get_profile_for_app(cfg, ("STGame", "START")),
+            config.get_profile_for_app(cfg, ("InnerTool", "OuterHost")),
             "outer",
         )
 

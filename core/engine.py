@@ -385,10 +385,7 @@ class Engine:
         target = get_profile_for_app_identity(self.cfg, app_identity)
         if target == self._current_profile:
             return
-        if isinstance(app_identity, (list, tuple)):
-            app_label = app_identity[0] if app_identity else ""
-        else:
-            app_label = app_identity
+        app_label = app_identity[0] if app_identity else ""
         print(f"[Engine] App changed to {app_label} -> profile '{target}'")
         self._switch_profile(target)
 

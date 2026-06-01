@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import quote
 from core import app_catalog
 
-AppIdentity = str | list[str] | tuple[str, ...]
+AppIdentity = tuple[str, ...]
 
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
@@ -246,7 +246,7 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
-def _identity_specs(app_identity: AppIdentity | None) -> list[str]:
+def _identity_specs(app_identity: AppIdentity | str | list[str] | None) -> list[str]:
     if not app_identity:
         return []
     if isinstance(app_identity, str):
@@ -281,8 +281,8 @@ def get_profile_for_app_identity(cfg, app_identity: AppIdentity | None) -> str:
     """
     Return the profile name that matches an app identity, or 'default'.
 
-    ``app_identity`` may be a single identifier/path or an ordered list of
-    identifiers. Ordered identities are matched most-specific first, allowing a
+    ``app_identity`` is an ordered tuple of identifiers. Identifiers are matched
+    most-specific first, allowing a
     nested app profile to win before falling back to its host app profile.
     """
     identities = _identity_specs(app_identity)
