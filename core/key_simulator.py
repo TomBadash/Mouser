@@ -459,6 +459,11 @@ if sys.platform == "win32":
             "keys": [VK_CONTROL, VK_LWIN, VK_RIGHT],
             "category": "Navigation",
         },
+        "cycle_desktops": {
+            "label": "Cycle Desktops",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Navigation",
+        },
         "volume_up": {
             "label": "Volume Up",
             "keys": [VK_VOLUME_UP],
@@ -1049,6 +1054,11 @@ elif sys.platform == "darwin":
             "keys": _MAC_ACTION_FALLBACKS["space_right"],
             "category": "Navigation",
         },
+        "cycle_desktops": {
+            "label": "Cycle Desktops",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Navigation",
+        },
         "show_desktop": {
             "label": "Show Desktop",
             "keys": _MAC_ACTION_FALLBACKS["show_desktop"],
@@ -1492,6 +1502,11 @@ elif sys.platform == "linux":
         "space_right": {
             "label": "Next Desktop",
             "keys": _linux_workspace_keys("right"),
+            "category": "Navigation",
+        },
+        "cycle_desktops": {
+            "label": "Cycle Desktops",
+            "keys": [],               # handled by Engine, not key_simulator
             "category": "Navigation",
         },
         "volume_up": {

@@ -190,6 +190,8 @@ class Engine:
                         self._switch_scroll_mode()
                     elif action_id == "cycle_dpi":
                         self._cycle_dpi()
+                    elif action_id == "cycle_desktops":
+                        self._cycle_desktops()
                     else:
                         execute_action(action_id)
             except Exception as exc:
@@ -332,6 +334,15 @@ class Engine:
             def _write():
                 hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
+
+    def _cycle_desktops(self):
+        """Cycle to the next desktop.
+
+        Delegates to the platform-specific 'space_right' action.
+        On macOS, the system automatically wraps around to the first
+        desktop after the last one, so no state tracking is needed.
+        """
+        execute_action("space_right")
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
