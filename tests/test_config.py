@@ -102,6 +102,37 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertNotIn("start_with_windows", migrated["settings"])
 
+    def test_default_hscroll_threshold_supports_fractional_mac_deltas(self):
+        self.assertEqual(config.DEFAULT_CONFIG["settings"]["hscroll_threshold"], 0.1)
+
+    def test_load_config_preserves_integer_hscroll_threshold(self):
+        partial = {
+            "version": 9,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {},
+                }
+            },
+            "settings": {
+                "hscroll_threshold": 1,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "config.json"
+            config_file.write_text(json.dumps(partial), encoding="utf-8")
+
+            with (
+                patch.object(config, "CONFIG_DIR", temp_dir),
+                patch.object(config, "CONFIG_FILE", str(config_file)),
+            ):
+                loaded = config.load_config()
+
+        self.assertEqual(loaded["settings"]["hscroll_threshold"], 1)
+
     def test_load_config_merges_missing_defaults_from_disk(self):
         partial = {
             "version": 3,

@@ -93,11 +93,12 @@ class _RecordedThread:
 
 
 class EngineHorizontalScrollTests(unittest.TestCase):
-    def _make_engine(self):
+    def _make_engine(self, hscroll_threshold=1):
         from core.engine import Engine
 
         cfg = copy.deepcopy(DEFAULT_CONFIG)
-        cfg["settings"]["hscroll_threshold"] = 1
+        if hscroll_threshold is not None:
+            cfg["settings"]["hscroll_threshold"] = hscroll_threshold
 
         with (
             patch("core.engine.MouseHook", _FakeMouseHook),
@@ -148,6 +149,19 @@ class EngineHorizontalScrollTests(unittest.TestCase):
                 event_type=MouseEvent.HSCROLL_RIGHT,
                 raw_data=0.30,
                 timestamp=2.04,
+            ))
+
+        self.assertEqual(execute_action_mock.call_count, 1)
+
+    def test_default_hscroll_threshold_handles_m720_fractional_delta(self):
+        engine = self._make_engine(hscroll_threshold=None)
+        handler = engine._make_hscroll_handler("space_right")
+
+        with patch("core.engine.execute_action") as execute_action_mock:
+            handler(SimpleNamespace(
+                event_type=MouseEvent.HSCROLL_RIGHT,
+                raw_data=0.100006103515625,
+                timestamp=3.00,
             ))
 
         self.assertEqual(execute_action_mock.call_count, 1)
