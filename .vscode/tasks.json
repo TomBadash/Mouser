@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Mouser and Install",
+      "type": "shell",
+      "windows": {
+        "command": "python",
+        "args": ["${workspaceFolder}/scripts/build_and_install.py"]
+      },
+      "osx": {
+        "command": "python3",
+        "args": ["${workspaceFolder}/scripts/build_and_install.py"]
+      },
+      "linux": {
+        "command": "python3",
+        "args": ["${workspaceFolder}/scripts/build_and_install.py"]
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

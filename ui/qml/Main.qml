@@ -247,15 +247,20 @@ ApplicationWindow {
             }
         }
 
-        StackLayout {
-            id: contentStack
+        Item {
+            id: pageHost
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.currentPage
 
-            MousePage {}
+            MousePage {
+                anchors.fill: parent
+                visible: root.currentPage === 0
+            }
+
             Loader {
+                anchors.fill: parent
                 active: root.currentPage === 1 || item
+                visible: root.currentPage === 1
                 source: "ScrollPage.qml"
             }
         }
@@ -376,6 +381,10 @@ ApplicationWindow {
                     color: closeAboutMouse.containsMouse
                            ? Qt.rgba(1, 1, 1, uiState.darkMode ? 0.08 : 0.65)
                            : "transparent"
+
+                    Accessible.role: Accessible.Button
+                    Accessible.name: lm.strings["dialog.close"] || "Close"
+                    Accessible.onPressAction: aboutDialog.close()
 
                     AppIcon {
                         anchors.centerIn: parent

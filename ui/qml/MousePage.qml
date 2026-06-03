@@ -698,18 +698,21 @@ Item {
         // ── Right panel: mouse image + hotspots + picker ─────
         // ══════════════════════════════════════════════════════
         ScrollView {
+            id: mousePageScroll
             width: parent.width - leftPanel.width
             height: parent.height
-            contentWidth: availableWidth
             clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            contentWidth: availableWidth
 
             Flickable {
+                contentWidth: mousePageScroll.availableWidth
                 contentHeight: rightCol.implicitHeight + 32
                 boundsBehavior: Flickable.StopAtBounds
 
                 Column {
                     id: rightCol
-                    width: parent.width
+                    width: mousePageScroll.availableWidth
                     spacing: 0
 
                     // ── Header ────────────────────────────────
