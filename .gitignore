@@ -13,7 +13,6 @@ build/
 *.egg
 
 # IDE
-.vscode/
 .idea/
 .cursor/
 *.swp
@@ -36,6 +35,9 @@ Desktop.ini
 
 # Build artifacts
 build_icon.py
+
+# Local diagnostics (machine-specific install paths)
+tools/probe_frozen_qml.py
 
 # Shortcuts (user-specific paths)
 *.lnk
