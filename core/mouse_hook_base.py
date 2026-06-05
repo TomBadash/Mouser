@@ -29,6 +29,9 @@ class BaseMouseHook:
         self._connection_change_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
+        # Logitech Craft top-row keys to divert: {cid: button_key}. Populated by
+        # the engine from the active config; only mapped keys are diverted.
+        self.divert_craft_keys = {}
         self._gesture_direction_enabled = False
         self._gesture_threshold = 50.0
         self._gesture_deadzone = 40.0
@@ -259,7 +262,18 @@ class BaseMouseHook:
                 "on_down": self._on_hid_dpi_switch_down,
                 "on_up": self._on_hid_dpi_switch_up,
             }
+        for cid, button_key in self.divert_craft_keys.items():
+            extra[cid] = {
+                "on_down": self._make_craft_key_handler(button_key),
+            }
         return extra
+
+    def _make_craft_key_handler(self, button_key):
+        return lambda: self._on_hid_craft_key(button_key)
+
+    def _on_hid_craft_key(self, button_key):
+        # Single-fire on press; the button key doubles as the MouseEvent type.
+        self._dispatch(MouseEvent(button_key))
 
     def _start_hid_listener(self):
         platform_module = getattr(self.__class__, "_platform_module", None)
@@ -273,6 +287,7 @@ class BaseMouseHook:
             on_connect=self._on_hid_connect,
             on_disconnect=self._on_hid_disconnect,
             extra_diverts=self._build_extra_diverts(),
+            on_crown=self._on_hid_crown,
         )
         self._hid_gesture = listener
         if not listener.start():
@@ -283,6 +298,13 @@ class BaseMouseHook:
         if self._hid_gesture:
             self._hid_gesture.stop()
             self._hid_gesture = None
+
+    def refresh_diverts(self):
+        """Push the current extra-divert set (mode shift, Craft keys, …) to a
+        running HID listener so a UI mapping change takes effect live."""
+        listener = self._hid_gesture
+        if listener is not None and hasattr(listener, "update_extra_diverts"):
+            listener.update_extra_diverts(self._build_extra_diverts())
 
     def _on_hid_connect(self):
         self._connected_device = (
@@ -302,6 +324,11 @@ class BaseMouseHook:
 
     def _on_hid_gesture_move(self, dx, dy):
         self._accumulate_gesture_delta(dx, dy, "hid_rawxy")
+
+    def _on_hid_crown(self, button_key):
+        # The crown emits the config button key directly ("crown_left",
+        # "crown_right", "crown_tap"), which doubles as the MouseEvent type.
+        self._dispatch(MouseEvent(button_key))
 
     def _on_hid_mode_shift_down(self):
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))

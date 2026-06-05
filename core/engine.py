@@ -15,6 +15,7 @@ from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
+from core.logi_device_catalog import CRAFT_KEY_CIDS
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
 from core.linux_permissions import (
@@ -139,6 +140,18 @@ class Engine:
             )
         )
 
+        # Divert Logitech Craft top-row keys only when remapped in some profile;
+        # un-mapped keys are left alone so their native function still works.
+        craft_keys = {}
+        for button_key, cid in CRAFT_KEY_CIDS.items():
+            if any(
+                pdata.get("mappings", {}).get(button_key, "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            ):
+                craft_keys[cid] = button_key
+        if hasattr(self.hook, "divert_craft_keys"):
+            self.hook.divert_craft_keys = craft_keys
+
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
@@ -169,6 +182,11 @@ class Engine:
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id))
 
+        # Push divert-set changes (e.g. a newly mapped Craft key) to a running
+        # HID listener so they take effect without a reconnect.
+        if hasattr(self.hook, "refresh_diverts"):
+            self.hook.refresh_diverts()
+
     def _make_handler(self, action_id):
         def handler(event):
             try:
@@ -190,6 +208,8 @@ class Engine:
                         self._switch_scroll_mode()
                     elif action_id == "cycle_dpi":
                         self._cycle_dpi()
+                    elif action_id == "toggle_crown_smooth":
+                        self._toggle_crown_smooth()
                     else:
                         execute_action(action_id)
             except Exception as exc:
@@ -300,6 +320,13 @@ class Engine:
             threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
 
     _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    def _toggle_crown_smooth(self):
+        """Flip the Craft crown feel between ratchet and smooth."""
+        current = bool(self.cfg.get("settings", {}).get("crown_smooth", False))
+        self.set_crown_smooth(not current)
+        print(f"[Engine] toggle_crown_smooth -> "
+              f"{'smooth' if not current else 'ratchet'}")
 
     def _cycle_dpi(self):
         """Cycle through user-configured DPI presets.
@@ -515,6 +542,11 @@ class Engine:
                         self._smart_shift_read_cb(saved_ss_state)
                     except Exception:
                         pass
+
+        # Restore the Craft crown feel (ratchet/smooth) on connect/reconnect.
+        if hasattr(hg, "set_crown_smooth"):
+            hg.set_crown_smooth(
+                bool(self.cfg.get("settings", {}).get("crown_smooth", False)))
 
         time.sleep(3)
         hg = self.hook._hid_gesture
@@ -751,6 +783,21 @@ class Engine:
     def smart_shift_supported(self):
         hg = self.hook._hid_gesture
         return hg.smart_shift_supported if hg else False
+
+    def set_crown_smooth(self, smooth):
+        """Set the Craft crown feel (True=smooth, False=ratchet) and persist it."""
+        self.cfg.setdefault("settings", {})["crown_smooth"] = bool(smooth)
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg and hasattr(hg, "set_crown_smooth"):
+            hg.set_crown_smooth(bool(smooth))
+            return True
+        return False
+
+    @property
+    def crown_supported(self):
+        hg = self.hook._hid_gesture
+        return bool(getattr(hg, "_crown_idx", None)) if hg else False
 
     def reload_mappings(self):
         """

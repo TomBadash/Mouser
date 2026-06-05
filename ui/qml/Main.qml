@@ -96,6 +96,7 @@ ApplicationWindow {
                     Repeater {
                         model: [
                             { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+                            { icon: "keyboard-simple", tipKey: "nav.keyboard", page: 2 },
                             { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
                         ]
 
@@ -253,11 +254,12 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: root.currentPage
 
-            MousePage {}
-            Loader {
+            MousePage { deviceFilter: "mouse" }      // index 0
+            Loader {                                  // index 1
                 active: root.currentPage === 1 || item
                 source: "ScrollPage.qml"
             }
+            MousePage { deviceFilter: "keyboard" }    // index 2 — keyboards
         }
     }
 

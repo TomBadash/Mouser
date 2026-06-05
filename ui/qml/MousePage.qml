@@ -13,6 +13,15 @@ Item {
     id: mousePage
     readonly property var theme: Theme.palette(uiState.darkMode)
     property string pendingDeleteProfile: ""
+
+    // Which device class this page instance shows ("mouse" or "keyboard").
+    // The same page component backs both the Mouse and Keyboard navbar entries.
+    property string deviceFilter: "mouse"
+    // True only when a device of this page's class is connected, so the Mouse
+    // page ignores a connected keyboard and vice-versa.
+    readonly property bool deviceConnectedHere:
+        backend.mouseConnected
+        && (deviceFilter === "" || backend.deviceType === deviceFilter)
     // Reactive i18n shortcut — all s["key"] bindings update on lm.languageChanged
     property var s: lm.strings
 
@@ -731,7 +740,11 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: backend.deviceDisplayName
+                                        text: deviceConnectedHere
+                                              ? backend.deviceDisplayName
+                                              : (deviceFilter === "keyboard"
+                                                 ? (s["nav.keyboard"] || "Keyboard")
+                                                 : "Mouse")
                                         font { family: uiState.fontFamily; pixelSize: 20; bold: true }
                                         color: theme.textPrimary
                                     }
@@ -755,8 +768,10 @@ Item {
                                 }
 
                                 Text {
-                                    text: !backend.mouseConnected
-                                          ? s["mouse.turn_on_mouse"]
+                                    text: !deviceConnectedHere
+                                          ? (deviceFilter === "keyboard"
+                                             ? "Turn on your Logitech keyboard to start customizing keys"
+                                             : s["mouse.turn_on_mouse"])
                                           : backend.hasInteractiveDeviceLayout
                                             ? s["mouse.click_dot"]
                                             : s["mouse.choose_layout"]
@@ -819,7 +834,7 @@ Item {
 
                             // Battery badge
                             Rectangle {
-                                visible: backend.batteryLevel >= 0
+                                visible: deviceConnectedHere && backend.batteryLevel >= 0
                                 width: battRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -866,7 +881,7 @@ Item {
                                 width: statusRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
-                                color: backend.mouseConnected
+                                color: deviceConnectedHere
                                        ? Qt.rgba(0, 0.83, 0.67, 0.12)
                                        : Qt.rgba(0.9, 0.3, 0.3, 0.15)
 
@@ -877,18 +892,18 @@ Item {
 
                                     Rectangle {
                                         width: 7; height: 7; radius: 4
-                                        color: backend.mouseConnected
+                                        color: deviceConnectedHere
                                                ? theme.accent : "#e05555"
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
                                     Text {
-                                        text: backend.mouseConnected
+                                        text: deviceConnectedHere
                                               ? (s["mouse.connected"]
                                                  + (backend.connectionType !== ""
                                                     ? " · " + backend.connectionType : ""))
                                               : s["mouse.not_connected"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        color: backend.mouseConnected
+                                        color: deviceConnectedHere
                                                ? theme.accent : "#e05555"
                                     }
                                 }
@@ -896,7 +911,7 @@ Item {
 
                             // Layout picker pill
                             Rectangle {
-                                visible: backend.mouseConnected
+                                visible: deviceConnectedHere
                                 width: layoutPillRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -972,7 +987,10 @@ Item {
                     Item {
                         id: mouseImageArea
                         width: parent.width
-                        height: 420
+                        // Give keyboards (non-interactive control list) more
+                        // vertical room than the mouse-image diagram needs.
+                        height: (deviceConnectedHere
+                                 && !backend.hasInteractiveDeviceLayout) ? 600 : 420
 
                         Rectangle {
                             anchors.fill: parent
@@ -986,7 +1004,7 @@ Item {
                             width: backend.deviceImageWidth
                             height: backend.deviceImageHeight
                             anchors.centerIn: parent
-                            visible: backend.mouseConnected
+                            visible: deviceConnectedHere
                             smooth: true
                             mipmap: true
                             asynchronous: true
@@ -997,7 +1015,7 @@ Item {
                         }
 
                         Rectangle {
-                            visible: !backend.mouseConnected
+                            visible: !deviceConnectedHere
                             width: Math.min(parent.width - 120, 760)
                             height: emptyStateCol.implicitHeight + 52
                             radius: 24
@@ -1041,7 +1059,9 @@ Item {
 
                                 Text {
                                     width: parent.width
-                                    text: s["mouse.connect_mouse"]
+                                    text: deviceFilter === "keyboard"
+                                          ? "Connect your Logitech keyboard"
+                                          : s["mouse.connect_mouse"]
                                     wrapMode: Text.WordWrap
                                     font { family: uiState.fontFamily; pixelSize: 26; bold: true }
                                     color: theme.textPrimary
@@ -1049,7 +1069,9 @@ Item {
 
                                 Text {
                                     width: Math.min(parent.width, 680)
-                                    text: s["mouse.connect_mouse_desc"]
+                                    text: deviceFilter === "keyboard"
+                                          ? "Mouser will detect the active device, unlock key mapping, and show its controls as soon as the keyboard is available."
+                                          : s["mouse.connect_mouse_desc"]
                                     wrapMode: Text.WordWrap
                                     font { family: uiState.fontFamily; pixelSize: 13 }
                                     color: theme.textSecondary
@@ -1097,7 +1119,9 @@ Item {
                         }
 
                         Repeater {
-                            model: backend.deviceHotspots
+                            // Only show the interactive hotspot overlay for a
+                            // device of this page's class.
+                            model: deviceConnectedHere ? backend.deviceHotspots : []
 
                             delegate: HotspotDot {
                                 required property int index
@@ -1117,43 +1141,109 @@ Item {
                         }
 
                         Rectangle {
-                            visible: backend.mouseConnected && !backend.hasInteractiveDeviceLayout
-                            width: Math.min(420, parent.width - 48)
-                            height: fallbackCol.implicitHeight + 32
+                            visible: deviceConnectedHere && !backend.hasInteractiveDeviceLayout
+                            width: Math.min(460, parent.width - 48)
+                            // Bound to the image area; a long control list (e.g.
+                            // the Craft's crown + keys) scrolls inside the card
+                            // instead of overflowing onto the action picker.
+                            height: Math.min(76 + (backend.crownAvailable ? 36 : 0)
+                                             + backend.buttons.length * 44,
+                                             parent.height - 16)
                             radius: 16
                             color: theme.bgCard
                             border.width: 1
                             border.color: theme.border
                             anchors.centerIn: parent
 
-                            Column {
-                                id: fallbackCol
+                            Item {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 10
 
-                                Text {
-                                    text: s["mouse.interactive_layout_coming"]
-                                    width: parent.width
-                                    font { family: uiState.fontFamily; pixelSize: 15; bold: true }
-                                    color: theme.textPrimary
+                                Column {
+                                    id: fallbackHeader
+                                    anchors { top: parent.top; left: parent.left; right: parent.right }
+                                    spacing: 6
+
+                                    Text {
+                                        text: s["mouse.interactive_layout_coming"]
+                                        width: parent.width
+                                        font { family: uiState.fontFamily; pixelSize: 15; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: backend.deviceLayoutNote
+                                        width: parent.width
+                                        wrapMode: Text.WordWrap
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
+                                        visible: text !== ""
+                                    }
+
+                                    // Crown feel toggle (Craft keyboards only).
+                                    Row {
+                                        visible: backend.crownAvailable
+                                        spacing: 10
+                                        topPadding: 2
+
+                                        Text {
+                                            text: "Crown rotation"
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                            color: theme.textPrimary
+                                        }
+
+                                        Row {
+                                            spacing: 0
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            Repeater {
+                                                model: [{ lbl: "Ratchet", smooth: false },
+                                                        { lbl: "Smooth", smooth: true }]
+                                                delegate: Rectangle {
+                                                    required property var modelData
+                                                    width: 76; height: 26
+                                                    radius: 7
+                                                    color: backend.crownSmooth === modelData.smooth
+                                                           ? theme.accent : "transparent"
+                                                    border.width: 1
+                                                    border.color: backend.crownSmooth === modelData.smooth
+                                                                  ? theme.accent : theme.border
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: modelData.lbl
+                                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                        color: backend.crownSmooth === modelData.smooth
+                                                               ? theme.bgCard : theme.textSecondary
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: backend.setCrownSmooth(modelData.smooth)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
-                                Text {
-                                    text: backend.deviceLayoutNote
-                                    width: parent.width
-                                    wrapMode: Text.WordWrap
-                                    font { family: uiState.fontFamily; pixelSize: 12 }
-                                    color: theme.textSecondary
-                                    visible: text !== ""
-                                }
-
-                                // Clickable button list for devices without an interactive overlay
-                                Repeater {
+                                // Scrollable control list for devices without an
+                                // interactive overlay (keyboards, generic mice).
+                                ListView {
+                                    id: fallbackList
+                                    anchors {
+                                        top: fallbackHeader.bottom; topMargin: 10
+                                        left: parent.left; right: parent.right
+                                        bottom: parent.bottom
+                                    }
+                                    clip: true
+                                    spacing: 4
                                     model: backend.buttons
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
                                     delegate: Rectangle {
                                         required property var modelData
-                                        width: fallbackCol.width
+                                        width: fallbackList.width
                                         height: 40
                                         radius: 10
                                         color: selectedButton === modelData.key
@@ -1789,7 +1879,7 @@ Item {
 
                     // ── Device info share card (always visible when connected)
                     Rectangle {
-                        visible: backend.mouseConnected
+                        visible: deviceConnectedHere
                         width: parent.width - 56
                         anchors.horizontalCenter: parent.horizontalCenter
                         height: shareDevRow.implicitHeight + 24

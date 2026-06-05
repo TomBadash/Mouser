@@ -119,6 +119,7 @@ class LogiDeviceSpec:
     supported_buttons: tuple[str, ...] = DEFAULT_BUTTON_LAYOUT
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
+    device_type: str = "mouse"   # "mouse" or "keyboard"
 
     def matches(self, product_id=None, product_name=None) -> bool:
         if product_id is not None and int(product_id) in self.product_ids:
@@ -366,6 +367,7 @@ class ConnectedDeviceInfo:
     gesture_cids: tuple[int, ...] = DEFAULT_GESTURE_CIDS
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
+    device_type: str = "mouse"   # "mouse" or "keyboard"
     capability_inventory: DeviceCapabilityInventory = DeviceCapabilityInventory()
 
 
@@ -826,6 +828,7 @@ def build_connected_device_info(
             gesture_cids=resolved_gesture_cids,
             dpi_min=spec.dpi_min,
             dpi_max=spec.dpi_max,
+            device_type=spec.device_type,
             capability_inventory=inventory,
         )
 

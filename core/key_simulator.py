@@ -363,6 +363,83 @@ if sys.platform == "win32":
         "browser_forward": VK_RIGHT,
     }
 
+    # Screen brightness control. Windows has no brightness virtual-key, so this
+    # drives the WMI WmiMonitorBrightnessMethods provider (works on displays that
+    # expose it). A background worker coalesces rapid steps (e.g. a fast crown
+    # spin) into at most one PowerShell call per throttle window, always applying
+    # the latest target, so the listener thread never blocks.
+    import subprocess as _subprocess
+
+    class _BrightnessController:
+        _STEP = 5            # percent per action
+        _THROTTLE_S = 0.08   # min seconds between WMI writes
+
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._level = None        # last known/target level (0-100), lazy
+            self._dirty = threading.Event()
+            self._thread = None
+
+        @staticmethod
+        def _ps(command):
+            return _subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+        def _read_level(self):
+            try:
+                out = self._ps(
+                    "(Get-CimInstance -Namespace root/WMI -ClassName "
+                    "WmiMonitorBrightness).CurrentBrightness"
+                ).stdout.strip().splitlines()
+                return int(out[0]) if out else None
+            except Exception:
+                return None
+
+        def _apply(self, level):
+            try:
+                # CIM instance methods must be called via Invoke-CimMethod.
+                self._ps(
+                    "$m = Get-CimInstance -Namespace root/WMI -ClassName "
+                    "WmiMonitorBrightnessMethods; Invoke-CimMethod -InputObject "
+                    "$m -MethodName WmiSetBrightness -Arguments "
+                    f"@{{Timeout=[uint32]1; Brightness=[byte]{level}}}"
+                )
+            except Exception as exc:
+                print(f"[KeySimulator] brightness set failed: {exc}")
+
+        def _worker(self):
+            last = 0.0
+            while True:
+                if not self._dirty.wait(timeout=2.0):
+                    return  # idle: let the worker exit; adjust() restarts it
+                self._dirty.clear()
+                wait = self._THROTTLE_S - (time.monotonic() - last)
+                if wait > 0:
+                    time.sleep(wait)
+                with self._lock:
+                    target = self._level
+                if target is not None:
+                    self._apply(target)
+                    last = time.monotonic()
+
+        def adjust(self, delta):
+            with self._lock:
+                if self._level is None:
+                    self._level = self._read_level()
+                    if self._level is None:
+                        self._level = 50
+                self._level = max(0, min(100, self._level + delta))
+                if self._thread is None or not self._thread.is_alive():
+                    self._thread = threading.Thread(
+                        target=self._worker, daemon=True, name="Brightness")
+                    self._thread.start()
+            self._dirty.set()
+
+    _brightness = _BrightnessController()
+
     ACTIONS = {
         "alt_tab": {
             "label": "Alt + Tab (Switch Windows)",
@@ -474,6 +551,16 @@ if sys.platform == "win32":
             "keys": [VK_VOLUME_MUTE],
             "category": "Media",
         },
+        "brightness_up": {
+            "label": "Brightness Up",
+            "keys": [],               # handled below via WMI, not a virtual-key
+            "category": "Media",
+        },
+        "brightness_down": {
+            "label": "Brightness Down",
+            "keys": [],               # handled below via WMI, not a virtual-key
+            "category": "Media",
+        },
         "play_pause": {
             "label": "Play / Pause",
             "keys": [VK_MEDIA_PLAY_PAUSE],
@@ -521,6 +608,11 @@ if sys.platform == "win32":
         },
         "cycle_dpi": {
             "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
@@ -589,6 +681,12 @@ if sys.platform == "win32":
                 print(f"[KeySimulator] execute_action: mouse click for {action_id}")
                 inject_mouse_down(action_id)
                 inject_mouse_up(action_id)
+                return
+            if action_id == "brightness_up":
+                _brightness.adjust(_BrightnessController._STEP)
+                return
+            if action_id == "brightness_down":
+                _brightness.adjust(-_BrightnessController._STEP)
                 return
             action = ACTIONS.get(action_id)
             if not action or not action["keys"]:
@@ -1140,6 +1238,11 @@ elif sys.platform == "darwin":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "mouse_left_click": {
             "label": "Left Click",
             "keys": [],
@@ -1559,6 +1662,11 @@ elif sys.platform == "linux":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "mouse_left_click": {
             "label": "Left Click",
             "keys": [],
@@ -1661,6 +1769,11 @@ else:
         },
         "cycle_dpi": {
             "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },

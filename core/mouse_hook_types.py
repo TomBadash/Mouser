@@ -38,6 +38,11 @@ class MouseEvent:
     MODE_SHIFT_UP = "mode_shift_up"
     DPI_SWITCH_DOWN = "dpi_switch_down"
     DPI_SWITCH_UP = "dpi_switch_up"
+    # Crown dial (Logitech Craft). Single-fire events: rotate left/right emit
+    # one event per ratchet step; tap emits one event.
+    CROWN_LEFT = "crown_left"
+    CROWN_RIGHT = "crown_right"
+    CROWN_TAP = "crown_tap"
 
     def __init__(self, event_type, raw_data=None):
         self.event_type = event_type

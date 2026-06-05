@@ -10,6 +10,7 @@ _TRANSLATIONS = {
     "en": {
         # Navigation sidebar
         "nav.mouse_profiles": "Mouse & Profiles",
+        "nav.keyboard": "Keyboard",
         "nav.point_scroll": "Point & Scroll",
         "nav.about": "About",
 
@@ -234,6 +235,7 @@ _TRANSLATIONS = {
     # ── Simplified Chinese ────────────────────────────────────────
     "zh_CN": {
         "nav.mouse_profiles": "\u9f20\u6807\u4e0e\u914d\u7f6e\u6587\u4ef6",
+        "nav.keyboard": "\u952e\u76d8",
         "nav.point_scroll": "\u6307\u9488\u4e0e\u6eda\u8f6e",
         "nav.about": "\u5173\u4e8e",
 
@@ -442,6 +444,7 @@ _TRANSLATIONS = {
     # ── Traditional Chinese ───────────────────────────────────────
     "zh_TW": {
         "nav.mouse_profiles": "\u6ed1\u9f20\u8207\u8a2d\u5b9a\u6a94",
+        "nav.keyboard": "\u9375\u76e4",
         "nav.point_scroll": "\u6307\u6a19\u8207\u6372\u8ef8",
         "nav.about": "\u95dc\u65bc",
 

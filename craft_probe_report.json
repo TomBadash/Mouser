@@ -1,0 +1,638 @@
+{
+  "interfaces": [
+    {
+      "product_id": "0xC52B",
+      "usage_page": "0xFFBC",
+      "usage": "0x0088",
+      "transport": "-",
+      "product_string": "USB Receiver",
+      "source": "hidapi-enumerate",
+      "error": "no responsive HID++ device index"
+    },
+    {
+      "product_id": "0xC52B",
+      "usage_page": "0xFF00",
+      "usage": "0x0001",
+      "transport": "-",
+      "product_string": "USB Receiver",
+      "source": "hidapi-enumerate",
+      "error": "no responsive HID++ device index"
+    },
+    {
+      "product_id": "0xC52B",
+      "usage_page": "0xFF00",
+      "usage": "0x0002",
+      "transport": "-",
+      "product_string": "USB Receiver",
+      "source": "hidapi-enumerate",
+      "device_index": "0x02",
+      "hidpp_name": "Craft Advanced Keyboard",
+      "features": [
+        {
+          "index": 0,
+          "feature_id": "0x0000",
+          "name": "ROOT",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 1,
+          "feature_id": "0x0001",
+          "name": "FEATURE_SET",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 2,
+          "feature_id": "0x0003",
+          "name": "DEVICE_FW_VERSION",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 3,
+          "feature_id": "0x0005",
+          "name": "DEVICE_NAME",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 4,
+          "feature_id": "0x1D4B",
+          "name": "WIRELESS_DEVICE_STATUS",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 5,
+          "feature_id": "0x0020",
+          "name": "CONFIG_CHANGE",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 6,
+          "feature_id": "0x0007",
+          "name": "DEVICE_FRIENDLY_NAME",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 7,
+          "feature_id": "0x1000",
+          "name": "BATTERY_STATUS",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 8,
+          "feature_id": "0x1814",
+          "name": "CHANGE_HOST",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 9,
+          "feature_id": "0x1815",
+          "name": "HOSTS_INFO",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 10,
+          "feature_id": "0x1982",
+          "name": "BACKLIGHT2",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 11,
+          "feature_id": "0x1B04",
+          "name": "REPROG_CONTROLS_V4",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 12,
+          "feature_id": "0x1C00",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 13,
+          "feature_id": "0x40A3",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 14,
+          "feature_id": "0x4100",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 15,
+          "feature_id": "0x4220",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 16,
+          "feature_id": "0x4521",
+          "name": "KEYBOARD_DISABLE_KEYS",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 17,
+          "feature_id": "0x4531",
+          "name": "MULTIPLATFORM_2",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 18,
+          "feature_id": "0x4600",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 19,
+          "feature_id": "0x00C2",
+          "name": "UNKNOWN",
+          "type_flags": "0x00",
+          "obsolete": false,
+          "hidden": false,
+          "engineering": false
+        },
+        {
+          "index": 20,
+          "feature_id": "0x1803",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 21,
+          "feature_id": "0x1806",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 22,
+          "feature_id": "0x1813",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 23,
+          "feature_id": "0x1805",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 24,
+          "feature_id": "0x1830",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 25,
+          "feature_id": "0x1890",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 26,
+          "feature_id": "0x1891",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 27,
+          "feature_id": "0x1801",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 28,
+          "feature_id": "0x18A1",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 29,
+          "feature_id": "0x9280",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 30,
+          "feature_id": "0x1A20",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 31,
+          "feature_id": "0x1DF3",
+          "name": "EQUAD_DJ_DEVICE_PAIRING_INFO",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 32,
+          "feature_id": "0x1E00",
+          "name": "ENABLE_HIDDEN_FEATURES",
+          "type_flags": "0x40",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": false
+        },
+        {
+          "index": 33,
+          "feature_id": "0x1EB0",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 34,
+          "feature_id": "0x1861",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 35,
+          "feature_id": "0x18B0",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 36,
+          "feature_id": "0x92C0",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 37,
+          "feature_id": "0x9203",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        },
+        {
+          "index": 38,
+          "feature_id": "0x3615",
+          "name": "UNKNOWN",
+          "type_flags": "0x60",
+          "obsolete": false,
+          "hidden": true,
+          "engineering": true
+        }
+      ],
+      "has_crown": false,
+      "has_reprog_v4": true,
+      "reprog_controls": [
+        {
+          "index": 0,
+          "cid": "0x00D1",
+          "task": "0x00AE",
+          "flags": "0x0064",
+          "flag_names": "hotkey,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 1,
+          "cid": "0x00D2",
+          "task": "0x00AF",
+          "flags": "0x0064",
+          "flag_names": "hotkey,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 2,
+          "cid": "0x00D3",
+          "task": "0x00B0",
+          "flags": "0x0064",
+          "flag_names": "hotkey,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 3,
+          "cid": "0x00C7",
+          "task": "0x00A3",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 1,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 4,
+          "cid": "0x00C8",
+          "task": "0x00A4",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 2,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 5,
+          "cid": "0x00E0",
+          "task": "0x00BF",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 3,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 6,
+          "cid": "0x00FF",
+          "task": "0x00D4",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 4,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 7,
+          "cid": "0x006E",
+          "task": "0x0043",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 5,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 8,
+          "cid": "0x00E2",
+          "task": "0x00C1",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 6,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 9,
+          "cid": "0x00E3",
+          "task": "0x00C2",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 7,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 10,
+          "cid": "0x00E4",
+          "task": "0x0006",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 8,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 11,
+          "cid": "0x00E5",
+          "task": "0x0004",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 9,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 12,
+          "cid": "0x00E6",
+          "task": "0x0005",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 10,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 13,
+          "cid": "0x00E7",
+          "task": "0x0003",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 11,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 14,
+          "cid": "0x00E8",
+          "task": "0x0002",
+          "flags": "0x007A",
+          "flag_names": "fkey,fn_toggle,reprog,divert,persist",
+          "pos": 12,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 15,
+          "cid": "0x00E9",
+          "task": "0x0001",
+          "flags": "0x0074",
+          "flag_names": "hotkey,reprog,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 16,
+          "cid": "0x000A",
+          "task": "0x000A",
+          "flags": "0x0074",
+          "flag_names": "hotkey,reprog,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 17,
+          "cid": "0x00BF",
+          "task": "0x009B",
+          "flags": "0x0074",
+          "flag_names": "hotkey,reprog,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 18,
+          "cid": "0x00EA",
+          "task": "0x00C3",
+          "flags": "0x0074",
+          "flag_names": "hotkey,reprog,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 19,
+          "cid": "0x006F",
+          "task": "0x0044",
+          "flags": "0x0074",
+          "flag_names": "hotkey,reprog,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 20,
+          "cid": "0x00EC",
+          "task": "0x00B8",
+          "flags": "0x0064",
+          "flag_names": "hotkey,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 21,
+          "cid": "0x00EB",
+          "task": "0x00B6",
+          "flags": "0x0064",
+          "flag_names": "hotkey,divert,persist",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 22,
+          "cid": "0x00DE",
+          "task": "0x0062",
+          "flags": "0x0002",
+          "flag_names": "fkey",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        },
+        {
+          "index": 23,
+          "cid": "0x0034",
+          "task": "0x0062",
+          "flags": "0x0004",
+          "flag_names": "hotkey",
+          "pos": 0,
+          "group": 0,
+          "gmask": "0x00"
+        }
+      ]
+    },
+    {
+      "product_id": "0xC52B",
+      "usage_page": "0xFF00",
+      "usage": "0x0004",
+      "transport": "-",
+      "product_string": "USB Receiver",
+      "source": "hidapi-enumerate",
+      "error": "no responsive HID++ device index"
+    }
+  ]
+}

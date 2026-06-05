@@ -616,6 +616,33 @@ FEAT_THUMB_WHEEL          = 0x2150
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
+FEAT_CROWN          = 0x4600      # Crown dial (Logitech Craft keyboard)
+# Crown function indices follow Solaar (read_fnid 0x10 → fn 1, write 0x20 → fn 2).
+CROWN_GET_MODE      = 1
+CROWN_SET_MODE      = 2
+CROWN_DIVERT_ON     = 0x02        # setCrownMode byte0: send HID++ notifications
+CROWN_DIVERT_OFF    = 0x01
+# setCrownMode byte1 selects the rotation feel. 0x00 = leave unchanged.
+CROWN_SMOOTH_ON     = 0x01        # free-spinning
+CROWN_SMOOTH_OFF    = 0x02        # ratchet (detented)
+# Crown ratchet notification bytes (params = report bytes after the 4-byte
+# header): params[1] = signed ratchet delta, params[5] == 1 = tap, params[6] =
+# press progression (0x01 start … 0x05 end). See craft-hidpp-protocol memory.
+CROWN_RATCHET_DELTA_IDX = 1
+CROWN_TAP_IDX           = 5
+CROWN_PRESS_IDX         = 6
+# Accumulated |signed delta| that equals one emitted rotation step. One physical
+# ratchet detent sums to roughly this; tunable on hardware.
+CROWN_RATCHET_STEP      = 6
+# A click is always preceded by a touch. After a touch we wait this long: if a
+# physical click (or rotation) follows, the touch is suppressed; otherwise the
+# touch is treated as its own command.
+CROWN_TOUCH_CLICK_WINDOW_S = 0.25
+# Receiver register that gates HID++ notification delivery. Writing
+# wireless(0x000100) | software_present(0x000800) = 0x000900 makes crown events
+# arrive reliably; without it they are dropped even when the crown is diverted.
+RECEIVER_NOTIF_REGISTER = 0x00
+RECEIVER_NOTIF_FLAGS    = (0x00, 0x09, 0x00)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
@@ -710,12 +737,14 @@ class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_crown=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        self._on_crown      = on_crown
         self._extra_diverts = {
             cid: {**info, "held": False}
             for cid, info in (extra_diverts or {}).items()
@@ -744,12 +773,26 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        self._pending_extra_diverts = None  # queued extra-divert set change
         self._pending_battery = None
         self._battery_result = None
         self._last_logged_battery = None
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        # Crown (Logitech Craft) state.
+        self._crown_idx = None          # feature index of CROWN, or None
+        self._crown_accum = 0           # accumulated signed ratchet delta
+        self._crown_pressed = False     # physical crown click held
+        self._crown_rotated_while_pressed = False  # press+rotate vs plain click
+        self._crown_touch_active = False    # capacitive touch edge state
+        self._crown_touch_pending = False   # touch awaiting click/timeout
+        self._crown_touch_timer = None      # threading.Timer for touch resolve
+        self._crown_touch_lock = threading.Lock()
+        self._crown_smooth_pref = False     # desired feel: True=smooth, False=ratchet
+        self._pending_crown_smooth = None   # queued live feel change
+        self._recv_handle = None        # short HID++ handle used to enable
+                                        # receiver notifications (kept open)
 
     # ── public API ────────────────────────────────────────────────
 
@@ -785,6 +828,7 @@ class HidGestureListener:
             except Exception:
                 pass
             self._dev = None
+        self._close_recv_handle()
         self._connected_device_info = None
         if self._thread:
             self._thread.join(timeout=3)
@@ -807,6 +851,8 @@ class HidGestureListener:
             )
         if self._battery_idx is not None and self._battery_feature_id is not None:
             feature_ids.append(self._battery_feature_id)
+        if self._crown_idx is not None:
+            feature_ids.append(FEAT_CROWN)
         feature_ids.extend(sorted(self._wheel_feature_indexes))
         return tuple(feature_ids)
 
@@ -825,6 +871,8 @@ class HidGestureListener:
                 ),
                 "index": self._smart_shift_idx,
             })
+        if self._crown_idx is not None:
+            features.append({"feature_id": FEAT_CROWN, "index": self._crown_idx})
         if self._battery_idx is not None and self._battery_feature_id is not None:
             features.append({
                 "feature_id": self._battery_feature_id,
@@ -1223,11 +1271,20 @@ class HidGestureListener:
 
         return ordered or list(preferred)
 
+    def _control_present(self, cid):
+        """True if *cid* is in the discovered REPROG control table. When no
+        table was discovered, assume present so we don't over-filter."""
+        if not self._last_controls:
+            return True
+        return any(c.get("cid") == cid for c in self._last_controls)
+
     def _divert(self):
         """Divert the selected gesture control and enable raw XY when supported."""
         if self._feat_idx is None:
             return False
         for cid in self._gesture_candidates:
+            if not self._control_present(cid):
+                continue  # device has no such control (e.g. a keyboard)
             self._gesture_cid = cid
             resp = self._set_cid_reporting(cid, 0x33)
             if resp is not None:
@@ -1249,10 +1306,51 @@ class HidGestureListener:
         if self._feat_idx is None:
             return
         for cid, info in self._extra_diverts.items():
+            if not self._control_present(cid):
+                continue  # device has no such control (e.g. a keyboard)
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
             print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
                   f"{'OK' if ok else 'FAILED'}")
+
+    def update_extra_diverts(self, extra):
+        """Queue a new set of extra-divert CIDs (mode shift, Craft keys, …).
+
+        Callable from any thread; the change is applied on the listener thread so
+        re-mapping a key in the UI takes effect live without a reconnect."""
+        self._pending_extra_diverts = {
+            cid: {**info, "held": False} for cid, info in (extra or {}).items()
+        }
+
+    def _apply_pending_extra_diverts(self):
+        """Apply the queued extra-divert set: undivert removed CIDs, divert new
+        ones, and keep the handlers for CIDs that stay."""
+        pending = self._pending_extra_diverts
+        self._pending_extra_diverts = None
+        if pending is None or self._feat_idx is None:
+            return
+        old = set(self._extra_diverts)
+        new = set(pending)
+        for cid in old - new:
+            hi, lo = (cid >> 8) & 0xFF, cid & 0xFF
+            try:
+                self._tx(LONG_ID, self._feat_idx, 3, [hi, lo, 0x02, 0x00, 0x00])
+                print(f"[HidGesture] Extra undivert {_format_cid(cid)}")
+            except Exception:
+                pass
+        for cid in new - old:
+            if not self._control_present(cid):
+                continue
+            ok = self._set_cid_reporting(cid, 0x03) is not None
+            print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
+                  f"{'OK' if ok else 'FAILED'}")
+        # Preserve held-state for CIDs that remain diverted.
+        merged = {}
+        for cid, info in pending.items():
+            info = dict(info)
+            info["held"] = self._extra_diverts.get(cid, {}).get("held", False)
+            merged[cid] = info
+        self._extra_diverts = merged
 
     def _undivert(self):
         """Restore default button behaviour (best-effort)."""
@@ -1278,6 +1376,182 @@ class HidGestureListener:
             pass
         self._rawxy_enabled = False
 
+    # ── Crown (Logitech Craft) ────────────────────────────────────
+
+    def _find_crown(self):
+        """Locate the CROWN feature (0x4600) on the current device index."""
+        fi = self._find_feature(FEAT_CROWN)
+        if fi:
+            self._crown_idx = fi
+            print(f"[HidGesture] Found CROWN @0x{fi:02X}")
+        return fi
+
+    def _divert_crown(self):
+        """Divert the crown (HID++ notifications) and set the rotation feel."""
+        if self._crown_idx is None:
+            return False
+        smooth = CROWN_SMOOTH_ON if self._crown_smooth_pref else CROWN_SMOOTH_OFF
+        resp = self._request(self._crown_idx, CROWN_SET_MODE,
+                             [CROWN_DIVERT_ON, smooth])
+        ok = resp is not None
+        print(f"[HidGesture] Divert CROWN ({'smooth' if self._crown_smooth_pref else 'ratchet'}): "
+              f"{'OK' if ok else 'FAILED'}")
+        return ok
+
+    def set_crown_smooth(self, smooth):
+        """Set the crown rotation feel (True=smooth, False=ratchet). Callable
+        from any thread; applied live on the listener thread when connected."""
+        self._crown_smooth_pref = bool(smooth)
+        self._pending_crown_smooth = bool(smooth)
+
+    def _apply_pending_crown_smooth(self):
+        smooth = self._pending_crown_smooth
+        self._pending_crown_smooth = None
+        if smooth is None or self._crown_idx is None:
+            return
+        byte1 = CROWN_SMOOTH_ON if smooth else CROWN_SMOOTH_OFF
+        self._request(self._crown_idx, CROWN_SET_MODE, [CROWN_DIVERT_ON, byte1])
+        print(f"[HidGesture] Crown feel: {'smooth' if smooth else 'ratchet'}")
+
+    def _undivert_crown(self):
+        if self._crown_idx is None or self._dev is None:
+            return
+        try:
+            self._tx(LONG_ID, self._crown_idx, CROWN_SET_MODE, [CROWN_DIVERT_OFF])
+        except Exception:
+            pass
+
+    def _enable_receiver_notifications(self, pid):
+        """Write the receiver NOTIFICATIONS register so crown events are
+        delivered. Sent as a short HID++ report on the FF00/0x0001 collection;
+        the handle is kept open for the session to match observed behaviour."""
+        if not HIDAPI_OK or _HID_API_STYLE is None:
+            return False
+        try:
+            for info in _hid.enumerate(LOGI_VID, 0):
+                if (int(info.get("usage_page", 0) or 0) == 0xFF00
+                        and int(info.get("usage", 0) or 0) == 0x0001
+                        and int(info.get("product_id", 0) or 0) == int(pid or 0)):
+                    path = info.get("path")
+                    if not path:
+                        continue
+                    if _HID_API_STYLE == "hidapi":
+                        h = _hid.device()
+                        h.open_path(path)
+                    else:
+                        h = _HidDeviceCompat(path)
+                    h.write([SHORT_ID, BT_DEV_IDX, 0x80, RECEIVER_NOTIF_REGISTER,
+                             *RECEIVER_NOTIF_FLAGS])
+                    self._close_recv_handle()
+                    self._recv_handle = h
+                    print("[HidGesture] Enabled receiver HID++ notifications")
+                    return True
+        except Exception as exc:
+            print(f"[HidGesture] enable receiver notifications failed: {exc}")
+        return False
+
+    def _close_recv_handle(self):
+        if self._recv_handle is not None:
+            try:
+                self._recv_handle.close()
+            except Exception:
+                pass
+            self._recv_handle = None
+
+    def _handle_crown(self, params):
+        """Decode a CROWN notification → rotation / click / touch callbacks.
+
+        The crown reports a capacitive touch (params[CROWN_TAP_IDX]) and a
+        physical click (params[CROWN_PRESS_IDX], 0x01 start … 0x05 end). Because
+        a click is always preceded by a touch, a touch is held briefly: if a
+        click or rotation follows it is consumed, otherwise the touch fires as
+        its own command.
+
+        - rotate, not clicked       → crown_left / crown_right
+        - rotate while clicked       → crown_press_left / crown_press_right
+        - click (press + release)    → crown_tap
+        - touch, no click/rotate     → crown_touch
+        """
+        if len(params) <= CROWN_PRESS_IDX:
+            return
+
+        press_val = params[CROWN_PRESS_IDX]
+        pressed_now = 0x01 <= press_val <= 0x04
+        if pressed_now and not self._crown_pressed:
+            self._crown_pressed = True
+            self._crown_rotated_while_pressed = False
+            self._cancel_pending_touch()   # a click consumes the preceding touch
+
+        ratchet = params[CROWN_RATCHET_DELTA_IDX]
+        if ratchet:
+            self._cancel_pending_touch()   # turning is not a discrete touch
+            delta = ratchet - 256 if ratchet >= 0x80 else ratchet
+            self._crown_accum += delta
+            if self._crown_pressed:
+                right_key, left_key = "crown_press_right", "crown_press_left"
+            else:
+                right_key, left_key = "crown_right", "crown_left"
+            while self._crown_accum >= CROWN_RATCHET_STEP:
+                self._crown_accum -= CROWN_RATCHET_STEP
+                self._crown_rotated_while_pressed |= self._crown_pressed
+                self._emit_crown(right_key)
+            while self._crown_accum <= -CROWN_RATCHET_STEP:
+                self._crown_accum += CROWN_RATCHET_STEP
+                self._crown_rotated_while_pressed |= self._crown_pressed
+                self._emit_crown(left_key)
+
+        # Click = a press that ends without any rotation.
+        if self._crown_pressed and not pressed_now:
+            if not self._crown_rotated_while_pressed:
+                self._emit_crown("crown_tap")
+            self._crown_pressed = False
+            self._crown_rotated_while_pressed = False
+
+        # Touch start: arm the pending-touch timer (unless already clicking).
+        touch_now = params[CROWN_TAP_IDX] == 0x01
+        if touch_now and not self._crown_touch_active:
+            self._crown_touch_active = True
+            if not self._crown_pressed:
+                self._arm_touch_timer()
+        elif not touch_now and self._crown_touch_active:
+            self._crown_touch_active = False
+
+    def _arm_touch_timer(self):
+        with self._crown_touch_lock:
+            self._cancel_pending_touch_locked()
+            self._crown_touch_pending = True
+            timer = threading.Timer(
+                CROWN_TOUCH_CLICK_WINDOW_S, self._resolve_touch)
+            timer.daemon = True
+            self._crown_touch_timer = timer
+            timer.start()
+
+    def _resolve_touch(self):
+        with self._crown_touch_lock:
+            if not self._crown_touch_pending or self._crown_pressed:
+                return
+            self._crown_touch_pending = False
+            self._crown_touch_timer = None
+        self._emit_crown("crown_touch")
+
+    def _cancel_pending_touch(self):
+        with self._crown_touch_lock:
+            self._cancel_pending_touch_locked()
+
+    def _cancel_pending_touch_locked(self):
+        self._crown_touch_pending = False
+        if self._crown_touch_timer is not None:
+            self._crown_touch_timer.cancel()
+            self._crown_touch_timer = None
+
+    def _emit_crown(self, button_key):
+        print(f"[HidGesture] Crown {button_key}")
+        if self._on_crown:
+            try:
+                self._on_crown(button_key)
+            except Exception as exc:
+                print(f"[HidGesture] crown callback error: {exc}")
+
     # ── DPI control ───────────────────────────────────────────────
 
     def set_dpi(self, dpi_value):
@@ -1300,7 +1574,7 @@ class HidGestureListener:
         if dpi is None:
             return
         if self._dpi_idx is None or self._dev is None:
-            print("[HidGesture] Cannot set DPI — not connected")
+            # Device has no Adjustable DPI feature (e.g. a keyboard); skip quietly.
             self._dpi_result = False
             self._pending_dpi = None
             return
@@ -1596,6 +1870,10 @@ class HidGestureListener:
             return
         _, feat, func, _sw, params = msg
 
+        if self._crown_idx is not None and feat == self._crown_idx and func == 0:
+            self._handle_crown(params)
+            return
+
         if feat != self._feat_idx:
             return
 
@@ -1676,11 +1954,24 @@ class HidGestureListener:
         if not infos:
             return False
 
-        # Try direct devices (Bluetooth) before USB receivers, which
-        # require scanning multiple slots with slow timeouts.
+        # Try direct devices (Bluetooth) before USB receivers, which require
+        # scanning multiple slots with slow timeouts. Within a device, prefer
+        # the HID++ 2.0 long-report collection (UP 0xFF00, usage 0x0002) where
+        # feature access works, so we don't burn ~14s per wrong interface first
+        # (e.g. the proprietary/DJ collections on a Unifying receiver).
         def _direct_device_first(info):
             name = (info.get("product_string") or "").lower()
-            return (1 if "receiver" in name else 0, name)
+            up = int(info.get("usage_page", 0) or 0)
+            usage = int(info.get("usage", 0) or 0)
+            if up == 0xFF00 and usage == 0x0002:
+                iface_rank = 0
+            elif up == 0xFF00 and usage == 0x0001:
+                iface_rank = 1
+            elif up == 0xFF00:
+                iface_rank = 2
+            else:
+                iface_rank = 3
+            return (1 if "receiver" in name else 0, iface_rank, name)
 
         infos.sort(key=_direct_device_first)
 
@@ -1711,6 +2002,12 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._wheel_feature_indexes = {}
+            self._crown_idx = None
+            self._crown_accum = 0
+            self._crown_pressed = False
+            self._crown_rotated_while_pressed = False
+            self._crown_touch_active = False
+            self._cancel_pending_touch()
             self._gesture_cid = DEFAULT_GESTURE_CID
             self._gesture_candidates = list(
                 getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
@@ -1855,7 +2152,19 @@ class HidGestureListener:
                             self._battery_idx = batt_fi
                             self._battery_feature_id = FEAT_BATTERY_STATUS
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
-                    if self._divert():
+                    # Probe + divert the crown dial (Logitech Craft). Reliable
+                    # crown delivery requires enabling the receiver's
+                    # NOTIFICATIONS register first.
+                    crown_ok = False
+                    if self._find_crown() is not None:
+                        self._enable_receiver_notifications(pid)
+                        crown_ok = self._divert_crown()
+
+                    # Bind if we can divert the gesture button OR the crown.
+                    # Keyboards (Craft) have no gesture CID, so gesture divert
+                    # fails there but crown divert succeeds.
+                    gesture_ok = self._divert()
+                    if gesture_ok or crown_ok:
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
                             actual_transport = "Bluetooth"
@@ -1947,6 +2256,10 @@ class HidGestureListener:
                             self._apply_pending_dpi()
                     if self._pending_smart_shift is not None:
                         self._apply_pending_smart_shift()
+                    if self._pending_extra_diverts is not None:
+                        self._apply_pending_extra_diverts()
+                    if self._pending_crown_smooth is not None:
+                        self._apply_pending_crown_smooth()
                     if self._pending_battery is not None:
                         self._apply_pending_read_battery()
                     raw = self._rx(1000)
@@ -1964,6 +2277,8 @@ class HidGestureListener:
 
             # Cleanup before potential reconnect
             self._undivert()
+            self._undivert_crown()
+            self._close_recv_handle()
             try:
                 if self._dev:
                     self._dev.close()
@@ -1976,6 +2291,12 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._wheel_feature_indexes = {}
+            self._crown_idx = None
+            self._crown_accum = 0
+            self._crown_pressed = False
+            self._crown_rotated_while_pressed = False
+            self._crown_touch_active = False
+            self._cancel_pending_touch()
             self._pending_battery = None
             self._pending_dpi = None
             self._dpi_result = None

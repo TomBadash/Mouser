@@ -10,6 +10,10 @@ import sys
 import tempfile
 from urllib.parse import quote
 from core import app_catalog
+from core.logi_device_catalog import (
+    CRAFT_KEY_BUTTONS,
+    CRAFT_KEY_LABELS,
+)
 
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
@@ -48,7 +52,29 @@ PROFILE_BUTTON_NAMES = {
     "gesture_right": "Gesture swipe right",
     "gesture_up":    "Gesture swipe up",
     "gesture_down":  "Gesture swipe down",
+    "crown_left":        "Crown rotate left",
+    "crown_right":       "Crown rotate right",
+    "crown_tap":         "Crown click",
+    "crown_touch":       "Crown touch",
+    "crown_press_left":  "Crown click + rotate left",
+    "crown_press_right": "Crown click + rotate right",
+    **{key: CRAFT_KEY_LABELS[key] for key in CRAFT_KEY_BUTTONS},
 }
+
+# Crown defaults: rotate = volume, click = play/pause, click+rotate = track skip.
+# Touch defaults to none (opt-in) to avoid accidental triggers from resting a
+# finger on the crown.
+CRAFT_CROWN_DEFAULTS = {
+    "crown_left":        "volume_down",
+    "crown_right":       "volume_up",
+    "crown_tap":         "play_pause",
+    "crown_touch":       "none",
+    "crown_press_left":  "prev_track",
+    "crown_press_right": "next_track",
+}
+
+# Top-row keys default to "none": Mouser leaves them native until remapped.
+CRAFT_KEY_DEFAULTS = {key: "none" for key in CRAFT_KEY_BUTTONS}
 
 # Maps config button keys to the MouseEvent types they correspond to
 BUTTON_TO_EVENTS = {
@@ -64,10 +90,19 @@ BUTTON_TO_EVENTS = {
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
     "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
+    "crown_left":        ("crown_left",),
+    "crown_right":       ("crown_right",),
+    "crown_tap":         ("crown_tap",),
+    "crown_touch":       ("crown_touch",),
+    "crown_press_left":  ("crown_press_left",),
+    "crown_press_right": ("crown_press_right",),
+    # Each Craft top-row key is a single-fire control whose event type equals
+    # its button key.
+    **{key: (key,) for key in CRAFT_KEY_BUTTONS},
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 11,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -85,6 +120,10 @@ DEFAULT_CONFIG = {
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
+                # Logitech Craft crown (only used when a Craft is connected).
+                **CRAFT_CROWN_DEFAULTS,
+                # Craft top-row keys: native until the user remaps them.
+                **CRAFT_KEY_DEFAULTS,
             },
         }
     },
@@ -98,6 +137,7 @@ DEFAULT_CONFIG = {
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
+        "crown_smooth": False,    # Craft crown feel: False=ratchet, True=smooth
         "gesture_threshold": 50,
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
@@ -329,6 +369,25 @@ def _migrate(cfg):
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
 
+    if version < 10:
+        # Add Logitech Craft crown defaults (rotate = volume, tap = play/pause)
+        # to every profile without clobbering any the user already set.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            for btn, action in CRAFT_CROWN_DEFAULTS.items():
+                mappings.setdefault(btn, action)
+        cfg["version"] = 10
+
+    if version < 11:
+        # New crown controls: capacitive touch (distinct from the physical
+        # click) and a click-and-rotate layer. Add their defaults without
+        # clobbering anything the user already set.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            for btn in ("crown_touch", "crown_press_left", "crown_press_right"):
+                mappings.setdefault(btn, CRAFT_CROWN_DEFAULTS[btn])
+        cfg["version"] = 11
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -337,6 +396,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("ignore_trackpad", True)
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("crown_smooth", False)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

@@ -237,6 +237,7 @@ class Backend(QObject):
         self._cfg = load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
+        self._device_type = "mouse"   # "mouse" or "keyboard"
         self._connected_device_key = ""
         self._device_layout_override_key = ""
         self._device_layout = get_device_layout("generic_mouse")
@@ -358,14 +359,19 @@ class Backend(QObject):
 
     @Property(list, notify=mappingsChanged)
     def buttons(self):
-        """List of button dicts for the active profile, filtered by device."""
+        """List of button dicts for the active profile, filtered by device.
+
+        Uses PROFILE_BUTTON_NAMES so non-mouse controls (gesture swipes, the
+        Craft crown, and the Craft top-row keys) appear in the fallback list for
+        devices without an interactive overlay.
+        """
         mappings = get_active_mappings(self._cfg)
         device_buttons = set(
-            self._effective_supported_buttons or BUTTON_NAMES.keys()
+            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
         )
         result = []
         idx = 0
-        for key, name in BUTTON_NAMES.items():
+        for key, name in PROFILE_BUTTON_NAMES.items():
             if key not in device_buttons:
                 continue
             aid = mappings.get(key, "none")
@@ -380,12 +386,19 @@ class Backend(QObject):
         return result
 
     def _hidden_actions(self):
-        """Return set of action IDs to hide based on effective device buttons."""
+        """Return set of action IDs to hide based on the connected device."""
         btns = self._effective_supported_buttons
         hidden = set()
         if btns and "mode_shift" not in btns:
             hidden.add("toggle_smart_shift")
             hidden.add("switch_scroll_mode")
+        is_keyboard = self._device_type == "keyboard"
+        if is_keyboard:
+            # DPI cycling needs a mouse sensor; not applicable to keyboards.
+            hidden.add("cycle_dpi")
+        else:
+            # The crown feel toggle only applies to devices with a crown.
+            hidden.add("toggle_crown_smooth")
         return hidden
 
     @Property(list, notify=deviceLayoutChanged)
@@ -515,6 +528,16 @@ class Backend(QObject):
     def ignoreTrackpad(self):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
 
+    @Property(bool, notify=settingsChanged)
+    def crownSmooth(self):
+        """Craft crown feel: True = smooth (free-spin), False = ratchet."""
+        return self._cfg.get("settings", {}).get("crown_smooth", False)
+
+    @Property(bool, notify=deviceInfoChanged)
+    def crownAvailable(self):
+        """True when a connected keyboard exposes the crown."""
+        return self._device_type == "keyboard"
+
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
@@ -610,6 +633,11 @@ class Backend(QObject):
     @Property(str, notify=deviceInfoChanged)
     def deviceDisplayName(self):
         return self._device_display_name
+
+    @Property(str, notify=deviceInfoChanged)
+    def deviceType(self):
+        """'mouse' or 'keyboard' for the connected device (default 'mouse')."""
+        return self._device_type
 
     @Property(str, notify=deviceInfoChanged)
     def connectedDeviceKey(self):
@@ -1284,6 +1312,18 @@ class Backend(QObject):
         self.settingsChanged.emit()
 
     @Slot(bool)
+    def setCrownSmooth(self, value):
+        value = bool(value)
+        if self.crownSmooth == value:
+            return
+        self._cfg.setdefault("settings", {})["crown_smooth"] = value
+        if self._engine:
+            self._engine.set_crown_smooth(value)
+        else:
+            save_config(self._cfg)
+        self.settingsChanged.emit()
+
+    @Slot(bool)
     def setInvertHScroll(self, value):
         value = bool(value)
         if self.invertHScroll == value:
@@ -1748,7 +1788,11 @@ class Backend(QObject):
         transport = getattr(device, "transport", "") or ""
         dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
         dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
+        device_type = getattr(device, "device_type", "mouse") or "mouse"
         info_changed = False
+        if device_type != self._device_type:
+            self._device_type = device_type
+            info_changed = True
         if display_name != self._device_display_name:
             self._device_display_name = display_name
             info_changed = True

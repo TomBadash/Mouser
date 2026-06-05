@@ -34,13 +34,15 @@ class _FakeEvdevDevice:
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_crown=None):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
+        self.on_crown = on_crown
         self.connected_device = None
         self.started = False
         self.stopped = False

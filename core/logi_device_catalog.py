@@ -27,6 +27,54 @@ MX_ANYWHERE_SMARTSHIFT_BUTTONS = (
     "mode_shift",
 )
 
+# Logitech Craft keyboard. The Crown dial exposes a rotate layer, a physical
+# click, and a second rotate layer used while the crown is clicked/held.
+CROWN_BUTTONS = (
+    "crown_left",
+    "crown_right",
+    "crown_tap",
+    "crown_touch",
+    "crown_press_left",
+    "crown_press_right",
+)
+
+# Top-row keys, exposed as remappable controls. Each is a divertable
+# REPROG_CONTROLS_V4 control; "cid" is the HID++ control id captured from the
+# device, "label" is the default printed function. Default mapping is "none"
+# (the key keeps its native function until the user remaps it, at which point
+# Mouser diverts just that control). Captured with tools/craft_probe.py --keys;
+# see the craft-hidpp-protocol notes. Easy-Switch (host) and arrow controls are
+# intentionally omitted so host switching and navigation stay native.
+CRAFT_KEYS = (
+    {"key": "craft_brightness_down", "cid": 0x00C7, "label": "Brightness Down"},
+    {"key": "craft_brightness_up",   "cid": 0x00C8, "label": "Brightness Up"},
+    {"key": "craft_task_view",       "cid": 0x00E0, "label": "Task View"},
+    {"key": "craft_app_switch",      "cid": 0x00FF, "label": "App Switch / Dashboard"},
+    {"key": "craft_show_desktop",    "cid": 0x006E, "label": "Show Desktop"},
+    {"key": "craft_backlight_down",  "cid": 0x00E2, "label": "Backlight Down"},
+    {"key": "craft_backlight_up",    "cid": 0x00E3, "label": "Backlight Up"},
+    {"key": "craft_prev_track",      "cid": 0x00E4, "label": "Previous Track"},
+    {"key": "craft_play_pause",      "cid": 0x00E5, "label": "Play / Pause"},
+    {"key": "craft_next_track",      "cid": 0x00E6, "label": "Next Track"},
+    {"key": "craft_mute",            "cid": 0x00E7, "label": "Mute"},
+    {"key": "craft_volume_down",     "cid": 0x00E8, "label": "Volume Down"},
+    {"key": "craft_volume_up",       "cid": 0x00E9, "label": "Volume Up"},
+    {"key": "craft_calculator",      "cid": 0x000A, "label": "Calculator"},
+    {"key": "craft_screen_capture",  "cid": 0x00BF, "label": "Screen Capture"},
+    {"key": "craft_context_menu",    "cid": 0x00EA, "label": "Context Menu"},
+    {"key": "craft_screen_lock",     "cid": 0x006F, "label": "Screen Lock"},
+)
+
+CRAFT_KEY_BUTTONS = tuple(k["key"] for k in CRAFT_KEYS)
+
+# button key → HID++ control id, for diverting only the keys the user remaps.
+CRAFT_KEY_CIDS = {k["key"]: k["cid"] for k in CRAFT_KEYS}
+
+# button key → default printed label (UI fallback before localization).
+CRAFT_KEY_LABELS = {k["key"]: k["label"] for k in CRAFT_KEYS}
+
+CRAFT_BUTTONS = CROWN_BUTTONS + CRAFT_KEY_BUTTONS
+
 
 def _hotspot(
     button_key: str,
@@ -177,10 +225,46 @@ LOGI_DEVICE_SPECS = (
         "supported_buttons": MX_ANYWHERE_BUTTONS,
         "dpi_max": 4000,
     },
+    {
+        # Craft Advanced Keyboard. Over a Unifying receiver the USB product_id
+        # is the shared receiver (0xC52B), so we match by the HID++ device name
+        # instead. The Crown dial and top-row keys are driven over HID++
+        # (feature 0x4600 + REPROG_CONTROLS_V4); no keyboard hook is involved.
+        "key": "craft",
+        "display_name": "Craft Advanced Keyboard",
+        "product_ids": (),
+        "aliases": (
+            "Craft Advanced Keyboard",
+            "Logitech Craft",
+            "Craft",
+        ),
+        "ui_layout": "craft",
+        "image_asset": "icons/keyboard-simple.svg",
+        "supported_buttons": CRAFT_BUTTONS,
+        "gesture_cids": (),
+        "dpi_min": 0,
+        "dpi_max": 0,
+        "device_type": "keyboard",
+    },
 )
 
 
 LOGI_DEVICE_LAYOUTS = {
+    "craft": {
+        "key": "craft",
+        "label": "Craft Advanced Keyboard",
+        "image_asset": "icons/keyboard-simple.svg",
+        "image_width": 220,
+        "image_height": 220,
+        "interactive": False,
+        "manual_selectable": False,
+        "note": (
+            "The Crown dial and top-row keys are remapped over HID++. Use the "
+            "control list to assign actions; a dedicated keyboard diagram may "
+            "come later."
+        ),
+        "hotspots": [],
+    },
     "mx_master_4": _layout(
         "mx_master_4",
         "MX Master 4",

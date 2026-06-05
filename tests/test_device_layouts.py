@@ -13,12 +13,20 @@ class DeviceLayoutTests(unittest.TestCase):
             with self.subTest(device=device.key, ui_layout=device.ui_layout):
                 layout = get_device_layout(device.ui_layout)
 
-                if device.ui_layout == "generic_mouse":
-                    self.assertFalse(layout["interactive"])
-                else:
-                    self.assertTrue(layout["interactive"])
+                # The key must match so a cataloged device never silently falls
+                # back to the generic layout.
                 self.assertEqual(layout["key"], device.ui_layout)
                 self.assertTrue((image_root / layout["image_asset"]).is_file())
+
+                # Interactivity is data-driven: a layout that declares itself
+                # interactive (a real device overlay) must carry hotspots, while
+                # non-interactive list views (generic mouse fallback, keyboard
+                # control lists) must not. This stays correct as new keyboards
+                # with list-style layouts are added.
+                if layout["interactive"]:
+                    self.assertTrue(layout["hotspots"])
+                else:
+                    self.assertFalse(layout["hotspots"])
 
     def test_known_device_hotspots_are_supported_buttons(self):
         for device in KNOWN_LOGI_DEVICES:
