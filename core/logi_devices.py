@@ -12,7 +12,11 @@ from dataclasses import dataclass
 import re
 from typing import Iterable
 
-from core.logi_device_catalog import LOGI_DEVICE_SPECS
+from core.logi_device_catalog import (
+    KEYBOARD_KEY_BUTTONS,
+    LOGI_DEVICE_SPECS,
+    keyboard_buttons_for_cids,
+)
 
 
 DEFAULT_GESTURE_CIDS = (0x00C3, 0x00D7)
@@ -84,9 +88,38 @@ _KNOWN_UNSUPPORTED_CONTROLS = {
     0x00ED: "precision_mode",
     0x01A0: "haptic",
 }
+_KEY_FLAG_MOUSE = 0x0001
+_KEY_FLAG_FKEY = 0x0002
+_KEY_FLAG_HOTKEY = 0x0004
 _KEY_FLAG_DIVERTABLE = 0x0020
 _KEY_FLAG_RAW_XY = 0x0100
 _KEY_FLAG_FORCE_RAW_XY = 0x0200
+
+# HID++ feature ids that only ever appear on keyboards vs only on mice. Used to
+# auto-classify an unrecognized Logitech device (no catalog entry) so it lands on
+# the right page. See classify_device_kind().
+_KEYBOARD_FEATURE_IDS = (
+    0x4521,  # KEYBOARD_DISABLE_KEYS
+    0x4522,  # KEYBOARD_DISABLE_BY_USAGE
+    0x4530,  # DUALPLATFORM
+    0x4531,  # MULTIPLATFORM
+    0x4540,  # KEYBOARD_LAYOUT_2
+    0x40A2,  # FN_INVERSION
+    0x40A3,  # FN_INVERSION_FOR_MULTI_HOST
+    0x4220,  # LOCK_KEY_STATE
+    0x1981,  # BACKLIGHT1
+    0x1982,  # BACKLIGHT2
+    0x4600,  # CROWN (Logitech Craft)
+)
+_MOUSE_FEATURE_IDS = (
+    0x2201,  # ADJUSTABLE_DPI
+    0x2202,  # EXTENDED_ADJUSTABLE_DPI
+    0x2110,  # SMART_SHIFT
+    0x2111,  # SMART_SHIFT_ENHANCED
+    0x2121,  # HIRES_WHEEL
+    0x2130,  # RATCHET_WHEEL
+    0x2150,  # THUMBWHEEL
+)
 _MAPPING_FLAG_RAW_XY_DIVERTED = 0x0010
 _MAPPING_FLAG_FORCE_RAW_XY_DIVERTED = 0x0040
 
@@ -664,6 +697,56 @@ def _control_has_raw_xy(control) -> bool:
     )
 
 
+def _any_control_has_flag(controls, flag: int) -> bool:
+    for control in controls or ():
+        flags = _control_int(control, "flags")
+        if flags is not None and (flags & flag):
+            return True
+    return False
+
+
+def classify_device_kind(
+    product_name=None, discovered_features=None, reprog_controls=None
+) -> str:
+    """Best-effort "mouse" vs "keyboard" classification for a Logitech device.
+
+    Used for devices with no catalog entry so an unrecognized mouse or keyboard
+    still routes to the correct page. Signals, strongest first:
+      1. device-exclusive HID++ features — DPI / smart-shift / wheel => mouse;
+         keyboard / backlight / crown features => keyboard;
+      2. REPROG_CONTROLS_V4 flags — mouse-button controls vs fkey/hotkey controls;
+      3. the HID++ product name as a final tie-break.
+    Defaults to "mouse" when nothing is conclusive (the historical fallback).
+    """
+    tokens = _feature_tokens(discovered_features)
+    has_mouse_feat = _has_feature(
+        tokens, *(_format_cid(fid).lower() for fid in _MOUSE_FEATURE_IDS)
+    )
+    has_kbd_feat = _has_feature(
+        tokens, *(_format_cid(fid).lower() for fid in _KEYBOARD_FEATURE_IDS)
+    )
+    if has_mouse_feat and not has_kbd_feat:
+        return "mouse"
+    if has_kbd_feat and not has_mouse_feat:
+        return "keyboard"
+
+    mouse_controls = _any_control_has_flag(reprog_controls, _KEY_FLAG_MOUSE)
+    key_controls = _any_control_has_flag(
+        reprog_controls, _KEY_FLAG_FKEY | _KEY_FLAG_HOTKEY
+    )
+    if mouse_controls and not key_controls:
+        return "mouse"
+    if key_controls and not mouse_controls:
+        return "keyboard"
+
+    name = (product_name or "").lower()
+    if "keyboard" in name or "keys" in name:
+        return "keyboard"
+    if "mouse" in name or "trackball" in name:
+        return "mouse"
+    return "mouse"
+
+
 def build_device_capability_inventory(
     controls=None,
     *,
@@ -768,6 +851,7 @@ _LAYOUT_BUTTONS = {
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
+    "generic_keyboard": KEYBOARD_KEY_BUTTONS,
 }
 
 
@@ -833,8 +917,38 @@ def build_connected_device_info(
         )
 
     # Fallback for unrecognized devices (e.g., USB Receiver PID 0xC52B which
-    # contains multiple devices). Use the generic layout rather than borrowing
-    # an MX-family UI with controls the device may not physically have.
+    # contains multiple devices). Auto-classify mouse vs keyboard from the HID++
+    # profile so an unknown device still lands on the right page, rather than
+    # borrowing an MX-family UI with controls the device may not physically have.
+    kind = classify_device_kind(
+        product_name=product_name,
+        discovered_features=discovered_features,
+        reprog_controls=reprog_controls,
+    )
+    if kind == "keyboard":
+        display_name = product_name or (
+            f"Logitech PID 0x{pid:04X}" if pid is not None else "Logitech keyboard"
+        )
+        key = _normalize_name(display_name).replace(" ", "_") or "logitech_keyboard"
+        # Expose exactly the standard top-row keys this keyboard advertises.
+        kbd_buttons = keyboard_buttons_for_cids(inventory.control_cids)
+        return ConnectedDeviceInfo(
+            key=key,
+            display_name=display_name,
+            product_id=pid,
+            product_name=product_name or display_name,
+            transport=transport,
+            source=source,
+            ui_layout="generic_keyboard",
+            image_asset="icons/keyboard-simple.svg",
+            supported_buttons=kbd_buttons,
+            gesture_cids=(),
+            dpi_min=0,
+            dpi_max=0,
+            device_type="keyboard",
+            capability_inventory=inventory,
+        )
+
     display_name = product_name or (
         f"Logitech PID 0x{pid:04X}" if pid is not None else "Logitech mouse"
     )

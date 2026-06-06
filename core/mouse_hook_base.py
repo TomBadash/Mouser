@@ -29,9 +29,9 @@ class BaseMouseHook:
         self._connection_change_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
-        # Logitech Craft top-row keys to divert: {cid: button_key}. Populated by
-        # the engine from the active config; only mapped keys are diverted.
-        self.divert_craft_keys = {}
+        # Logitech keyboard top-row keys to divert: {cid: button_key}. Populated
+        # by the engine from the active config; only mapped keys are diverted.
+        self.divert_keyboard_keys = {}
         self._gesture_direction_enabled = False
         self._gesture_threshold = 50.0
         self._gesture_deadzone = 40.0
@@ -262,16 +262,16 @@ class BaseMouseHook:
                 "on_down": self._on_hid_dpi_switch_down,
                 "on_up": self._on_hid_dpi_switch_up,
             }
-        for cid, button_key in self.divert_craft_keys.items():
+        for cid, button_key in self.divert_keyboard_keys.items():
             extra[cid] = {
-                "on_down": self._make_craft_key_handler(button_key),
+                "on_down": self._make_keyboard_key_handler(button_key),
             }
         return extra
 
-    def _make_craft_key_handler(self, button_key):
-        return lambda: self._on_hid_craft_key(button_key)
+    def _make_keyboard_key_handler(self, button_key):
+        return lambda: self._on_hid_keyboard_key(button_key)
 
-    def _on_hid_craft_key(self, button_key):
+    def _on_hid_keyboard_key(self, button_key):
         # Single-fire on press; the button key doubles as the MouseEvent type.
         self._dispatch(MouseEvent(button_key))
 

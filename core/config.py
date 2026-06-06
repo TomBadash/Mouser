@@ -11,8 +11,8 @@ import tempfile
 from urllib.parse import quote
 from core import app_catalog
 from core.logi_device_catalog import (
-    CRAFT_KEY_BUTTONS,
-    CRAFT_KEY_LABELS,
+    KEYBOARD_KEY_BUTTONS,
+    KEYBOARD_KEY_LABELS,
 )
 
 if sys.platform == "darwin":
@@ -58,7 +58,7 @@ PROFILE_BUTTON_NAMES = {
     "crown_touch":       "Crown touch",
     "crown_press_left":  "Crown click + rotate left",
     "crown_press_right": "Crown click + rotate right",
-    **{key: CRAFT_KEY_LABELS[key] for key in CRAFT_KEY_BUTTONS},
+    **{key: KEYBOARD_KEY_LABELS[key] for key in KEYBOARD_KEY_BUTTONS},
 }
 
 # Crown defaults: rotate = volume, click = play/pause, click+rotate = track skip.
@@ -74,7 +74,7 @@ CRAFT_CROWN_DEFAULTS = {
 }
 
 # Top-row keys default to "none": Mouser leaves them native until remapped.
-CRAFT_KEY_DEFAULTS = {key: "none" for key in CRAFT_KEY_BUTTONS}
+KEYBOARD_KEY_DEFAULTS = {key: "none" for key in KEYBOARD_KEY_BUTTONS}
 
 # Maps config button keys to the MouseEvent types they correspond to
 BUTTON_TO_EVENTS = {
@@ -96,13 +96,13 @@ BUTTON_TO_EVENTS = {
     "crown_touch":       ("crown_touch",),
     "crown_press_left":  ("crown_press_left",),
     "crown_press_right": ("crown_press_right",),
-    # Each Craft top-row key is a single-fire control whose event type equals
+    # Each keyboard top-row key is a single-fire control whose event type equals
     # its button key.
-    **{key: (key,) for key in CRAFT_KEY_BUTTONS},
+    **{key: (key,) for key in KEYBOARD_KEY_BUTTONS},
 }
 
 DEFAULT_CONFIG = {
-    "version": 11,
+    "version": 12,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -122,8 +122,8 @@ DEFAULT_CONFIG = {
                 "mode_shift": "switch_scroll_mode",
                 # Logitech Craft crown (only used when a Craft is connected).
                 **CRAFT_CROWN_DEFAULTS,
-                # Craft top-row keys: native until the user remaps them.
-                **CRAFT_KEY_DEFAULTS,
+                # Keyboard top-row keys: native until the user remaps them.
+                **KEYBOARD_KEY_DEFAULTS,
             },
         }
     },
@@ -387,6 +387,20 @@ def _migrate(cfg):
             for btn in ("crown_touch", "crown_press_left", "crown_press_right"):
                 mappings.setdefault(btn, CRAFT_CROWN_DEFAULTS[btn])
         cfg["version"] = 11
+
+    if version < 12:
+        # Top-row keyboard keys were generalized from Craft-only to any Logitech
+        # keyboard: rename the per-key button ids craft_* -> kbd_* in every
+        # profile so existing remaps survive. Crown buttons (crown_*) are
+        # unchanged. Then ensure the full kbd_* default set is present.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            for old_key in [k for k in mappings if k.startswith("craft_")]:
+                new_key = "kbd_" + old_key[len("craft_"):]
+                mappings.setdefault(new_key, mappings.pop(old_key))
+            for btn, action in KEYBOARD_KEY_DEFAULTS.items():
+                mappings.setdefault(btn, action)
+        cfg["version"] = 12
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

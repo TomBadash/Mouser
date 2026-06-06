@@ -10,6 +10,7 @@ from core.logi_devices import (
     build_device_capability_inventory,
     build_connected_device_info,
     clamp_dpi,
+    classify_device_kind,
     derive_supported_buttons_from_reprog_controls,
     get_buttons_for_layout,
     iter_known_devices,
@@ -212,6 +213,66 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                 self.assertEqual(info.ui_layout, "generic_mouse")
                 self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
                 self.assertEqual(info.supported_buttons, ("middle", "xbutton1", "xbutton2"))
+
+    def test_classify_device_kind_uses_exclusive_features(self):
+        # ADJUSTABLE_DPI is mouse-only; keyboard/backlight/crown are keyboard-only.
+        self.assertEqual(
+            classify_device_kind("Wireless Mouse", [0x2201, 0x1B04], []),
+            "mouse",
+        )
+        self.assertEqual(
+            classify_device_kind("MX Keys", [0x4521, 0x1982, 0x1B04], []),
+            "keyboard",
+        )
+        # Craft: keyboard features plus the CROWN feature.
+        self.assertEqual(
+            classify_device_kind("Craft", [0x4540, 0x4600, 0x1B04], []),
+            "keyboard",
+        )
+
+    def test_classify_device_kind_falls_back_to_control_flags_then_name(self):
+        # No telling features: decide on REPROG control flags (mouse vs fkey).
+        self.assertEqual(
+            classify_device_kind(None, [], [{"cid": 0x0050, "flags": 0x0001}]),
+            "mouse",
+        )
+        self.assertEqual(
+            classify_device_kind(None, [], [{"cid": 0x00C7, "flags": 0x047A}]),
+            "keyboard",
+        )
+        # Nothing conclusive: the product name breaks the tie.
+        self.assertEqual(classify_device_kind("Some Keyboard", [], []), "keyboard")
+        self.assertEqual(classify_device_kind("Some Mouse", [], []), "mouse")
+        self.assertEqual(classify_device_kind(None, [], []), "mouse")
+
+    def test_unrecognized_keyboard_routes_to_generic_keyboard(self):
+        # MX-Keys-like: shared receiver PID, keyboard features, standard top-row
+        # CIDs. Should classify as a keyboard and expose just those keys.
+        info = build_connected_device_info(
+            product_id=0xC52B,
+            product_name="MX Keys Wireless Keyboard",
+            discovered_features=[0x4521, 0x1982, 0x40A3, 0x1B04],
+            reprog_controls=[
+                {"cid": 0x00C7, "flags": 0x047A},
+                {"cid": 0x00C8, "flags": 0x047A},
+                {"cid": 0x00E9, "flags": 0x0474},
+                {"cid": 0x000A, "flags": 0x0474},
+            ],
+        )
+
+        self.assertEqual(info.device_type, "keyboard")
+        self.assertEqual(info.ui_layout, "generic_keyboard")
+        self.assertEqual(info.image_asset, "icons/keyboard-simple.svg")
+        self.assertEqual(info.gesture_cids, ())
+        self.assertEqual(
+            info.supported_buttons,
+            ("kbd_brightness_down", "kbd_brightness_up",
+             "kbd_volume_up", "kbd_calculator"),
+        )
+        # No crown control => the crown row must not be advertised.
+        self.assertFalse(
+            any(b.startswith("crown_") for b in info.supported_buttons)
+        )
 
     def test_known_device_layout_metadata_is_valid(self):
         for device in iter_known_devices():

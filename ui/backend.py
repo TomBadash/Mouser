@@ -221,7 +221,7 @@ class Backend(QObject):
     _profileSwitchRequest = Signal(str)
     _dpiReadRequest = Signal(int)
     _connectionChangeRequest = Signal(bool)
-    _batteryChangeRequest = Signal(int)
+    _batteryChangeRequest = Signal(object)
     _debugMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
     _smartShiftReadRequest = Signal()
@@ -248,6 +248,7 @@ class Backend(QObject):
         self._connected_device_source = ""
         self._connected_device_transport = ""
         self._battery_level = -1
+        self._battery_by_type = {}      # {device_type: level} for multi-device
         self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
@@ -364,7 +365,7 @@ class Backend(QObject):
         """List of button dicts for the active profile, filtered by device.
 
         Uses PROFILE_BUTTON_NAMES so non-mouse controls (gesture swipes, the
-        Craft crown, and the Craft top-row keys) appear in the fallback list for
+        Craft crown, and keyboard top-row keys) appear in the fallback list for
         devices without an interactive overlay.
         """
         mappings = get_active_mappings(self._cfg)
@@ -608,8 +609,8 @@ class Backend(QObject):
         image = QUrl.fromLocalFile(
             os.path.abspath(os.path.join(self._root_dir, "images", asset))
         ).toString() if asset else ""
-        # Battery only known for the primary device the backend tracks.
-        battery = self._battery_level if device_type == self._device_type else -1
+        # Per-device battery (multiplexer reads each device's own level).
+        battery = self._battery_by_type.get(device_type, -1)
         return {
             "connected": True,
             "type": device_type,
@@ -622,7 +623,7 @@ class Backend(QObject):
             "image": image,
             "imageWidth": layout.get("image_width", 220),
             "imageHeight": layout.get("image_height", 220),
-            "hasCrown": device_type == "keyboard",
+            "hasCrown": any(str(b).startswith("crown_") for b in supported_set),
             "battery": battery,
             "actionCategories": self._action_categories_for(
                 self._hidden_actions_for(device_type, supported_set)),
@@ -1703,9 +1704,12 @@ class Backend(QObject):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._connectionChangeRequest.emit(connected)
 
-    def _onEngineBatteryRead(self, level):
-        """Called from engine thread — posts to Qt main thread."""
-        self._batteryChangeRequest.emit(level)
+    def _onEngineBatteryRead(self, levels):
+        """Called from engine thread — posts to Qt main thread.
+
+        ``levels`` is a {device_type: level} dict (multi-device aware).
+        """
+        self._batteryChangeRequest.emit(levels)
 
     def _onEngineDebugMessage(self, message):
         """Called from engine/hook thread — posts to Qt main thread."""
@@ -1794,9 +1798,12 @@ class Backend(QObject):
         else:
             self._apply_device_layout(None)
         device_source = getattr(device, "source", "") if device is not None else ""
-        if (not connected or device_source == "evdev") and self._battery_level != -1:
-            self._battery_level = -1
-            self.batteryLevelChanged.emit()
+        if not connected or device_source == "evdev":
+            if self._battery_by_type:
+                self._battery_by_type = {}
+            if self._battery_level != -1:
+                self._battery_level = -1
+                self.batteryLevelChanged.emit()
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
         self._bump_device_tick()
@@ -1950,10 +1957,16 @@ class Backend(QObject):
         if eff != old_eff:
             self.deviceLayoutChanged.emit()
 
-    @Slot(int)
-    def _handleBatteryChange(self, level):
-        """Runs on Qt main thread."""
-        self._battery_level = level
+    @Slot(object)
+    def _handleBatteryChange(self, levels):
+        """Runs on Qt main thread. ``levels`` is {device_type: level}."""
+        self._battery_by_type = dict(levels or {})
+        # Legacy single-value property tracks the primary (currently tracked)
+        # device, falling back to the mouse.
+        self._battery_level = self._battery_by_type.get(
+            self._device_type,
+            self._battery_by_type.get("mouse", -1),
+        )
         self.batteryLevelChanged.emit()
         self._bump_device_tick()
 

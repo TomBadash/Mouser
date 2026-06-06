@@ -22,6 +22,7 @@ from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
     build_connected_device_info,
     clamp_dpi,
+    classify_device_kind,
     resolve_device,
 )
 
@@ -1943,44 +1944,61 @@ class HidGestureListener:
         self._pending_battery = None
         return None
 
+    def read_all_batteries(self):
+        """Queue a per-device battery read; return {device_type: level}."""
+        self._battery_result = None
+        self._pending_battery = "read_all"
+        for _ in range(30):
+            if self._pending_battery is None:
+                return self._battery_result or {}
+            time.sleep(0.1)
+        print("[HidGesture] Battery read timed out")
+        self._pending_battery = None
+        return {}
+
+    def _read_current_battery(self):
+        """Read the battery level for the currently loaded cursor (or None)."""
+        if self._battery_idx is None or self._dev is None:
+            return None
+        func = 1 if self._battery_feature_id == FEAT_UNIFIED_BATT else 0
+        label = "unified" if func == 1 else "status"
+        resp = self._request(self._battery_idx, func, [])
+        if not resp:
+            return None
+        _, _, _, _, params = resp
+        level = params[0] if params else None
+        if level is None or not (0 <= level <= 100):
+            return None
+        if level != self._last_logged_battery:
+            print(f"[HidGesture] Battery ({label}): {level}%")
+            self._last_logged_battery = level
+        return level
+
     def _apply_pending_read_battery(self):
         """Called from the listener thread to read current battery level."""
         if self._sessions:
             self._load_session_with("_battery_idx")
-        if self._battery_idx is None or self._dev is None:
-            self._battery_result = None
-            self._pending_battery = None
-            return
+        self._battery_result = self._read_current_battery()
+        self._pending_battery = None
 
-        if self._battery_feature_id == FEAT_UNIFIED_BATT:
-            resp = self._request(self._battery_idx, 1, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (unified): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
+    def _apply_pending_read_battery_all(self):
+        """Read every device session's battery, keyed by device type."""
+        results = {}
+        if self._sessions:
+            saved = self._snapshot_cursor()
+            for dev_idx in list(self._sessions):
+                self._load_cursor(self._sessions[dev_idx])
+                level = self._read_current_battery()
+                if level is not None:
+                    results[self._device_type or "mouse"] = level
+                # Persist any updated last-logged value back to the session.
+                self._sessions[dev_idx] = self._snapshot_cursor()
+            self._load_cursor(saved)
         else:
-            resp = self._request(self._battery_idx, 0, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (status): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
-
+            level = self._read_current_battery()
+            if level is not None:
+                results[self._device_type or "mouse"] = level
+        self._battery_result = results
         self._pending_battery = None
 
     # ── notification handling ─────────────────────────────────────
@@ -2415,10 +2433,21 @@ class HidGestureListener:
                         crown_ok = self._divert_crown()
 
                     # Bind if we can divert the gesture button OR the crown.
-                    # Keyboards (Craft) have no gesture CID, so gesture divert
-                    # fails there but crown divert succeeds.
+                    # Keyboards have no gesture CID, so gesture divert fails on
+                    # them: the Craft still binds via its crown, but a plain
+                    # keyboard (e.g. MX Keys) has neither a gesture button nor a
+                    # crown. Classify it from its HID++ profile and bind it
+                    # anyway — its top-row keys are diverted on demand once the
+                    # user remaps them, so it just needs to claim a session and
+                    # appear on the Keyboard page.
                     gesture_ok = self._divert()
-                    if gesture_ok or crown_ok:
+                    device_kind = classify_device_kind(
+                        product_name=hidpp_name or product,
+                        discovered_features=self._discovered_feature_inventory(),
+                        reprog_controls=controls,
+                    )
+                    keyboard_ok = device_kind == "keyboard"
+                    if gesture_ok or crown_ok or keyboard_ok:
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
                             actual_transport = "Bluetooth"
@@ -2444,6 +2473,11 @@ class HidGestureListener:
                                 "hid_module": _HID_MODULE_NAME or "",
                                 "device_path": opened_path,
                             },
+                        )
+                        # Authoritative device type: catalog when recognized,
+                        # otherwise the auto-classification computed above.
+                        self._device_type = (
+                            self._connected_device_info.device_type
                         )
                         # Save this device as a session and keep scanning the
                         # remaining slots for more devices on the same receiver.
@@ -2535,7 +2569,10 @@ class HidGestureListener:
                     if self._pending_crown_smooth is not None:
                         self._apply_pending_crown_smooth()
                     if self._pending_battery is not None:
-                        self._apply_pending_read_battery()
+                        if self._pending_battery == "read_all":
+                            self._apply_pending_read_battery_all()
+                        else:
+                            self._apply_pending_read_battery()
                     self._poll_receiver_notifications()
                     raw = self._rx(1000)
                     if raw:

@@ -34,9 +34,11 @@ class _FakeEngine:
         connected_device=None,
         hid_features_ready=False,
         smart_shift_supported=False,
+        connected_devices=None,
     ):
         self.device_connected = device_connected
         self.connected_device = connected_device
+        self.connected_devices = list(connected_devices or [])
         self.hid_features_ready = hid_features_ready
         self.smart_shift_supported = smart_shift_supported
         self.profile_callback = None
@@ -759,6 +761,42 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(backend.connectedDeviceKey, "")
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertEqual(backend.batteryLevel, -1)
+
+    def test_battery_change_stored_per_device_type(self):
+        backend = self._make_backend()
+
+        backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+
+        self.assertEqual(backend._battery_by_type, {"mouse": 90, "keyboard": 50})
+        # Legacy single-value property tracks the primary device (mouse).
+        self.assertEqual(backend.batteryLevel, 90)
+        # Switching the tracked type surfaces that device's level.
+        backend._device_type = "keyboard"
+        backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+        self.assertEqual(backend.batteryLevel, 50)
+
+    def test_device_info_for_type_reports_own_battery(self):
+        keyboard = SimpleNamespace(
+            key="mx_keys", display_name="MX Keys Wireless Keyboard",
+            device_type="keyboard", ui_layout="generic_keyboard",
+            transport="USB Receiver", supported_buttons=("kbd_volume_up",),
+            source="hidapi",
+        )
+
+        def fake_layout(key):
+            return {"key": key, "interactive": False, "image_asset": "",
+                    "hotspots": [], "note": ""}
+
+        with patch("ui.backend.get_device_layout", side_effect=fake_layout):
+            backend = self._make_backend(
+                engine=_FakeEngine(device_connected=True,
+                                   connected_devices=[keyboard]))
+            backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+
+            info = backend.deviceInfoForType("keyboard")
+            self.assertEqual(info["battery"], 50)
+            # A type with no reading reports -1, never another device's level.
+            self.assertEqual(backend.deviceInfoForType("mouse")["battery"], -1)
 
     def test_refresh_updates_hid_features_without_reemitting_connection_edge(self):
         device = SimpleNamespace(

@@ -15,7 +15,7 @@ from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
-from core.logi_device_catalog import CRAFT_KEY_CIDS
+from core.logi_device_catalog import KEYBOARD_KEY_CIDS
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
 from core.linux_permissions import (
@@ -142,15 +142,15 @@ class Engine:
 
         # Divert Logitech Craft top-row keys only when remapped in some profile;
         # un-mapped keys are left alone so their native function still works.
-        craft_keys = {}
-        for button_key, cid in CRAFT_KEY_CIDS.items():
+        keyboard_keys = {}
+        for button_key, cid in KEYBOARD_KEY_CIDS.items():
             if any(
                 pdata.get("mappings", {}).get(button_key, "none") != "none"
                 for pdata in self.cfg.get("profiles", {}).values()
             ):
-                craft_keys[cid] = button_key
-        if hasattr(self.hook, "divert_craft_keys"):
-            self.hook.divert_craft_keys = craft_keys
+                keyboard_keys[cid] = button_key
+        if hasattr(self.hook, "divert_keyboard_keys"):
+            self.hook.divert_keyboard_keys = keyboard_keys
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
@@ -681,12 +681,12 @@ class Engine:
             if hg and hg.connected_device is not None:
                 if now - _last_battery >= _battery_poll_interval:
                     _last_battery = now
-                    level = hg.read_battery()
+                    levels = hg.read_all_batteries()
                     if stop_event.is_set():
                         return
-                    if level is not None and self._battery_read_cb:
+                    if levels and self._battery_read_cb:
                         try:
-                            self._battery_read_cb(level)
+                            self._battery_read_cb(levels)
                         except Exception:
                             pass
 
@@ -714,7 +714,7 @@ class Engine:
                 return
 
     def set_battery_callback(self, cb):
-        """Register ``cb(level: int)`` invoked when battery level is read (0-100)."""
+        """Register ``cb(levels: dict)`` invoked with {device_type: level} (0-100)."""
         self._battery_read_cb = cb
 
     def set_connection_change_callback(self, cb):

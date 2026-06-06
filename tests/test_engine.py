@@ -292,6 +292,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         return SimpleNamespace(
             connected_device=connected_device,
             read_battery=Mock(return_value=None),
+            read_all_batteries=Mock(return_value={}),
             set_dpi=Mock(return_value=dpi_result),
             set_smart_shift=Mock(return_value=smart_shift_result),
             smart_shift_supported=True,
@@ -503,13 +504,13 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         engine.hook._hid_gesture = SimpleNamespace(
             connected_device=SimpleNamespace(name="MX Master 3S"),
             smart_shift_supported=True,
-            read_battery=Mock(return_value=None),
+            read_all_batteries=Mock(return_value={}),
             read_smart_shift=Mock(return_value={"mode": "ratchet", "enabled": False, "threshold": 25}),
         )
 
         engine._battery_poll_loop(stop_event)
 
-        engine.hook._hid_gesture.read_battery.assert_called_once_with()
+        engine.hook._hid_gesture.read_all_batteries.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
 
 

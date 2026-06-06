@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe tools/craft_probe.py)",
+      "Bash(.venv/Scripts/python.exe -c \"import core.logi_device_catalog as c, core.logi_devices as d, core.config as cfg, core.engine, core.mouse_hook_base; print\\('imports OK'\\); print\\('classify mouse:', d.classify_device_kind\\('Wireless Mouse MX Master 3', ['0x2201','adjustable_dpi'], []\\)\\); print\\('classify kbd:', d.classify_device_kind\\('MX Keys Wireless Keyboard', ['0x4521','0x1982'], []\\)\\); print\\('kbd buttons C7/E9/000A:', c.keyboard_buttons_for_cids\\([0x00C7,0x00E9,0x000A]\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_config.py tests/test_smart_shift.py tests/test_logi_devices.py tests/test_device_layouts.py tests/test_hid_gesture.py tests/test_mouse_hook.py -q)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_config tests.test_smart_shift tests.test_device_layouts tests.test_hid_gesture tests.test_mouse_hook -q)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_config tests.test_smart_shift tests.test_device_layouts tests.test_hid_gesture tests.test_mouse_hook)",
+      "Bash(./.venv/Scripts/python.exe main_qml.py)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_engine tests.test_hid_gesture)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\aless\\.claude\\projects\\c--Users-aless-GitHub-Repositories-mouser-Mouser\\memory"
+    ]
+  }
+}

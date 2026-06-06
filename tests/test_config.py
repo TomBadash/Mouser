@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 11)
+        self.assertEqual(migrated["version"], 12)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -74,6 +74,35 @@ class ConfigMigrationTests(unittest.TestCase):
             "switch_scroll_mode",
         )
 
+    def test_migrate_v11_renames_craft_keys_to_kbd_and_preserves_action(self):
+        cfg = {
+            "version": 11,
+            "profiles": {
+                "default": {
+                    "apps": [],
+                    "mappings": {
+                        "craft_volume_up": "zoom_in",
+                        "craft_mute": "none",
+                        "crown_tap": "play_pause",
+                    },
+                }
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(cfg)
+        mappings = migrated["profiles"]["default"]["mappings"]
+
+        self.assertEqual(migrated["version"], 12)
+        # craft_* keys renamed to kbd_* with their action preserved.
+        self.assertNotIn("craft_volume_up", mappings)
+        self.assertEqual(mappings["kbd_volume_up"], "zoom_in")
+        self.assertEqual(mappings["kbd_mute"], "none")
+        # Crown buttons are untouched by the rename.
+        self.assertEqual(mappings["crown_tap"], "play_pause")
+        # The full kbd_* default set is present after migration.
+        self.assertIn("kbd_brightness_down", mappings)
+
     def test_migrate_updates_media_player_profile_apps(self):
         cfg = {
             "version": 3,
@@ -88,7 +117,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 11)
+        self.assertEqual(migrated["version"], 12)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -130,7 +159,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 11)
+        self.assertEqual(loaded["version"], 12)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -157,7 +186,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 11)
+        self.assertEqual(migrated["version"], 12)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
