@@ -17,11 +17,12 @@ Item {
     // Which device class this page instance shows ("mouse" or "keyboard").
     // The same page component backs both the Mouse and Keyboard navbar entries.
     property string deviceFilter: "mouse"
-    // True only when a device of this page's class is connected, so the Mouse
-    // page ignores a connected keyboard and vice-versa.
-    readonly property bool deviceConnectedHere:
-        backend.mouseConnected
-        && (deviceFilter === "" || backend.deviceType === deviceFilter)
+    // All info for THIS page's device class, so the Mouse and Keyboard pages
+    // each render their own device independently (multiplexer). The deviceTick
+    // reference forces re-evaluation when device info changes.
+    readonly property var pageDevice:
+        (backend.deviceTick, backend.deviceInfoForType(deviceFilter))
+    readonly property bool deviceConnectedHere: pageDevice.connected === true
     // Reactive i18n shortcut — all s["key"] bindings update on lm.languageChanged
     property var s: lm.strings
 
@@ -465,7 +466,7 @@ Item {
     }
 
     function layoutHasButton(buttonKey) {
-        var hotspots = backend.deviceHotspots
+        var hotspots = pageDevice.hotspots
         for (var i = 0; i < hotspots.length; i++) {
             if (hotspots[i].buttonKey === buttonKey)
                 return true
@@ -723,11 +724,13 @@ Item {
 
                     // ── Header ────────────────────────────────
                     Item {
+                        id: headerItem
                         width: parent.width; height: 70
 
                         Row {
                             anchors {
                                 left: parent.left; leftMargin: 28
+                                right: headerStatusRow.left; rightMargin: 12
                                 verticalCenter: parent.verticalCenter
                             }
                             spacing: 12
@@ -741,12 +744,17 @@ Item {
 
                                     Text {
                                         text: deviceConnectedHere
-                                              ? backend.deviceDisplayName
+                                              ? pageDevice.name
                                               : (deviceFilter === "keyboard"
                                                  ? (s["nav.keyboard"] || "Keyboard")
                                                  : "Mouse")
                                         font { family: uiState.fontFamily; pixelSize: 20; bold: true }
                                         color: theme.textPrimary
+                                        elide: Text.ElideRight
+                                        width: Math.min(
+                                            implicitWidth,
+                                            Math.max(80, headerItem.width
+                                                     - headerStatusRow.width - 200))
                                     }
 
                                     // Profile badge
@@ -772,7 +780,7 @@ Item {
                                           ? (deviceFilter === "keyboard"
                                              ? "Turn on your Logitech keyboard to start customizing keys"
                                              : s["mouse.turn_on_mouse"])
-                                          : backend.hasInteractiveDeviceLayout
+                                          : pageDevice.interactive
                                             ? s["mouse.click_dot"]
                                             : s["mouse.choose_layout"]
                                     font { family: uiState.fontFamily; pixelSize: 12 }
@@ -783,6 +791,7 @@ Item {
 
                         // Right-side status row: delete button + battery + connection
                         Row {
+                            id: headerStatusRow
                             anchors {
                                 right: parent.right; rightMargin: 28
                                 verticalCenter: parent.verticalCenter
@@ -834,12 +843,12 @@ Item {
 
                             // Battery badge
                             Rectangle {
-                                visible: deviceConnectedHere && backend.batteryLevel >= 0
+                                visible: deviceConnectedHere && pageDevice.battery >= 0
                                 width: battRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
                                 color: {
-                                    var lvl = backend.batteryLevel
+                                    var lvl = pageDevice.battery
                                     if (lvl <= 20) return Qt.rgba(0.88, 0.2, 0.2, 0.18)
                                     if (lvl <= 40) return Qt.rgba(0.9, 0.56, 0.1, 0.18)
                                     return Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
@@ -856,7 +865,7 @@ Item {
                                         height: 14
                                         name: "battery-high"
                                         iconColor: {
-                                            var lvl = backend.batteryLevel
+                                            var lvl = pageDevice.battery
                                             if (lvl <= 20) return "#e05555"
                                             if (lvl <= 40) return "#e09045"
                                             return theme.accent
@@ -864,10 +873,10 @@ Item {
                                     }
 
                                     Text {
-                                        text: backend.batteryLevel + "%"
+                                        text: pageDevice.battery + "%"
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: {
-                                            var lvl = backend.batteryLevel
+                                            var lvl = pageDevice.battery
                                             if (lvl <= 20) return "#e05555"
                                             if (lvl <= 40) return "#e09045"
                                             return theme.accent
@@ -899,8 +908,8 @@ Item {
                                     Text {
                                         text: deviceConnectedHere
                                               ? (s["mouse.connected"]
-                                                 + (backend.connectionType !== ""
-                                                    ? " · " + backend.connectionType : ""))
+                                                 + (pageDevice.transport !== ""
+                                                    ? " · " + pageDevice.transport : ""))
                                               : s["mouse.not_connected"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         color: deviceConnectedHere
@@ -909,9 +918,10 @@ Item {
                                 }
                             }
 
-                            // Layout picker pill
+                            // Layout picker pill (mouse-only: the override
+                            // choices are mouse family layouts).
                             Rectangle {
-                                visible: deviceConnectedHere
+                                visible: deviceConnectedHere && deviceFilter !== "keyboard"
                                 width: layoutPillRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -930,7 +940,7 @@ Item {
                                         text: {
                                             if (backend.deviceLayoutOverrideKey !== "")
                                                 return currentLayoutChoiceLabel()
-                                            return backend.deviceDisplayName || "Auto"
+                                            return pageDevice.name || "Auto"
                                         }
                                         font { family: uiState.fontFamily; pixelSize: 10 }
                                         color: backend.deviceLayoutOverrideKey !== ""
@@ -990,7 +1000,7 @@ Item {
                         // Give keyboards (non-interactive control list) more
                         // vertical room than the mouse-image diagram needs.
                         height: (deviceConnectedHere
-                                 && !backend.hasInteractiveDeviceLayout) ? 600 : 420
+                                 && !pageDevice.interactive) ? 600 : 420
 
                         Rectangle {
                             anchors.fill: parent
@@ -999,10 +1009,10 @@ Item {
 
                         Image {
                             id: mouseImg
-                            source: backend.deviceImageSource
+                            source: pageDevice.image
                             fillMode: Image.PreserveAspectFit
-                            width: backend.deviceImageWidth
-                            height: backend.deviceImageHeight
+                            width: pageDevice.imageWidth
+                            height: pageDevice.imageHeight
                             anchors.centerIn: parent
                             visible: deviceConnectedHere
                             smooth: true
@@ -1121,11 +1131,11 @@ Item {
                         Repeater {
                             // Only show the interactive hotspot overlay for a
                             // device of this page's class.
-                            model: deviceConnectedHere ? backend.deviceHotspots : []
+                            model: deviceConnectedHere ? pageDevice.hotspots : []
 
                             delegate: HotspotDot {
                                 required property int index
-                                readonly property var hotspot: backend.deviceHotspots[index]
+                                readonly property var hotspot: pageDevice.hotspots[index]
                                 anchors.fill: mouseImageArea
                                 imgItem: mouseImg
                                 normX: Number(hotspot["normX"] || 0)
@@ -1141,13 +1151,13 @@ Item {
                         }
 
                         Rectangle {
-                            visible: deviceConnectedHere && !backend.hasInteractiveDeviceLayout
+                            visible: deviceConnectedHere && !pageDevice.interactive
                             width: Math.min(460, parent.width - 48)
                             // Bound to the image area; a long control list (e.g.
                             // the Craft's crown + keys) scrolls inside the card
                             // instead of overflowing onto the action picker.
-                            height: Math.min(76 + (backend.crownAvailable ? 36 : 0)
-                                             + backend.buttons.length * 44,
+                            height: Math.min(76 + (pageDevice.hasCrown ? 36 : 0)
+                                             + pageDevice.buttons.length * 44,
                                              parent.height - 16)
                             radius: 16
                             color: theme.bgCard
@@ -1172,7 +1182,7 @@ Item {
                                     }
 
                                     Text {
-                                        text: backend.deviceLayoutNote
+                                        text: pageDevice.note
                                         width: parent.width
                                         wrapMode: Text.WordWrap
                                         font { family: uiState.fontFamily; pixelSize: 12 }
@@ -1182,7 +1192,7 @@ Item {
 
                                     // Crown feel toggle (Craft keyboards only).
                                     Row {
-                                        visible: backend.crownAvailable
+                                        visible: pageDevice.hasCrown
                                         spacing: 10
                                         topPadding: 2
 
@@ -1237,7 +1247,7 @@ Item {
                                     }
                                     clip: true
                                     spacing: 4
-                                    model: backend.buttons
+                                    model: pageDevice.buttons
                                     boundsBehavior: Flickable.StopAtBounds
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -1674,7 +1684,7 @@ Item {
                                               && backend.supportsGestureDirections)
 
                                 Repeater {
-                                    model: backend.actionCategories
+                                    model: pageDevice.actionCategories
 
                                     delegate: Column {
                                         width: parent.width

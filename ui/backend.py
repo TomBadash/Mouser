@@ -212,6 +212,7 @@ class Backend(QObject):
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
+    deviceTickChanged = Signal()
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
@@ -238,6 +239,7 @@ class Backend(QObject):
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
         self._device_type = "mouse"   # "mouse" or "keyboard"
+        self._device_tick = 0         # bumped whenever per-device info changes
         self._connected_device_key = ""
         self._device_layout_override_key = ""
         self._device_layout = get_device_layout("generic_mouse")
@@ -385,21 +387,44 @@ class Backend(QObject):
             })
         return result
 
-    def _hidden_actions(self):
-        """Return set of action IDs to hide based on the connected device."""
-        btns = self._effective_supported_buttons
+    def _hidden_actions_for(self, device_type, supported):
         hidden = set()
-        if btns and "mode_shift" not in btns:
+        if supported and "mode_shift" not in supported:
             hidden.add("toggle_smart_shift")
             hidden.add("switch_scroll_mode")
-        is_keyboard = self._device_type == "keyboard"
-        if is_keyboard:
+        if device_type == "keyboard":
             # DPI cycling needs a mouse sensor; not applicable to keyboards.
             hidden.add("cycle_dpi")
         else:
             # The crown feel toggle only applies to devices with a crown.
             hidden.add("toggle_crown_smooth")
         return hidden
+
+    def _hidden_actions(self):
+        """Return set of action IDs to hide based on the connected device."""
+        return self._hidden_actions_for(
+            self._device_type, self._effective_supported_buttons)
+
+    def _action_categories_for(self, hidden):
+        from collections import OrderedDict
+        cats = OrderedDict()
+        for aid in sorted(
+            ACTIONS,
+            key=lambda a: (
+                "0" if ACTIONS[a]["category"] == "Other" else "1" + ACTIONS[a]["category"],
+                ACTIONS[a]["label"],
+            ),
+        ):
+            if aid in hidden:
+                continue
+            data = ACTIONS[aid]
+            cats.setdefault(data["category"], []).append(
+                {"id": aid, "label": data["label"]})
+        result = [{"category": c, "actions": a} for c, a in cats.items()]
+        result.append({"category": "Custom", "actions": [
+            {"id": "__custom__", "label": "Custom Shortcut…"}
+        ]})
+        return result
 
     @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
@@ -537,6 +562,71 @@ class Backend(QObject):
     def crownAvailable(self):
         """True when a connected keyboard exposes the crown."""
         return self._device_type == "keyboard"
+
+    @Property(int, notify=deviceTickChanged)
+    def deviceTick(self):
+        """Increments whenever per-device info changes; bind to it to refresh
+        deviceInfoForType() results in QML."""
+        return self._device_tick
+
+    def _bump_device_tick(self):
+        self._device_tick += 1
+        self.deviceTickChanged.emit()
+
+    @Slot(str, result="QVariant")
+    def deviceInfoForType(self, device_type):
+        """All UI data for the connected device of *device_type* ("mouse" or
+        "keyboard"), so the Mouse and Keyboard pages can each render their own
+        device independently (multiplexer)."""
+        devices = self._engine.connected_devices if self._engine else []
+        device = next(
+            (d for d in devices
+             if (getattr(d, "device_type", "mouse") or "mouse") == device_type),
+            None,
+        )
+        if device is None:
+            return {
+                "connected": False, "type": device_type, "name": "",
+                "transport": "", "buttons": [], "interactive": False,
+                "hotspots": [], "note": "", "image": "", "imageWidth": 220,
+                "imageHeight": 220, "hasCrown": False, "battery": -1,
+                "actionCategories": self._action_categories_for(
+                    self._hidden_actions_for(device_type, None)),
+            }
+        mappings = get_active_mappings(self._cfg)
+        supported = list(getattr(device, "supported_buttons", ()) or ())
+        supported_set = set(supported)
+        buttons = []
+        for key, name in PROFILE_BUTTON_NAMES.items():
+            if key not in supported_set:
+                continue
+            aid = mappings.get(key, "none")
+            buttons.append({"key": key, "name": name, "actionId": aid,
+                            "actionLabel": _action_label(aid)})
+        layout = get_device_layout(getattr(device, "ui_layout", "generic_mouse"))
+        asset = layout.get("image_asset", "")
+        image = QUrl.fromLocalFile(
+            os.path.abspath(os.path.join(self._root_dir, "images", asset))
+        ).toString() if asset else ""
+        # Battery only known for the primary device the backend tracks.
+        battery = self._battery_level if device_type == self._device_type else -1
+        return {
+            "connected": True,
+            "type": device_type,
+            "name": getattr(device, "display_name", "") or "",
+            "transport": getattr(device, "transport", "") or "",
+            "buttons": buttons,
+            "interactive": bool(layout.get("interactive", False)),
+            "hotspots": layout.get("hotspots", []),
+            "note": layout.get("note", ""),
+            "image": image,
+            "imageWidth": layout.get("image_width", 220),
+            "imageHeight": layout.get("image_height", 220),
+            "hasCrown": device_type == "keyboard",
+            "battery": battery,
+            "actionCategories": self._action_categories_for(
+                self._hidden_actions_for(device_type, supported_set)),
+        }
 
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
@@ -1107,6 +1197,7 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
         self.mappingsChanged.emit()
+        self._bump_device_tick()
         self.statusMessage.emit("Saved")
 
     @Slot(str, str, str)
@@ -1118,6 +1209,7 @@ class Backend(QObject):
             self._engine.reload_mappings()
         self.profilesChanged.emit()
         self.mappingsChanged.emit()
+        self._bump_device_tick()
         self.statusMessage.emit("Saved")
 
     @Slot(bool)
@@ -1707,6 +1799,7 @@ class Backend(QObject):
             self.batteryLevelChanged.emit()
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
+        self._bump_device_tick()
         if connected != previous_connected:
             self.mouseConnectedChanged.emit()
             self._append_debug_line(
@@ -1862,6 +1955,7 @@ class Backend(QObject):
         """Runs on Qt main thread."""
         self._battery_level = level
         self.batteryLevelChanged.emit()
+        self._bump_device_tick()
 
     @Slot(str)
     def _handleDebugMessage(self, message):

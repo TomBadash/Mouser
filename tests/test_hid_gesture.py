@@ -202,7 +202,7 @@ class HidEnumerationFallbackTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -364,7 +364,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         listener, info = self._make_listener()
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -417,7 +417,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         }
         fake_devs = [_FakeHidDevice(), _FakeHidDevice()]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -512,8 +512,11 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         divert_call_count = [0]
 
-        def fake_find_feature(feature_id):
-            if feature_id == hid_gesture.FEAT_REPROG_V4:
+        def fake_find_feature(feature_id, timeout_ms=2000):
+            # Receiver: a keyboard on slot 1 (divert fails) and a mouse on slot 2
+            # (divert succeeds); the multiplexer scan only binds where divert works.
+            if (feature_id == hid_gesture.FEAT_REPROG_V4
+                    and listener._dev_idx in (1, 2)):
                 return 0x09
             return None
 
@@ -578,7 +581,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -623,7 +626,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -670,7 +673,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -717,7 +720,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1
@@ -759,7 +762,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, timeout_ms=2000):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1

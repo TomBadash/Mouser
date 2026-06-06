@@ -29,6 +29,12 @@ import time
 # Allow running as `python tools/craft_probe.py` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Make console output robust to non-ASCII device names on Windows (cp1252).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # Reuse Mouser's HID enumeration, parser, and protocol constants so this probe
 # stays faithful to how the app actually talks to the device.
 from core.hid_gesture import (  # noqa: E402
@@ -484,6 +490,140 @@ def listen_mode(args):
     return 0
 
 
+def test_shared(args):
+    """Open TWO handles to the receiver's HID++ long interface and verify both
+    receive notifications (so a two-listener multi-device design is viable)."""
+    if not HIDAPI_OK:
+        print(f"hidapi not available: {HIDAPI_IMPORT_ERROR}", file=sys.stderr)
+        return 2
+    target_info = None
+    for info in HidGestureListener._vendor_hid_infos():
+        if (int(info.get("usage_page", 0) or 0) == 0xFF00
+                and int(info.get("usage", 0) or 0) == 0x0002):
+            target_info = info
+            break
+    if target_info is None:
+        print("No FF00/0x0002 interface found.", file=sys.stderr)
+        return 1
+    h1 = open_hid(target_info)
+    try:
+        h2 = open_hid(target_info)
+    except Exception as exc:
+        print(f"Second handle open FAILED -> shared handles NOT possible: {exc}")
+        h1.close()
+        return 1
+    if h2 is None:
+        print("Second handle open returned None -> shared handles NOT possible.")
+        h1.close()
+        return 1
+    print("Opened TWO handles to FF00/0x0002 OK.")
+
+    # Use handle 1 to set up the Craft crown (dev_idx 0x02) so notifications flow.
+    p1 = Probe(h1)
+    p1.dev_idx = 0x02
+    crown = p1.root_get_feature(FEAT_CROWN)
+    # Enable receiver notifications (short report on FF00/0x0001).
+    for o in _hid.enumerate(LOGI_VID, 0):
+        if (int(o.get("usage_page", 0) or 0) == 0xFF00
+                and int(o.get("usage", 0) or 0) == 0x0001):
+            try:
+                rh = open_hid(o)
+                rh.write([0x10, 0xFF, 0x80, 0x00, 0x00, 0x09, 0x00])
+            except Exception:
+                pass
+            break
+    if crown:
+        p1.request(crown, 2, [0x02])  # divert crown
+        print(f"Diverted Craft crown @0x{crown:02X} via handle 1.")
+    for h in (h1, h2):
+        try:
+            h.set_nonblocking(True)
+        except Exception:
+            pass
+    counts = {"H1": 0, "H2": 0}
+    print(f"\n>>> For {args.seconds}s: spin the crown and move/click the mouse. "
+          "Counting reports per handle.\n")
+    deadline = time.time() + args.seconds
+    while time.time() < deadline:
+        got = False
+        for tag, h in (("H1", h1), ("H2", h2)):
+            try:
+                d = h.read(64, 0)
+            except Exception:
+                d = None
+            if d:
+                got = True
+                counts[tag] += 1
+                msg = _parse(list(d))
+                if msg:
+                    print(f"[{tag}] devIdx=0x{msg[0]:02X} featIdx=0x{msg[1]:02X} "
+                          f"data={_hex_bytes(msg[4])[:20]}")
+        if not got:
+            time.sleep(0.005)
+    print(f"\nTotals: {counts}")
+    print("Shared delivery WORKS" if counts["H1"] and counts["H2"]
+          else "Shared delivery did NOT deliver to both handles")
+    for h in (h1, h2):
+        try:
+            h.close()
+        except Exception:
+            pass
+    return 0
+
+
+def scan_devices(args):
+    """Scan every HID++ device index behind a receiver and report which devices
+    are present (name + REPROG/CROWN), to ground multi-device design."""
+    if not HIDAPI_OK:
+        print(f"hidapi not available: {HIDAPI_IMPORT_ERROR}", file=sys.stderr)
+        return 2
+    seen_paths = set()
+    for info in HidGestureListener._vendor_hid_infos():
+        up = int(info.get("usage_page", 0) or 0)
+        if up < 0xFF00:
+            continue
+        path = info.get("path")
+        key = bytes(path) if isinstance(path, (bytes, bytearray)) else str(path)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        try:
+            dev = open_hid(info)
+        except Exception as exc:
+            print(f"open failed UP=0x{up:04X} usage=0x{int(info.get('usage',0) or 0):04X}: {exc}")
+            continue
+        if dev is None:
+            continue
+        pid = int(info.get("product_id", 0) or 0)
+        usage = int(info.get("usage", 0) or 0)
+        print("=" * 70)
+        print(f"Interface PID=0x{pid:04X} UP=0x{up:04X} usage=0x{usage:04X}")
+        probe = Probe(dev)
+        try:
+            for idx in (0xFF, 1, 2, 3, 4, 5, 6):
+                probe.dev_idx = idx
+                fs = probe.root_get_feature(FEAT_FEATURE_SET)
+                if not fs:
+                    continue
+                name = query_name(probe) or "?"
+                reprog = probe.root_get_feature(FEAT_REPROG_V4)
+                crown = probe.root_get_feature(FEAT_CROWN)
+                feats, _ = enumerate_features(probe, fs)
+                fids = {f.get("feature_id") for f in feats if "feature_id" in f}
+                kind = ("keyboard/crown" if crown else
+                        "mouse?" if reprog else "other")
+                print(f"  devIdx=0x{idx:02X}  name={name!r}  "
+                      f"REPROG_V4={'@0x%02X' % reprog if reprog else '-'}  "
+                      f"CROWN={'@0x%02X' % crown if crown else '-'}  "
+                      f"features={len(feats)}  -> {kind}")
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+    return 0
+
+
 def keys_capture(args):
     """Guided per-key capture: divert every top-row control and print one line
     per physical key press (the CID), so CID → physical key can be mapped."""
@@ -596,6 +736,10 @@ def main():
     ap.add_argument("--json", help="write the full report to this file")
     ap.add_argument("--keys", action="store_true",
                     help="guided per-key capture (press keys one at a time)")
+    ap.add_argument("--scan-devices", action="store_true",
+                    help="scan all HID++ device indices behind a receiver")
+    ap.add_argument("--test-shared", action="store_true",
+                    help="verify two handles to the receiver both get reports")
     ap.add_argument("--listen", action="store_true",
                     help="divert Crown + keys and stream raw HID++ notifications")
     ap.add_argument("--seconds", type=int, default=30,
@@ -616,6 +760,12 @@ def main():
                          "'000C:0001' (Consumer). For bisecting which extra "
                          "interface unlocks crown delivery.")
     args = ap.parse_args()
+
+    if args.test_shared:
+        return test_shared(args)
+
+    if args.scan_devices:
+        return scan_devices(args)
 
     if args.keys:
         return keys_capture(args)

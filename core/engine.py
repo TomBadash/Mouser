@@ -734,6 +734,16 @@ class Engine:
     def connected_device(self):
         return self._hid_runtime_state().connected_device
 
+    @property
+    def connected_devices(self):
+        """All bound HID++ devices (multiplexer); falls back to the single one."""
+        hg = self.hook._hid_gesture
+        devices = list(getattr(hg, "connected_devices", []) or []) if hg else []
+        if devices:
+            return devices
+        one = self.connected_device
+        return [one] if one is not None else []
+
     def dump_device_info(self):
         return getattr(self.hook, "dump_device_info", lambda: None)()
 
