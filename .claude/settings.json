@@ -13,7 +13,8 @@
       "Bash(./.venv/Scripts/python.exe -c ' *)",
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_logi_devices tests.test_device_layouts tests.test_backend tests.test_config)",
       "Bash(.venv/Scripts/python.exe -m unittest discover -s tests)",
-      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend)"
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_device_layouts tests.test_logi_devices)"
     ],
     "additionalDirectories": [
       "c:\\Users\\aless\\.claude\\projects\\c--Users-aless-GitHub-Repositories-mouser-Mouser\\memory"

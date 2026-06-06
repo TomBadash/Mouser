@@ -263,6 +263,16 @@ ApplicationWindow {
         }
     }
 
+    // Hidden developer layout-calibration page (Settings → Developer). A
+    // top-level overlay so it opens directly, independent of the current tab.
+    Loader {
+        anchors.fill: parent
+        z: 950
+        active: backend.calibrationMode
+        visible: active
+        source: "CalibrationPage.qml"
+    }
+
     Item {
         id: overlayLayer
         anchors.fill: parent

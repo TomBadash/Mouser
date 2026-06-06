@@ -23,6 +23,7 @@ from core.config import (
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
+from core.logi_device_catalog import LOGI_DEVICE_LAYOUTS
 from core.key_registry import (
     ShortcutParseError,
     canonical_shortcut_text,
@@ -216,6 +217,7 @@ class Backend(QObject):
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
+    calibrationModeChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
@@ -249,6 +251,7 @@ class Backend(QObject):
         self._connected_device_transport = ""
         self._battery_level = -1
         self._battery_by_type = {}      # {device_type: level} for multi-device
+        self._calibration_mode = False  # hidden dev layout-calibration overlay
         self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
@@ -639,6 +642,71 @@ class Backend(QObject):
             "actionCategories": self._action_categories_for(
                 self._hidden_actions_for(device_type, supported_set)),
         }
+
+    @Slot(result=list)
+    def calibrationLayouts(self):
+        """All interactive device layouts, for the hidden calibration tool.
+
+        Lets coordinates be measured against any device photo without the
+        hardware connected (normalized coords transfer to the live device).
+        """
+        out = []
+        for key, layout in LOGI_DEVICE_LAYOUTS.items():
+            if not layout.get("interactive"):
+                continue
+            asset = layout.get("image_asset", "")
+            image = QUrl.fromLocalFile(
+                os.path.abspath(os.path.join(self._root_dir, "images", asset))
+            ).toString() if asset else ""
+            crown = layout.get("crown")
+            crown_out = None
+            if crown:
+                crown_out = {
+                    "normX": crown.get("normX", 0),
+                    "normY": crown.get("normY", 0),
+                    "normR": crown.get("normR", 0.05),
+                    "buttons": [
+                        {"key": b, "name": PROFILE_BUTTON_NAMES.get(b, b)}
+                        for b in crown.get("buttons", [])
+                    ],
+                }
+            out.append({
+                "key": key,
+                "label": layout.get("label", key),
+                "image": image,
+                "imageWidth": layout.get("image_width", 220),
+                "imageHeight": layout.get("image_height", 220),
+                "layoutKind": layout.get("layout_kind", ""),
+                "hotspots": layout.get("hotspots", []),
+                "crown": crown_out,
+            })
+        return out
+
+    @Slot(str, result=list)
+    def allProfileMappings(self, profileName):
+        """Every button's mapping for a profile, unfiltered (calibration preview)."""
+        profiles = self._cfg.get("profiles", {})
+        mappings = profiles.get(profileName, {}).get("mappings", {})
+        result = []
+        for key, name in PROFILE_BUTTON_NAMES.items():
+            aid = mappings.get(key, "none")
+            result.append({
+                "key": key, "name": name,
+                "actionId": aid, "actionLabel": _action_label(aid),
+            })
+        return result
+
+    @Property(bool, notify=calibrationModeChanged)
+    def calibrationMode(self):
+        """Hidden developer layout-calibration overlay (session-only)."""
+        return self._calibration_mode
+
+    @Slot(bool)
+    def setCalibrationMode(self, on):
+        on = bool(on)
+        if on != self._calibration_mode:
+            self._calibration_mode = on
+            self.calibrationModeChanged.emit()
 
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):

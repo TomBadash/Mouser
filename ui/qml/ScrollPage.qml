@@ -1123,6 +1123,69 @@ Item {
                 }
             }
 
+            // ── Developer ─────────────────────────────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: calibRow.implicitHeight + 24
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                RowLayout {
+                    id: calibRow
+                    anchors {
+                        left: parent.left; right: parent.right
+                        verticalCenter: parent.verticalCenter
+                        leftMargin: 16; rightMargin: 16
+                    }
+                    spacing: 12
+
+                    Column {
+                        Layout.fillWidth: true
+                        spacing: 3
+
+                        Text {
+                            text: s["scroll.calibration_mode"] || "Layout calibration (developer)"
+                            font { family: uiState.fontFamily; pixelSize: 13 }
+                            color: scrollPage.theme.textPrimary
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: s["scroll.calibration_mode_desc"]
+                                  || "Overlay a grid to measure device-layout coordinates, with a layout picker and optional hotspot preview — works without the device connected."
+                            font { family: uiState.fontFamily; pixelSize: 11 }
+                            color: scrollPage.theme.textSecondary
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.preferredWidth: openCalibText.implicitWidth + 28
+                        Layout.preferredHeight: 34
+                        radius: 9
+                        color: openCalibMa.containsMouse
+                               ? scrollPage.theme.accentHover : scrollPage.theme.accent
+                        Text {
+                            id: openCalibText
+                            anchors.centerIn: parent
+                            text: s["scroll.calibration_open"] || "Open calibration"
+                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                            color: scrollPage.theme.bgSidebar
+                        }
+                        MouseArea {
+                            id: openCalibMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: backend.setCalibrationMode(true)
+                        }
+                    }
+                }
+            }
+
             Item { width: 1; height: 24 }
         }
     }

@@ -38,13 +38,6 @@ Item {
             NumberAnimation { from: 1.0; to: 1.05; duration: 850; easing.type: Easing.InOutQuad }
             NumberAnimation { from: 1.05; to: 1.0; duration: 850; easing.type: Easing.InOutQuad }
         }
-
-        Text {
-            anchors.centerIn: parent
-            text: "Crown"
-            font { family: uiState.fontFamily; pixelSize: Math.max(9, cr * 0.32); bold: true }
-            color: theme.accent
-        }
     }
 
     MouseArea {

@@ -26,15 +26,6 @@ Item {
     // Reactive i18n shortcut — all s["key"] bindings update on lm.languageChanged
     property var s: lm.strings
 
-    // Toggle the keyboard-layout calibration overlay. Enabled only on the
-    // keyboard page so the two MousePage instances don't register an ambiguous
-    // duplicate shortcut (which Qt then disables on both).
-    Shortcut {
-        sequence: "Ctrl+Shift+C"
-        enabled: mousePage.deviceFilter === "keyboard"
-        onActivated: mousePage.calibrationMode = !mousePage.calibrationMode
-    }
-
     // Shared delegate for action-picker ComboBoxes: translates every list item.
     Component {
         id: actionComboDelegate
@@ -348,9 +339,6 @@ Item {
     property string selectedButton: ""
     property string selectedButtonName: ""
     property string selectedActionId: ""
-    // Temporary keyboard-layout calibration: shows live normalized cursor
-    // coords + a reference grid over the device photo. Toggle with Ctrl+Shift+C.
-    property bool calibrationMode: true
     readonly property string hscrollLeftActionId: selectedProfileMappingState.hscroll_left
                                              ? selectedProfileMappingState.hscroll_left.actionId
                                              : "none"
@@ -1175,8 +1163,7 @@ Item {
                         // Interactive keyboard overlay: clickable key regions.
                         Repeater {
                             model: (deviceConnectedHere
-                                    && pageDevice.layoutKind === "keyboard"
-                                    && !mousePage.calibrationMode)
+                                    && pageDevice.layoutKind === "keyboard")
                                    ? pageDevice.hotspots : []
 
                             delegate: KeyHotspot {
@@ -1198,7 +1185,6 @@ Item {
                             visible: deviceConnectedHere
                                      && pageDevice.layoutKind === "keyboard"
                                      && !!pageDevice.crown
-                                     && !mousePage.calibrationMode
                             anchors.fill: mouseImageArea
                             imgItem: mouseImg
                             crown: pageDevice.crown || ({})
@@ -1210,117 +1196,6 @@ Item {
                                         out.push(bs[i])
                                 }
                                 return out
-                            }
-                        }
-
-                        // ── Calibration overlay (Ctrl+Shift+C) ────
-                        // Live normalized cursor coords + reference grid, in the
-                        // exact coordinate system the hotspots use, so key/crown
-                        // positions can be read off precisely.
-                        Item {
-                            id: calib
-                            visible: deviceConnectedHere
-                                     && pageDevice.layoutKind === "keyboard"
-                                     && mousePage.calibrationMode
-                            anchors.fill: mouseImageArea
-                            z: 60
-                            property real nx: 0
-                            property real ny: 0
-                            property var clicks: []
-
-                            Repeater {
-                                model: 21
-                                delegate: Rectangle {
-                                    required property int index
-                                    color: index % 2 === 0 ? "#ff3030" : "#ff8080"
-                                    opacity: 0.5
-                                    width: 1; height: mouseImg.paintedHeight
-                                    x: mouseImg.x + mouseImg.offX + index / 20 * mouseImg.paintedWidth
-                                    y: mouseImg.y + mouseImg.offY
-                                }
-                            }
-                            Repeater {
-                                model: 21
-                                delegate: Rectangle {
-                                    required property int index
-                                    color: "#3060ff"; opacity: 0.45
-                                    height: 1; width: mouseImg.paintedWidth
-                                    x: mouseImg.x + mouseImg.offX
-                                    y: mouseImg.y + mouseImg.offY + index / 20 * mouseImg.paintedHeight
-                                }
-                            }
-
-                            // Markers for recorded clicks.
-                            Repeater {
-                                model: calib.clicks
-                                delegate: Rectangle {
-                                    required property var modelData
-                                    required property int index
-                                    width: 10; height: 10; radius: 5
-                                    color: "#ffcc00"; border.width: 1; border.color: "#000"
-                                    x: mouseImg.x + mouseImg.offX + modelData.x * mouseImg.paintedWidth - 5
-                                    y: mouseImg.y + mouseImg.offY + modelData.y * mouseImg.paintedHeight - 5
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: index + 1
-                                        font { pixelSize: 7; bold: true }
-                                        color: "#000"
-                                    }
-                                }
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onPositionChanged: function(m) {
-                                    calib.nx = (m.x - mouseImg.x - mouseImg.offX) / mouseImg.paintedWidth
-                                    calib.ny = (m.y - mouseImg.y - mouseImg.offY) / mouseImg.paintedHeight
-                                }
-                                onClicked: function(m) {
-                                    var x = (m.x - mouseImg.x - mouseImg.offX) / mouseImg.paintedWidth
-                                    var y = (m.y - mouseImg.y - mouseImg.offY) / mouseImg.paintedHeight
-                                    if (m.button === Qt.RightButton) {
-                                        calib.clicks = []          // right-click clears
-                                        console.log("[CALIB] cleared")
-                                        return
-                                    }
-                                    var arr = calib.clicks.slice()
-                                    arr.push({ x: x, y: y })
-                                    calib.clicks = arr
-                                    console.log("[CALIB] #" + arr.length
-                                        + "  x=" + x.toFixed(4) + "  y=" + y.toFixed(4))
-                                }
-                            }
-
-                            Rectangle {
-                                x: 8; y: 8
-                                width: Math.max(coordText.implicitWidth, listText.implicitWidth) + 16
-                                height: coordText.implicitHeight + listText.implicitHeight + 14
-                                color: "#000000"; opacity: 0.85; radius: 6
-                                Column {
-                                    anchors { left: parent.left; top: parent.top; margins: 6 }
-                                    spacing: 2
-                                    Text {
-                                        id: coordText
-                                        text: "x: " + calib.nx.toFixed(4) + "   y: " + calib.ny.toFixed(4)
-                                              + "   (L=salva, R=azzera)"
-                                        font { family: uiState.fontFamily; pixelSize: 14; bold: true }
-                                        color: "#00ffaa"
-                                    }
-                                    Text {
-                                        id: listText
-                                        text: {
-                                            var lines = []
-                                            for (var i = 0; i < calib.clicks.length; i++)
-                                                lines.push((i + 1) + ": " + calib.clicks[i].x.toFixed(4)
-                                                    + ", " + calib.clicks[i].y.toFixed(4))
-                                            return lines.join("\n")
-                                        }
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: "#ffffff"
-                                    }
-                                }
                             }
                         }
 
