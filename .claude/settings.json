@@ -7,7 +7,13 @@
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_config tests.test_smart_shift tests.test_device_layouts tests.test_hid_gesture tests.test_mouse_hook -q)",
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_config tests.test_smart_shift tests.test_device_layouts tests.test_hid_gesture tests.test_mouse_hook)",
       "Bash(./.venv/Scripts/python.exe main_qml.py)",
-      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_engine tests.test_hid_gesture)"
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_engine tests.test_hid_gesture)",
+      "Read(//tmp/kbcal/**)",
+      "Read(//c/tmp/kbcal/**)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_logi_devices tests.test_device_layouts tests.test_backend tests.test_config)",
+      "Bash(.venv/Scripts/python.exe -m unittest discover -s tests)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend)"
     ],
     "additionalDirectories": [
       "c:\\Users\\aless\\.claude\\projects\\c--Users-aless-GitHub-Repositories-mouser-Mouser\\memory"

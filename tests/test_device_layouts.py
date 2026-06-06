@@ -39,6 +39,10 @@ class DeviceLayoutTests(unittest.TestCase):
     def test_catalog_same_side_label_anchors_do_not_overlap(self):
         min_label_separation_px = 35
         for layout_key, layout in LOGI_DEVICE_LAYOUTS.items():
+            # Keyboard layouts use horizontal key-region tiles (labels under
+            # each key), not the vertical dot-callout model this check targets.
+            if layout.get("layout_kind") == "keyboard":
+                continue
             labels_by_side = {}
             for hotspot in layout["hotspots"]:
                 side = hotspot.get("labelSide", "right")

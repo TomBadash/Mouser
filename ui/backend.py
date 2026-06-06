@@ -589,7 +589,8 @@ class Backend(QObject):
             return {
                 "connected": False, "type": device_type, "name": "",
                 "transport": "", "buttons": [], "interactive": False,
-                "hotspots": [], "note": "", "image": "", "imageWidth": 220,
+                "layoutKind": "", "hotspots": [], "crown": None,
+                "note": "", "image": "", "imageWidth": 220,
                 "imageHeight": 220, "hasCrown": False, "battery": -1,
                 "actionCategories": self._action_categories_for(
                     self._hidden_actions_for(device_type, None)),
@@ -611,6 +612,14 @@ class Backend(QObject):
         ).toString() if asset else ""
         # Per-device battery (multiplexer reads each device's own level).
         battery = self._battery_by_type.get(device_type, -1)
+        # Only surface hotspots for keys the device actually exposes.
+        hotspots = [
+            h for h in layout.get("hotspots", [])
+            if h.get("buttonKey") in supported_set
+        ]
+        crown = layout.get("crown") if any(
+            str(b).startswith("crown_") for b in supported_set
+        ) else None
         return {
             "connected": True,
             "type": device_type,
@@ -618,7 +627,9 @@ class Backend(QObject):
             "transport": getattr(device, "transport", "") or "",
             "buttons": buttons,
             "interactive": bool(layout.get("interactive", False)),
-            "hotspots": layout.get("hotspots", []),
+            "layoutKind": layout.get("layout_kind", ""),
+            "hotspots": hotspots,
+            "crown": crown,
             "note": layout.get("note", ""),
             "image": image,
             "imageWidth": layout.get("image_width", 220),
@@ -1573,14 +1584,32 @@ class Backend(QObject):
         self.statusMessage.emit("Profile deleted")
 
     @Slot(str, result=list)
-    def getProfileMappings(self, profileName):
-        """Return button mappings for a specific profile, filtered by device."""
+    @Slot(str, str, result=list)
+    def getProfileMappings(self, profileName, deviceType=""):
+        """Return button mappings for a profile, filtered by device.
+
+        ``deviceType`` ("mouse"/"keyboard") filters by THAT page's connected
+        device so each page resolves its own buttons in a multi-device setup.
+        Without it, falls back to the globally tracked device (legacy).
+        """
         profiles = self._cfg.get("profiles", {})
         pdata = profiles.get(profileName, {})
         mappings = pdata.get("mappings", {})
-        device_buttons = set(
-            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
-        )
+        if deviceType:
+            devices = self._engine.connected_devices if self._engine else []
+            device = next(
+                (d for d in devices
+                 if (getattr(d, "device_type", "mouse") or "mouse") == deviceType),
+                None,
+            )
+            device_buttons = set(
+                getattr(device, "supported_buttons", None)
+                or PROFILE_BUTTON_NAMES.keys()
+            )
+        else:
+            device_buttons = set(
+                self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
+            )
         result = []
         for key, name in PROFILE_BUTTON_NAMES.items():
             if key not in device_buttons:

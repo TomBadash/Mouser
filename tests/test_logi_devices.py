@@ -246,11 +246,12 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(classify_device_kind(None, [], []), "mouse")
 
     def test_unrecognized_keyboard_routes_to_generic_keyboard(self):
-        # MX-Keys-like: shared receiver PID, keyboard features, standard top-row
-        # CIDs. Should classify as a keyboard and expose just those keys.
+        # Unrecognized keyboard (no catalog entry): shared receiver PID, keyboard
+        # features, standard top-row CIDs. Should classify as a keyboard and
+        # expose just those keys via the generic keyboard layout.
         info = build_connected_device_info(
             product_id=0xC52B,
-            product_name="MX Keys Wireless Keyboard",
+            product_name="Wireless Keyboard K780",
             discovered_features=[0x4521, 0x1982, 0x40A3, 0x1B04],
             reprog_controls=[
                 {"cid": 0x00C7, "flags": 0x047A},
