@@ -1,28 +1,28 @@
 """
-Platform dispatcher shim for mouse hook implementations.
+Platform dispatcher shim for device hook implementations.
 """
 
 import sys
 import types
 
-from core.mouse_hook_types import MouseEvent
+from core.device_hook_types import DeviceEvent
 
 if sys.platform == "win32":
-    from core import mouse_hook_windows as _platform
+    from core import device_hook_windows as _platform
 elif sys.platform == "darwin":
-    from core import mouse_hook_macos as _platform
+    from core import device_hook_macos as _platform
 elif sys.platform == "linux":
-    from core import mouse_hook_linux as _platform
+    from core import device_hook_linux as _platform
 else:
-    from core import mouse_hook_stub as _platform
+    from core import device_hook_stub as _platform
 
-MouseHook = _platform.MouseHook
+DeviceHook = _platform.DeviceHook
 
 _RESERVED = {
-    "MouseHook",
-    "MouseEvent",
+    "DeviceHook",
+    "DeviceEvent",
     "_platform",
-    "_MouseHookModule",
+    "_DeviceHookModule",
     "_RESERVED",
     "__all__",
     "__class__",
@@ -41,10 +41,10 @@ def _should_forward(name):
     return name not in _RESERVED
 
 
-class _MouseHookModule(types.ModuleType):
+class _DeviceHookModule(types.ModuleType):
     def __getattr__(self, name):
-        if name == "MouseEvent":
-            return MouseEvent
+        if name == "DeviceEvent":
+            return DeviceEvent
         try:
             return getattr(_platform, name)
         except AttributeError as exc:
@@ -65,11 +65,11 @@ class _MouseHookModule(types.ModuleType):
         super().__delattr__(name)
 
     def __dir__(self):
-        return sorted(set(super().__dir__()) | set(dir(_platform)) | {"MouseEvent"})
+        return sorted(set(super().__dir__()) | set(dir(_platform)) | {"DeviceEvent"})
 
 
 module = sys.modules[__name__]
-module.__class__ = _MouseHookModule
-module.MouseHook = MouseHook
-module.MouseEvent = MouseEvent
-module.__all__ = ["MouseHook", "MouseEvent"] + list(getattr(_platform, "__all__", []))
+module.__class__ = _DeviceHookModule
+module.DeviceHook = DeviceHook
+module.DeviceEvent = DeviceEvent
+module.__all__ = ["DeviceHook", "DeviceEvent"] + list(getattr(_platform, "__all__", []))

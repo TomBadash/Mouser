@@ -846,7 +846,7 @@ elif sys.platform == "darwin":
             return
         evt_type = entry["down_type"] if is_down else entry["up_type"]
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
-        ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
+        ev = Quartz.CGEventCreateDeviceEvent(None, evt_type, loc, entry["button"])
         if ev:
             try:
                 # Mark synthetic mouse events so the CGEventTap can ignore them

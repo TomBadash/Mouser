@@ -4,11 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core.config import DEFAULT_CONFIG
-from core.mouse_hook import MouseEvent
-from core.mouse_hook_types import HidRuntimeState
+from core.device_hook import DeviceEvent
+from core.device_hook_types import HidRuntimeState
 
 
-class _FakeMouseHook:
+class _FakeDeviceHook:
     def __init__(self):
         self.invert_vscroll = False
         self.invert_hscroll = False
@@ -100,7 +100,7 @@ class EngineHorizontalScrollTests(unittest.TestCase):
         cfg["settings"]["hscroll_threshold"] = 1
 
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):
@@ -112,17 +112,17 @@ class EngineHorizontalScrollTests(unittest.TestCase):
 
         with patch("core.engine.execute_action") as execute_action_mock:
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.00,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.05,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.45,
             ))
@@ -135,17 +135,17 @@ class EngineHorizontalScrollTests(unittest.TestCase):
 
         with patch("core.engine.execute_action") as execute_action_mock:
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.35,
                 timestamp=2.00,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.40,
                 timestamp=2.02,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.30,
                 timestamp=2.04,
             ))
@@ -269,7 +269,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
 
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):

@@ -112,14 +112,14 @@ The arrows match the runtime call graph: the OS-level mouse hook feeds events in
 
 ### Mouse hook
 
-Mouser exposes a single `MouseHook` façade in [`core/mouse_hook.py`](core/mouse_hook.py) and dispatches to a per-platform implementation:
+Mouser exposes a single `DeviceHook` façade in [`core/device_hook.py`](core/device_hook.py) and dispatches to a per-platform implementation:
 
-- **Windows** — [`core/mouse_hook_windows.py`](core/mouse_hook_windows.py): `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data.
-- **macOS** — [`core/mouse_hook_macos.py`](core/mouse_hook_macos.py): `CGEventTap` for interception and Quartz events for key simulation. The callback is wrapped with `@_autoreleased` to recycle Foundation objects every event (closing a ~1.4 GB leak that appeared under load) and the tap auto re-enables itself when the system disables it on timeout.
-- **Linux** — [`core/mouse_hook_linux.py`](core/mouse_hook_linux.py): `evdev` to grab the physical mouse and `uinput` to forward pass-through events through a virtual device.
-- **Stub** — [`core/mouse_hook_stub.py`](core/mouse_hook_stub.py): inert hook for unsupported platforms / smoke tests.
+- **Windows** — [`core/device_hook_windows.py`](core/device_hook_windows.py): `SetWindowsHookExW` with `WH_MOUSE_LL` on a dedicated background thread, plus Raw Input for extra mouse data.
+- **macOS** — [`core/device_hook_macos.py`](core/device_hook_macos.py): `CGEventTap` for interception and Quartz events for key simulation. The callback is wrapped with `@_autoreleased` to recycle Foundation objects every event (closing a ~1.4 GB leak that appeared under load) and the tap auto re-enables itself when the system disables it on timeout.
+- **Linux** — [`core/device_hook_linux.py`](core/device_hook_linux.py): `evdev` to grab the physical mouse and `uinput` to forward pass-through events through a virtual device.
+- **Stub** — [`core/device_hook_stub.py`](core/device_hook_stub.py): inert hook for unsupported platforms / smoke tests.
 
-The shared base + types live in [`core/mouse_hook_base.py`](core/mouse_hook_base.py), [`core/mouse_hook_contract.py`](core/mouse_hook_contract.py), and [`core/mouse_hook_types.py`](core/mouse_hook_types.py).
+The shared base + types live in [`core/device_hook_base.py`](core/device_hook_base.py), [`core/device_hook_contract.py`](core/device_hook_contract.py), and [`core/device_hook_types.py`](core/device_hook_types.py).
 
 All paths feed the same internal event model and intercept:
 
@@ -164,8 +164,8 @@ The same module owns the SmartShift integration. It prefers the enhanced feature
 Mouser handles mouse power-off / on cycles automatically:
 
 - **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device returns. Pending SmartShift / scroll-mode settings are replayed on reconnect.
-- **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` (Windows) and platform equivalents elsewhere, reinstalling the low-level hook when devices are added or removed.
-- **UI layer** — connection state and device identity flow from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time.
+- **Hook layer** — `DeviceHook` listens for `WM_DEVICECHANGE` (Windows) and platform equivalents elsewhere, reinstalling the low-level hook when devices are added or removed.
+- **UI layer** — connection state and device identity flow from HID++ → DeviceHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time.
 
 ### Configuration
 
@@ -228,14 +228,14 @@ mouser/
 │   ├── log_setup.py             # Rotating file log + stdout redirection
 │   ├── logi_device_catalog.py   # Curated Logitech specs, assets, and hotspots
 │   ├── logi_devices.py          # Known Logitech device catalog + connected-device metadata
-│   ├── mouse_hook.py            # Platform dispatcher façade
-│   ├── mouse_hook_base.py       # Shared base class
-│   ├── mouse_hook_contract.py   # Hook protocol / type stubs
-│   ├── mouse_hook_types.py      # Event enums
-│   ├── mouse_hook_windows.py    # WH_MOUSE_LL + Raw Input
-│   ├── mouse_hook_macos.py      # CGEventTap + Quartz
-│   ├── mouse_hook_linux.py      # evdev + uinput
-│   ├── mouse_hook_stub.py       # Inert hook (unsupported platforms / tests)
+│   ├── device_hook.py            # Platform dispatcher façade
+│   ├── device_hook_base.py       # Shared base class
+│   ├── device_hook_contract.py   # Hook protocol / type stubs
+│   ├── device_hook_types.py      # Event enums
+│   ├── device_hook_windows.py    # WH_MOUSE_LL + Raw Input
+│   ├── device_hook_macos.py      # CGEventTap + Quartz
+│   ├── device_hook_linux.py      # evdev + uinput
+│   ├── device_hook_stub.py       # Inert hook (unsupported platforms / tests)
 │   ├── startup.py               # Login startup (Windows registry + macOS LaunchAgent)
 │   └── version.py               # APP_VERSION / commit / build mode
 │
@@ -244,7 +244,7 @@ mouser/
 │   ├── locale_manager.py        # en / zh_CN / zh_TW translations + button/action labels
 │   └── qml/
 │       ├── Main.qml             # App shell (sidebar + page stack + tray toast)
-│       ├── MousePage.qml        # Merged mouse diagram + profile manager
+│       ├── DevicePage.qml        # Merged mouse diagram + profile manager
 │       ├── ScrollPage.qml       # DPI slider + scroll/SmartShift toggles
 │       ├── KeyCaptureDialog.qml # Custom shortcut recorder
 │       ├── HotspotDot.qml       # Interactive button overlay on mouse image

@@ -20,10 +20,10 @@ Item {
     property string label: ""             // function name ("Volume Up")
 
     // ── Derived state ─────────────────────────────────────────
-    readonly property string actionId: mousePage.actionFor_id(buttonKey)
+    readonly property string actionId: devicePage.actionFor_id(buttonKey)
     readonly property bool mapped: actionId !== "none"
-    readonly property string actionLabel: mousePage.actionFor(buttonKey)
-    readonly property bool isSelected: mousePage.selectedButton === buttonKey
+    readonly property string actionLabel: devicePage.actionFor(buttonKey)
+    readonly property bool isSelected: devicePage.selectedButton === buttonKey
     readonly property bool isHovered: keyMa.containsMouse
 
     // ── Geometry over the painted image ───────────────────────
@@ -36,7 +36,7 @@ Item {
     Accessible.role: Accessible.Button
     Accessible.name: label
 
-    function triggerSelection() { mousePage.selectButton(buttonKey) }
+    function triggerSelection() { devicePage.selectButton(buttonKey) }
     Keys.onReturnPressed: triggerSelection()
     Keys.onEnterPressed: triggerSelection()
     Keys.onSpacePressed: triggerSelection()

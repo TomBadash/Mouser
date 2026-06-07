@@ -1,14 +1,14 @@
 """
-Structural contract exposed by platform mouse hook implementations.
+Structural contract exposed by platform device hook implementations.
 """
 
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from core.mouse_hook_types import HidRuntimeState
+from core.device_hook_types import HidRuntimeState
 
 
 @runtime_checkable
-class MouseHookLike(Protocol):
+class DeviceHookLike(Protocol):
     debug_mode: bool
     invert_vscroll: bool
     invert_hscroll: bool

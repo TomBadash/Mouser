@@ -244,7 +244,7 @@ class SmartShiftPendingRequestAbortTests(unittest.TestCase):
 # Engine — SmartShift config persistence and startup
 # ──────────────────────────────────────────────────────────────────────────────
 
-class _FakeMouseHook:
+class _FakeDeviceHook:
     def __init__(self):
         self.invert_vscroll = False
         self.invert_hscroll = False
@@ -292,7 +292,7 @@ class EngineSmartShiftTests(unittest.TestCase):
         if extra_settings:
             cfg["settings"].update(extra_settings)
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):
@@ -545,7 +545,7 @@ class EngineToggleSmartShiftTests(unittest.TestCase):
         if extra_settings:
             cfg["settings"].update(extra_settings)
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):
@@ -632,7 +632,7 @@ class EngineSwitchScrollModeTests(unittest.TestCase):
         if extra_settings:
             cfg["settings"].update(extra_settings)
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):

@@ -1,5 +1,5 @@
 """
-Linux mouse hook implementation.
+Linux device hook implementation.
 """
 
 import glob
@@ -19,14 +19,14 @@ try:
     _EVDEV_OK = True
 except ImportError:
     _EVDEV_OK = False
-    print("[MouseHook] python-evdev not installed — pip install evdev")
+    print("[DeviceHook] python-evdev not installed — pip install evdev")
 
 from core.logi_devices import (
     build_evdev_connected_device_info,
     resolve_device as _resolve_logi_device,
 )
-from core.mouse_hook_base import BaseMouseHook, HidGestureListener
-from core.mouse_hook_types import HidRuntimeState, MouseEvent
+from core.device_hook_base import BaseDeviceHook, HidGestureListener
+from core.device_hook_types import HidRuntimeState, DeviceEvent
 
 _LOGI_VENDOR = 0x046D
 _LOG_ONCE_KEYS = set()
@@ -98,7 +98,7 @@ def _format_linux_device_access_list(paths, limit=8):
     return "; ".join(details) if details else "-"
 
 
-class MouseHook(BaseMouseHook):
+class DeviceHook(BaseDeviceHook):
     """
     Uses evdev on Linux to intercept mouse button presses and scroll events.
     Grabs the mouse device for exclusive access and forwards non-blocked events
@@ -167,10 +167,10 @@ class MouseHook(BaseMouseHook):
         try:
             dev.grab()
             self._evdev_grabbed = True
-            print(f"[MouseHook] Grabbed {dev.name} ({dev.path})")
+            print(f"[DeviceHook] Grabbed {dev.name} ({dev.path})")
             return True
         except Exception as exc:
-            print(f"[MouseHook] Failed to grab {getattr(dev, 'path', '?')}: {exc}")
+            print(f"[DeviceHook] Failed to grab {getattr(dev, 'path', '?')}: {exc}")
             return False
 
     def _release_evdev_grab(self):
@@ -180,9 +180,9 @@ class MouseHook(BaseMouseHook):
         try:
             dev.ungrab()
             self._evdev_grabbed = False
-            print(f"[MouseHook] Released grab for {dev.name} ({dev.path})")
+            print(f"[DeviceHook] Released grab for {dev.name} ({dev.path})")
         except Exception as exc:
-            print(f"[MouseHook] Failed to ungrab {getattr(dev, 'path', '?')}: {exc}")
+            print(f"[DeviceHook] Failed to ungrab {getattr(dev, 'path', '?')}: {exc}")
 
     def _set_evdev_remap_ready(self, ready, reason=None):
         ready = bool(ready)
@@ -239,13 +239,13 @@ class MouseHook(BaseMouseHook):
                 )
             except PermissionError:
                 print(
-                    "[MouseHook] Permission denied — add user to 'input' group "
+                    "[DeviceHook] Permission denied — add user to 'input' group "
                     "and ensure /dev/uinput is writable"
                 )
                 self._set_evdev_remap_ready(False, _REMAP_REASON_UINPUT_FAILED)
                 return False
             except Exception as exc:
-                print(f"[MouseHook] Failed to setup uinput: {exc}")
+                print(f"[DeviceHook] Failed to setup uinput: {exc}")
                 self._set_evdev_remap_ready(False, _REMAP_REASON_UINPUT_FAILED)
                 return False
         if not self._acquire_evdev_grab():
@@ -267,7 +267,7 @@ class MouseHook(BaseMouseHook):
         self._device_connected = connected
         if changed:
             state = "Connected" if connected else "Disconnected"
-            print(f"[MouseHook] Device {state}")
+            print(f"[DeviceHook] Device {state}")
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
@@ -296,9 +296,9 @@ class MouseHook(BaseMouseHook):
         next_source = getattr(next_device, "source", None) if next_device is not None else None
         if prev_source != next_source:
             if next_source == "evdev":
-                print("[MouseHook] Using evdev fallback device info")
+                print("[DeviceHook] Using evdev fallback device info")
             elif prev_source == "evdev" and next_device is not None:
-                print("[MouseHook] Device info upgraded from evdev fallback to HID++")
+                print("[DeviceHook] Device info upgraded from evdev fallback to HID++")
 
         self._set_device_connected(self._evdev_ready, force=force)
 
@@ -394,7 +394,7 @@ class MouseHook(BaseMouseHook):
                     "dy": self._gesture_delta_y,
                 }
             )
-            dispatch_event = MouseEvent(
+            dispatch_event = DeviceEvent(
                 gesture_event,
                 {
                     "delta_x": self._gesture_delta_x,
@@ -457,31 +457,31 @@ class MouseHook(BaseMouseHook):
                 )
                 dispatch_click = should_click
         if dispatch_click:
-            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+            self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
         if self._ui_passthrough:
             return
         self._emit_debug("HID mode shift button down")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
         if self._ui_passthrough:
             return
         self._emit_debug("HID mode shift button up")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
         if self._ui_passthrough:
             return
         self._emit_debug("HID DPI switch button down")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
         if self._ui_passthrough:
             return
         self._emit_debug("HID DPI switch button up")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
         if self._ui_passthrough:
@@ -511,7 +511,7 @@ class MouseHook(BaseMouseHook):
             )
         )
         if should_wake_evdev:
-            print("[MouseHook] Logitech HID connected; waking evdev scan")
+            print("[DeviceHook] Logitech HID connected; waking evdev scan")
             self._rescan_requested.set()
             self._evdev_wakeup.set()
 
@@ -530,7 +530,7 @@ class MouseHook(BaseMouseHook):
         except Exception as exc:
             _log_once(
                 ("evdev-list-error", type(exc).__name__, str(exc)),
-                f"[MouseHook] Cannot list evdev devices: {exc}",
+                f"[DeviceHook] Cannot list evdev devices: {exc}",
             )
             return None
         if not paths:
@@ -538,7 +538,7 @@ class MouseHook(BaseMouseHook):
             if event_paths:
                 _log_once(
                     "evdev-empty-fallback-event-nodes",
-                    "[MouseHook] evdev returned no input devices; falling "
+                    "[DeviceHook] evdev returned no input devices; falling "
                     "back to visible /dev/input/event* nodes: "
                     f"{_format_linux_device_access_list(event_paths)}",
                 )
@@ -546,7 +546,7 @@ class MouseHook(BaseMouseHook):
             else:
                 _log_once(
                     "evdev-no-input-devices",
-                    "[MouseHook] evdev returned no input devices and no "
+                    "[DeviceHook] evdev returned no input devices and no "
                     "/dev/input/event* nodes are visible; remapping needs "
                     f"/dev/input/event* access. "
                     f"{_format_linux_device_access('/dev/input')}",
@@ -558,7 +558,7 @@ class MouseHook(BaseMouseHook):
             except PermissionError as exc:
                 _log_once(
                     ("evdev-open-permission", path),
-                    f"[MouseHook] Permission denied opening {path}: {exc}. "
+                    f"[DeviceHook] Permission denied opening {path}: {exc}. "
                     f"{_format_linux_device_access(path)}. "
                     "Add the user to a group with /dev/input/event* access "
                     "or install a udev rule.",
@@ -567,7 +567,7 @@ class MouseHook(BaseMouseHook):
             except Exception as exc:
                 _log_once(
                     ("evdev-open-error", path, type(exc).__name__, str(exc)),
-                    f"[MouseHook] Cannot open evdev device {path}: {exc}",
+                    f"[DeviceHook] Cannot open evdev device {path}: {exc}",
                 )
                 continue
             try:
@@ -600,7 +600,7 @@ class MouseHook(BaseMouseHook):
             except PermissionError as exc:
                 _log_once(
                     ("evdev-capabilities-permission", dev.path),
-                    f"[MouseHook] Permission denied reading capabilities for "
+                    f"[DeviceHook] Permission denied reading capabilities for "
                     f"{dev.path}: {exc}",
                 )
                 dev.close()
@@ -608,7 +608,7 @@ class MouseHook(BaseMouseHook):
             except Exception as exc:
                 _log_once(
                     ("evdev-capabilities-error", dev.path, type(exc).__name__, str(exc)),
-                    f"[MouseHook] Cannot inspect evdev device {dev.path}: {exc}",
+                    f"[DeviceHook] Cannot inspect evdev device {dev.path}: {exc}",
                 )
                 dev.close()
                 continue
@@ -625,7 +625,7 @@ class MouseHook(BaseMouseHook):
                 if dedupe_key not in self._ignored_non_logitech:
                     self._ignored_non_logitech.add(dedupe_key)
                     print(
-                        "[MouseHook] Ignoring non-Logitech evdev candidate: "
+                        "[DeviceHook] Ignoring non-Logitech evdev candidate: "
                         f"{dev.name} ({dev.path}) "
                         f"vendor=0x{getattr(info, 'vendor', 0):04X} "
                         f"product=0x{getattr(info, 'product', 0):04X}"
@@ -657,13 +657,13 @@ class MouseHook(BaseMouseHook):
             for dev, _ in ordered[1:]:
                 dev.close()
             print(
-                f"[MouseHook] Found mouse: {chosen.name} ({chosen.path}) "
+                f"[DeviceHook] Found mouse: {chosen.name} ({chosen.path}) "
                 f"vendor=0x{chosen.info.vendor:04X}"
             )
             return chosen
         _log_once(
             "evdev-no-logitech-mouse",
-            "[MouseHook] No Logitech evdev mouse found; UI connection state "
+            "[DeviceHook] No Logitech evdev mouse found; UI connection state "
             "and remapping require a Logitech mouse visible under "
             "/dev/input/event* with vendor 0x046D",
         )
@@ -684,7 +684,7 @@ class MouseHook(BaseMouseHook):
                 self._enable_evdev_remapping()
             return True
         except Exception as exc:
-            print(f"[MouseHook] Failed to setup evdev: {exc}")
+            print(f"[DeviceHook] Failed to setup evdev: {exc}")
             dev.close()
         return False
 
@@ -709,7 +709,7 @@ class MouseHook(BaseMouseHook):
         else:
             caps.pop(rel_type, None)
         print(
-            "[MouseHook] Filtering REL_WHEEL_HI_RES / "
+            "[DeviceHook] Filtering REL_WHEEL_HI_RES / "
             "REL_HWHEEL_HI_RES from Mouser Virtual Mouse"
         )
         return caps
@@ -723,7 +723,7 @@ class MouseHook(BaseMouseHook):
                 pass
             self._evdev_device = None
             self._evdev_grabbed = False
-            print("[MouseHook] evdev device released")
+            print("[DeviceHook] evdev device released")
         self._evdev_connected_device = None
         self._set_evdev_ready(False)
 
@@ -753,10 +753,10 @@ class MouseHook(BaseMouseHook):
                     break
             except OSError as exc:
                 if self._running:
-                    print(f"[MouseHook] Device disconnected: {exc}")
+                    print(f"[DeviceHook] Device disconnected: {exc}")
             except Exception as exc:
                 if self._running:
-                    print(f"[MouseHook] evdev error: {exc}")
+                    print(f"[DeviceHook] evdev error: {exc}")
             finally:
                 self._cleanup_evdev()
             if self._running:
@@ -772,7 +772,7 @@ class MouseHook(BaseMouseHook):
         fd = self._evdev_device.fd
         while self._running:
             if self._rescan_requested.is_set():
-                print("[MouseHook] Rescan requested; leaving listen loop")
+                print("[DeviceHook] Rescan requested; leaving listen loop")
                 return
             if not self._evdev_remap_ready:
                 self._wait_for_evdev_wakeup(None)
@@ -802,27 +802,27 @@ class MouseHook(BaseMouseHook):
 
         if event.code == _ecodes.BTN_SIDE:
             if event.value == 1:
-                mouse_event = MouseEvent(MouseEvent.XBUTTON1_DOWN)
-                should_block = MouseEvent.XBUTTON1_DOWN in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.XBUTTON1_DOWN)
+                should_block = DeviceEvent.XBUTTON1_DOWN in self._blocked_events
             elif event.value == 0:
-                mouse_event = MouseEvent(MouseEvent.XBUTTON1_UP)
-                should_block = MouseEvent.XBUTTON1_UP in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.XBUTTON1_UP)
+                should_block = DeviceEvent.XBUTTON1_UP in self._blocked_events
 
         elif event.code == _ecodes.BTN_EXTRA:
             if event.value == 1:
-                mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
-                should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.XBUTTON2_DOWN)
+                should_block = DeviceEvent.XBUTTON2_DOWN in self._blocked_events
             elif event.value == 0:
-                mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
-                should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.XBUTTON2_UP)
+                should_block = DeviceEvent.XBUTTON2_UP in self._blocked_events
 
         elif event.code == _ecodes.BTN_MIDDLE:
             if event.value == 1:
-                mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
-                should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.MIDDLE_DOWN)
+                should_block = DeviceEvent.MIDDLE_DOWN in self._blocked_events
             elif event.value == 0:
-                mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
-                should_block = MouseEvent.MIDDLE_UP in self._blocked_events
+                mouse_event = DeviceEvent(DeviceEvent.MIDDLE_UP)
+                should_block = DeviceEvent.MIDDLE_UP in self._blocked_events
 
         if mouse_event:
             self._dispatch(mouse_event)
@@ -859,15 +859,15 @@ class MouseHook(BaseMouseHook):
         if code == _ecodes.REL_HWHEEL or code == rel_hwheel_hi_res:
             should_block = False
             if value > 0:
-                should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+                should_block = DeviceEvent.HSCROLL_RIGHT in self._blocked_events
             elif value < 0:
-                should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+                should_block = DeviceEvent.HSCROLL_LEFT in self._blocked_events
 
             if code == _ecodes.REL_HWHEEL:
                 if value > 0:
-                    self._dispatch(MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(value)))
+                    self._dispatch(DeviceEvent(DeviceEvent.HSCROLL_RIGHT, abs(value)))
                 elif value < 0:
-                    self._dispatch(MouseEvent(MouseEvent.HSCROLL_LEFT, abs(value)))
+                    self._dispatch(DeviceEvent(DeviceEvent.HSCROLL_LEFT, abs(value)))
 
             if should_block:
                 return
@@ -906,11 +906,11 @@ class MouseHook(BaseMouseHook):
             self._evdev_thread = threading.Thread(
                 target=self._evdev_loop,
                 daemon=True,
-                name="MouseHook-evdev",
+                name="DeviceHook-evdev",
             )
             self._evdev_thread.start()
         else:
-            print("[MouseHook] evdev not available — button remapping disabled")
+            print("[DeviceHook] evdev not available — button remapping disabled")
 
         return True
 
@@ -928,11 +928,11 @@ class MouseHook(BaseMouseHook):
         self._cleanup_evdev()
 
 
-MouseHook._platform_module = sys.modules[__name__]
+DeviceHook._platform_module = sys.modules[__name__]
 
 
 __all__ = [
-    "MouseHook",
+    "DeviceHook",
     "HidGestureListener",
     "_select_mod",
     "_evdev_mod",

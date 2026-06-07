@@ -12,9 +12,18 @@ ApplicationWindow {
     minimumWidth: 920
     minimumHeight: 620
     readonly property string versionLabel: "v" + appVersion
-    title: backend.mouseConnected
-           ? "Mouser " + versionLabel + " — " + backend.deviceDisplayName
-           : "Mouser " + versionLabel
+    // Per-page title: mouse page → mouse device, keyboard page → keyboard device,
+    // settings → just the app name. deviceTick forces re-eval on connect/disconnect.
+    title: {
+        backend.deviceTick
+        if (root.currentPage === 1)
+            return "Mouser " + versionLabel
+        var info = backend.deviceInfoForType(
+            root.currentPage === 2 ? "keyboard" : "mouse")
+        return info.connected
+               ? "Mouser " + versionLabel + " — " + info.name
+               : "Mouser " + versionLabel
+    }
 
     property string appearanceMode: uiState.appearanceMode
     readonly property bool darkMode: appearanceMode === "dark"
@@ -95,7 +104,7 @@ ApplicationWindow {
 
                     Repeater {
                         model: [
-                            { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+                            { icon: "mouse-simple", tipKey: "nav.mouse", page: 0 },
                             { icon: "keyboard-simple", tipKey: "nav.keyboard", page: 2 },
                             { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
                         ]
@@ -254,12 +263,12 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: root.currentPage
 
-            MousePage { deviceFilter: "mouse" }      // index 0
+            DevicePage { deviceFilter: "mouse" }      // index 0
             Loader {                                  // index 1
                 active: root.currentPage === 1 || item
                 source: "ScrollPage.qml"
             }
-            MousePage { deviceFilter: "keyboard" }    // index 2 — keyboards
+            DevicePage { deviceFilter: "keyboard" }    // index 2 — keyboards
         }
     }
 

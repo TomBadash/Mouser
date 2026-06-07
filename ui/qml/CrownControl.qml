@@ -8,6 +8,8 @@ import "Theme.js" as Theme
 Item {
     id: crownCtl
     readonly property var theme: Theme.palette(uiState.darkMode)
+    // Reactive i18n (English fallback); rebinds on language change.
+    property var s: lm.strings
 
     required property var imgItem        // the Image element
     required property var crown          // {normX, normY, normR}
@@ -18,7 +20,7 @@ Item {
     readonly property real ccy: imgItem.y + imgItem.offY + (crown.normY || 0) * imgItem.paintedHeight
     readonly property real cr: (crown.normR || 0.05) * imgItem.paintedWidth
 
-    readonly property bool crownSelected: String(mousePage.selectedButton).indexOf("crown_") === 0
+    readonly property bool crownSelected: String(devicePage.selectedButton).indexOf("crown_") === 0
     property bool panelOpen: crownSelected
 
     // ── Crown ring ────────────────────────────────────────────
@@ -68,7 +70,7 @@ Item {
             spacing: 8
 
             Text {
-                text: "Crown"
+                text: crownCtl.s["device.crown"] || "Crown"
                 font { family: uiState.fontFamily; pixelSize: 14; bold: true }
                 color: theme.textPrimary
             }
@@ -77,13 +79,13 @@ Item {
             Row {
                 spacing: 8
                 Text {
-                    text: "Rotation"
+                    text: crownCtl.s["device.rotation"] || "Rotation"
                     anchors.verticalCenter: parent.verticalCenter
                     font { family: uiState.fontFamily; pixelSize: 11 }
                     color: theme.textSecondary
                 }
                 Repeater {
-                    model: [{ lbl: "Ratchet", smooth: false }, { lbl: "Smooth", smooth: true }]
+                    model: [{ smooth: false }, { smooth: true }]
                     delegate: Rectangle {
                         required property var modelData
                         width: 72; height: 24; radius: 7
@@ -92,7 +94,9 @@ Item {
                         border.color: backend.crownSmooth === modelData.smooth ? theme.accent : theme.border
                         Text {
                             anchors.centerIn: parent
-                            text: modelData.lbl
+                            text: modelData.smooth
+                                  ? (crownCtl.s["device.smooth"] || "Smooth")
+                                  : (crownCtl.s["device.ratchet"] || "Ratchet")
                             font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                             color: backend.crownSmooth === modelData.smooth ? theme.bgCard : theme.textSecondary
                         }
@@ -115,7 +119,7 @@ Item {
                     width: panelCol.width
                     height: 38
                     radius: 8
-                    readonly property bool sel: mousePage.selectedButton === modelData.key
+                    readonly property bool sel: devicePage.selectedButton === modelData.key
                     color: sel ? Qt.rgba(0, 0.83, 0.67, 0.14)
                                 : (rowMa.containsMouse ? theme.bgHover : "transparent")
                     border.width: sel ? 1 : 0
@@ -145,7 +149,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: mousePage.selectButton(modelData.key)
+                        onClicked: devicePage.selectButton(modelData.key)
                     }
                 }
             }

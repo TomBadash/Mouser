@@ -1,5 +1,5 @@
 """
-Shared mouse hook behavior used by platform implementations.
+Shared device hook behavior used by platform implementations.
 """
 
 import queue
@@ -10,10 +10,10 @@ try:
 except Exception:
     HidGestureListener = None
 
-from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
+from core.device_hook_types import HidRuntimeState, DeviceEvent, format_debug_details
 
 
-class BaseMouseHook:
+class BaseDeviceHook:
     def __init__(self):
         self._callbacks = {}
         self._blocked_events = set()
@@ -137,7 +137,7 @@ class BaseMouseHook:
             return
         self._device_connected = connected
         state = "Connected" if connected else "Disconnected"
-        print(f"[MouseHook] Device {state}")
+        print(f"[DeviceHook] Device {state}")
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
@@ -201,7 +201,7 @@ class BaseMouseHook:
             try:
                 callback(event)
             except Exception as exc:
-                print(f"[MouseHook] callback error: {exc}")
+                print(f"[DeviceHook] callback error: {exc}")
 
     def _hid_gesture_available(self):
         return self._hid_gesture is not None and self._device_connected
@@ -241,14 +241,14 @@ class BaseMouseHook:
             if abs_y > cross_limit:
                 return None
             if delta_x > 0:
-                return MouseEvent.GESTURE_SWIPE_RIGHT
-            return MouseEvent.GESTURE_SWIPE_LEFT
+                return DeviceEvent.GESTURE_SWIPE_RIGHT
+            return DeviceEvent.GESTURE_SWIPE_LEFT
 
         if abs_x > cross_limit:
             return None
         if delta_y > 0:
-            return MouseEvent.GESTURE_SWIPE_DOWN
-        return MouseEvent.GESTURE_SWIPE_UP
+            return DeviceEvent.GESTURE_SWIPE_DOWN
+        return DeviceEvent.GESTURE_SWIPE_UP
 
     def _build_extra_diverts(self):
         extra = {}
@@ -272,8 +272,8 @@ class BaseMouseHook:
         return lambda: self._on_hid_keyboard_key(button_key)
 
     def _on_hid_keyboard_key(self, button_key):
-        # Single-fire on press; the button key doubles as the MouseEvent type.
-        self._dispatch(MouseEvent(button_key))
+        # Single-fire on press; the button key doubles as the DeviceEvent type.
+        self._dispatch(DeviceEvent(button_key))
 
     def _start_hid_listener(self):
         platform_module = getattr(self.__class__, "_platform_module", None)
@@ -317,27 +317,27 @@ class BaseMouseHook:
         self._set_device_connected(False)
 
     def _on_hid_gesture_down(self):
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.GESTURE_DOWN))
 
     def _on_hid_gesture_up(self):
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.GESTURE_UP))
 
     def _on_hid_gesture_move(self, dx, dy):
         self._accumulate_gesture_delta(dx, dy, "hid_rawxy")
 
     def _on_hid_crown(self, button_key):
         # The crown emits the config button key directly ("crown_left",
-        # "crown_right", "crown_tap"), which doubles as the MouseEvent type.
-        self._dispatch(MouseEvent(button_key))
+        # "crown_right", "crown_tap"), which doubles as the DeviceEvent type.
+        self._dispatch(DeviceEvent(button_key))
 
     def _on_hid_mode_shift_down(self):
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))

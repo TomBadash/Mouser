@@ -76,7 +76,7 @@ CRAFT_CROWN_DEFAULTS = {
 # Top-row keys default to "none": Mouser leaves them native until remapped.
 KEYBOARD_KEY_DEFAULTS = {key: "none" for key in KEYBOARD_KEY_BUTTONS}
 
-# Maps config button keys to the MouseEvent types they correspond to
+# Maps config button keys to the DeviceEvent types they correspond to
 BUTTON_TO_EVENTS = {
     "middle":        ("middle_down", "middle_up"),
     "gesture":       ("gesture_click",),

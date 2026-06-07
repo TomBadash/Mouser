@@ -1,5 +1,5 @@
 """
-Shared mouse hook types and helpers.
+Shared device hook types and helpers.
 """
 
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ class HidRuntimeState:
     connected_device: Any = None
 
 
-class MouseEvent:
+class DeviceEvent:
     """Represents a captured mouse event."""
 
     XBUTTON1_DOWN = "xbutton1_down"

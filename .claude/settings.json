@@ -14,7 +14,14 @@
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_logi_devices tests.test_device_layouts tests.test_backend tests.test_config)",
       "Bash(.venv/Scripts/python.exe -m unittest discover -s tests)",
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend)",
-      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_device_layouts tests.test_logi_devices)"
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_device_layouts tests.test_logi_devices)",
+      "Bash(git mv *)",
+      "Bash(sed -i 's/\\\\bmousePage\\\\b/devicePage/g' ui/qml/DevicePage.qml ui/qml/CrownControl.qml ui/qml/HotspotDot.qml ui/qml/KeyHotspot.qml)",
+      "Bash(sed -i 's/\\\\bmouseImageArea\\\\b/deviceImageArea/g; s/\\\\bmouseImg\\\\b/deviceImg/g' ui/qml/DevicePage.qml)",
+      "Bash(sed -i 's/\\\\bMousePage\\\\b/DevicePage/g' ui/qml/Main.qml DEVELOPMENT.md)",
+      "Bash(grep -rn 'MousePage' ui/ *.py DEVELOPMENT.md)",
+      "Bash(./.venv/Scripts/python.exe _fix_zhtw.py)",
+      "Bash(./.venv/Scripts/python.exe -c \"import core.engine, core.device_hook; print\\('reimport OK'\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\aless\\.claude\\projects\\c--Users-aless-GitHub-Repositories-mouser-Mouser\\memory"

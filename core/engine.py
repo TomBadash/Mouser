@@ -1,12 +1,12 @@
 """
-Engine — wires the mouse hook to the key simulator using the
+Engine — wires the device hook to the key simulator using the
 current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
 
 import threading
 import time
-from core.mouse_hook import MouseHook, MouseEvent
+from core.device_hook import DeviceHook, DeviceEvent
 from core.key_simulator import (
     ACTIONS, execute_action, is_mouse_button_action,
     inject_mouse_down, inject_mouse_up,
@@ -17,7 +17,7 @@ from core.config import (
 )
 from core.logi_device_catalog import KEYBOARD_KEY_CIDS
 from core.app_detector import AppDetector
-from core.mouse_hook_types import HidRuntimeState
+from core.device_hook_types import HidRuntimeState
 from core.linux_permissions import (
     linux_permission_log_message,
     linux_permission_report,
@@ -32,18 +32,18 @@ _VOLUME_ACTIONS = {"volume_up", "volume_down"}
 
 class Engine:
     """
-    Core logic: reads config, installs the mouse hook,
+    Core logic: reads config, installs the device hook,
     dispatches actions when mapped buttons are pressed,
     and auto-switches profiles when the foreground app changes.
     """
 
     def __init__(self):
-        self.hook = MouseHook()
+        self.hook = DeviceHook()
         self.cfg = load_config()
         self._enabled = True
         self._hscroll_state = {
-            MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
-            MouseEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
+            DeviceEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
+            DeviceEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
         }
         self._current_profile: str = self.cfg.get("active_profile", "default")
         self._app_detector = AppDetector(self._on_app_change)

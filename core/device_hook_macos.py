@@ -1,5 +1,5 @@
 """
-macOS mouse hook implementation.
+macOS device hook implementation.
 """
 
 import functools
@@ -8,8 +8,8 @@ import sys
 import threading
 import time
 
-from core.mouse_hook_base import BaseMouseHook, HidGestureListener
-from core.mouse_hook_types import MouseEvent
+from core.device_hook_base import BaseDeviceHook, HidGestureListener
+from core.device_hook_types import DeviceEvent
 
 try:
     import objc
@@ -26,7 +26,7 @@ try:
 except ImportError:
     _QUARTZ_OK = False
     print(
-        "[MouseHook] pyobjc-framework-Quartz not installed — "
+        "[DeviceHook] pyobjc-framework-Quartz not installed — "
         "pip install pyobjc-framework-Quartz"
     )
 
@@ -48,7 +48,7 @@ _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
 
-class MouseHook(BaseMouseHook):
+class DeviceHook(BaseDeviceHook):
     """
     Uses CGEventTap on macOS to intercept mouse button presses and scroll
     events. Requires Accessibility permission.
@@ -220,7 +220,7 @@ class MouseHook(BaseMouseHook):
                 }
             )
             self._enqueue_dispatch_event(
-                MouseEvent(
+                DeviceEvent(
                     gesture_event,
                     {
                         "delta_x": self._gesture_delta_x,
@@ -262,7 +262,7 @@ class MouseHook(BaseMouseHook):
                 _kCGEventTapDisabledByUserInput,
             ):
                 print(
-                    f"[MouseHook] CGEventTap disabled by system "
+                    f"[DeviceHook] CGEventTap disabled by system "
                     f"(type=0x{event_type:X}), re-enabling",
                     flush=True,
                 )
@@ -271,7 +271,7 @@ class MouseHook(BaseMouseHook):
 
             if not self._first_event_logged:
                 self._first_event_logged = True
-                print("[MouseHook] CGEventTap: first event received", flush=True)
+                print("[DeviceHook] CGEventTap: first event received", flush=True)
 
             try:
                 if (
@@ -298,18 +298,18 @@ class MouseHook(BaseMouseHook):
                 self._emit_debug(
                     "Gesture move event "
                     f"type={int(event_type)} "
-                    f"dx={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGMouseEventDeltaX)} "
-                    f"dy={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGMouseEventDeltaY)}"
+                    f"dx={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGDeviceEventDeltaX)} "
+                    f"dy={Quartz.CGEventGetIntegerValueField(cg_event, Quartz.kCGDeviceEventDeltaY)}"
                 )
                 self._emit_gesture_event(
                     {
                         "type": "move",
                         "source": "event_tap",
                         "dx": Quartz.CGEventGetIntegerValueField(
-                            cg_event, Quartz.kCGMouseEventDeltaX
+                            cg_event, Quartz.kCGDeviceEventDeltaX
                         ),
                         "dy": Quartz.CGEventGetIntegerValueField(
-                            cg_event, Quartz.kCGMouseEventDeltaY
+                            cg_event, Quartz.kCGDeviceEventDeltaY
                         ),
                     }
                 )
@@ -317,10 +317,10 @@ class MouseHook(BaseMouseHook):
                     return None
                 self._accumulate_gesture_delta(
                     Quartz.CGEventGetIntegerValueField(
-                        cg_event, Quartz.kCGMouseEventDeltaX
+                        cg_event, Quartz.kCGDeviceEventDeltaX
                     ),
                     Quartz.CGEventGetIntegerValueField(
-                        cg_event, Quartz.kCGMouseEventDeltaY
+                        cg_event, Quartz.kCGDeviceEventDeltaY
                     ),
                     "event_tap",
                 )
@@ -328,7 +328,7 @@ class MouseHook(BaseMouseHook):
 
             if event_type == Quartz.kCGEventOtherMouseDown:
                 btn = Quartz.CGEventGetIntegerValueField(
-                    cg_event, Quartz.kCGMouseEventButtonNumber
+                    cg_event, Quartz.kCGDeviceEventButtonNumber
                 )
                 if self.debug_mode and self._debug_callback:
                     try:
@@ -336,18 +336,18 @@ class MouseHook(BaseMouseHook):
                     except Exception:
                         pass
                 if btn == _BTN_MIDDLE:
-                    mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
-                    should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.MIDDLE_DOWN)
+                    should_block = DeviceEvent.MIDDLE_DOWN in self._blocked_events
                 elif btn == _BTN_BACK:
-                    mouse_event = MouseEvent(MouseEvent.XBUTTON1_DOWN)
-                    should_block = MouseEvent.XBUTTON1_DOWN in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.XBUTTON1_DOWN)
+                    should_block = DeviceEvent.XBUTTON1_DOWN in self._blocked_events
                 elif btn == _BTN_FORWARD:
-                    mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
-                    should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.XBUTTON2_DOWN)
+                    should_block = DeviceEvent.XBUTTON2_DOWN in self._blocked_events
 
             elif event_type == Quartz.kCGEventOtherMouseUp:
                 btn = Quartz.CGEventGetIntegerValueField(
-                    cg_event, Quartz.kCGMouseEventButtonNumber
+                    cg_event, Quartz.kCGDeviceEventButtonNumber
                 )
                 if self.debug_mode and self._debug_callback:
                     try:
@@ -355,14 +355,14 @@ class MouseHook(BaseMouseHook):
                     except Exception:
                         pass
                 if btn == _BTN_MIDDLE:
-                    mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
-                    should_block = MouseEvent.MIDDLE_UP in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.MIDDLE_UP)
+                    should_block = DeviceEvent.MIDDLE_UP in self._blocked_events
                 elif btn == _BTN_BACK:
-                    mouse_event = MouseEvent(MouseEvent.XBUTTON1_UP)
-                    should_block = MouseEvent.XBUTTON1_UP in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.XBUTTON1_UP)
+                    should_block = DeviceEvent.XBUTTON1_UP in self._blocked_events
                 elif btn == _BTN_FORWARD:
-                    mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
-                    should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                    mouse_event = DeviceEvent(DeviceEvent.XBUTTON2_UP)
+                    should_block = DeviceEvent.XBUTTON2_UP in self._blocked_events
 
             elif event_type == Quartz.kCGEventScrollWheel:
                 if (
@@ -394,11 +394,11 @@ class MouseHook(BaseMouseHook):
                         pass
                 if h_delta != 0:
                     if h_delta > 0:
-                        mouse_event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(h_delta))
-                        should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+                        mouse_event = DeviceEvent(DeviceEvent.HSCROLL_RIGHT, abs(h_delta))
+                        should_block = DeviceEvent.HSCROLL_RIGHT in self._blocked_events
                     else:
-                        mouse_event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(h_delta))
-                        should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+                        mouse_event = DeviceEvent(DeviceEvent.HSCROLL_LEFT, abs(h_delta))
+                        should_block = DeviceEvent.HSCROLL_LEFT in self._blocked_events
                 if mouse_event:
                     self._enqueue_dispatch_event(mouse_event)
                     mouse_event = None
@@ -416,7 +416,7 @@ class MouseHook(BaseMouseHook):
             return cg_event
 
         except Exception as exc:
-            print(f"[MouseHook] event tap callback error: {exc}")
+            print(f"[DeviceHook] event tap callback error: {exc}")
             return cg_event
 
     def _on_hid_gesture_down(self):
@@ -447,23 +447,23 @@ class MouseHook(BaseMouseHook):
                 }
             )
             if should_click:
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+                self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
         self._emit_debug("HID mode shift button up")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
         self._emit_debug("HID DPI switch button down")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
         self._emit_debug("HID DPI switch button up")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
         self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
@@ -490,7 +490,7 @@ class MouseHook(BaseMouseHook):
                 Quartz.CGEventTapEnable(self._tap, True)
                 ok = Quartz.CGEventTapIsEnabled(self._tap)
                 print(
-                    f"[MouseHook] Event tap re-enabled ({reason}): "
+                    f"[DeviceHook] Event tap re-enabled ({reason}): "
                     f"{'OK' if ok else 'FAILED — may need restart'}",
                     flush=True,
                 )
@@ -501,7 +501,7 @@ class MouseHook(BaseMouseHook):
             _re_enable_tap_and_reconnect("wake")
 
         def _on_session_resign(notification):
-            print("[MouseHook] Session deactivated", flush=True)
+            print("[DeviceHook] Session deactivated", flush=True)
 
         def _on_session_activate(notification):
             _re_enable_tap_and_reconnect("user-switch")
@@ -548,7 +548,7 @@ class MouseHook(BaseMouseHook):
 
     def start(self):
         if not _QUARTZ_OK:
-            print("[MouseHook] Quartz not available — hook not installed")
+            print("[DeviceHook] Quartz not available — hook not installed")
             return False
         if self._running:
             return True
@@ -571,14 +571,14 @@ class MouseHook(BaseMouseHook):
         )
 
         if self._tap is None:
-            print("[MouseHook] ERROR: Failed to create CGEventTap!")
-            print("[MouseHook] Grant Accessibility permission in:")
+            print("[DeviceHook] ERROR: Failed to create CGEventTap!")
+            print("[DeviceHook] Grant Accessibility permission in:")
             print(
-                "[MouseHook]   System Settings -> Privacy & Security -> Accessibility"
+                "[DeviceHook]   System Settings -> Privacy & Security -> Accessibility"
             )
             return False
 
-        print("[MouseHook] CGEventTap created successfully", flush=True)
+        print("[DeviceHook] CGEventTap created successfully", flush=True)
 
         self._tap_source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
         Quartz.CFRunLoopAddSource(
@@ -587,13 +587,13 @@ class MouseHook(BaseMouseHook):
             Quartz.kCFRunLoopCommonModes,
         )
         Quartz.CGEventTapEnable(self._tap, True)
-        print("[MouseHook] CGEventTap enabled and integrated with run loop", flush=True)
+        print("[DeviceHook] CGEventTap enabled and integrated with run loop", flush=True)
         self._running = True
 
         self._dispatch_thread = threading.Thread(
             target=self._dispatch_worker,
             daemon=True,
-            name="MouseHook-dispatch",
+            name="DeviceHook-dispatch",
         )
         self._dispatch_thread.start()
 
@@ -617,18 +617,18 @@ class MouseHook(BaseMouseHook):
                 )
                 self._tap_source = None
             self._tap = None
-            print("[MouseHook] CGEventTap disabled and removed", flush=True)
+            print("[DeviceHook] CGEventTap disabled and removed", flush=True)
 
         if self._dispatch_thread:
             self._dispatch_thread.join(timeout=1)
             self._dispatch_thread = None
 
 
-MouseHook._platform_module = sys.modules[__name__]
+DeviceHook._platform_module = sys.modules[__name__]
 
 
 __all__ = [
-    "MouseHook",
+    "DeviceHook",
     "HidGestureListener",
     "Quartz",
     "_QUARTZ_OK",

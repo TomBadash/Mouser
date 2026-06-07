@@ -1,5 +1,5 @@
 """
-Windows mouse hook implementation.
+Windows device hook implementation.
 """
 
 import ctypes
@@ -25,8 +25,8 @@ from ctypes import (
 
 from core.key_simulator import MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL
 from core.key_simulator import inject_scroll as _inject_scroll_impl
-from core.mouse_hook_base import BaseMouseHook, HidGestureListener
-from core.mouse_hook_types import MouseEvent
+from core.device_hook_base import BaseDeviceHook, HidGestureListener
+from core.device_hook_types import DeviceEvent
 
 WH_MOUSE_LL = 14
 WM_XBUTTONDOWN = 0x020B
@@ -217,9 +217,9 @@ PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM
 PostMessageW.restype = wintypes.BOOL
 
 
-class MouseHook(BaseMouseHook):
+class DeviceHook(BaseDeviceHook):
     """
-    Installs a low-level mouse hook on Windows to intercept side-button clicks
+    Installs a low-level device hook on Windows to intercept side-button clicks
     and horizontal scroll events.
     """
 
@@ -323,7 +323,7 @@ class MouseHook(BaseMouseHook):
             }
         )
         self._dispatch(
-            MouseEvent(
+            DeviceEvent(
                 gesture_event,
                 {
                     "delta_x": self._gesture_delta_x,
@@ -367,7 +367,7 @@ class MouseHook(BaseMouseHook):
             return self._low_level_handler_inner(nCode, wParam, lParam)
         except Exception as exc:
             try:
-                print(f"[MouseHook] CRITICAL _low_level_handler EXCEPTION: {exc}")
+                print(f"[DeviceHook] CRITICAL _low_level_handler EXCEPTION: {exc}")
                 import traceback
 
                 traceback.print_exc()
@@ -403,28 +403,28 @@ class MouseHook(BaseMouseHook):
             if wParam == WM_XBUTTONDOWN:
                 xbutton = hiword(mouse_data)
                 if xbutton == XBUTTON1:
-                    event = MouseEvent(MouseEvent.XBUTTON1_DOWN)
-                    should_block = MouseEvent.XBUTTON1_DOWN in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.XBUTTON1_DOWN)
+                    should_block = DeviceEvent.XBUTTON1_DOWN in self._blocked_events
                 elif xbutton == XBUTTON2:
-                    event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
-                    should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.XBUTTON2_DOWN)
+                    should_block = DeviceEvent.XBUTTON2_DOWN in self._blocked_events
 
             elif wParam == WM_XBUTTONUP:
                 xbutton = hiword(mouse_data)
                 if xbutton == XBUTTON1:
-                    event = MouseEvent(MouseEvent.XBUTTON1_UP)
-                    should_block = MouseEvent.XBUTTON1_UP in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.XBUTTON1_UP)
+                    should_block = DeviceEvent.XBUTTON1_UP in self._blocked_events
                 elif xbutton == XBUTTON2:
-                    event = MouseEvent(MouseEvent.XBUTTON2_UP)
-                    should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.XBUTTON2_UP)
+                    should_block = DeviceEvent.XBUTTON2_UP in self._blocked_events
 
             elif wParam == WM_MBUTTONDOWN:
-                event = MouseEvent(MouseEvent.MIDDLE_DOWN)
-                should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
+                event = DeviceEvent(DeviceEvent.MIDDLE_DOWN)
+                should_block = DeviceEvent.MIDDLE_DOWN in self._blocked_events
 
             elif wParam == WM_MBUTTONUP:
-                event = MouseEvent(MouseEvent.MIDDLE_UP)
-                should_block = MouseEvent.MIDDLE_UP in self._blocked_events
+                event = DeviceEvent(DeviceEvent.MIDDLE_UP)
+                should_block = DeviceEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
                 if self.invert_vscroll:
@@ -445,11 +445,11 @@ class MouseHook(BaseMouseHook):
             elif wParam == WM_MOUSEHWHEEL:
                 delta = hiword(mouse_data)
                 if delta > 0:
-                    event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
-                    should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.HSCROLL_LEFT, abs(delta))
+                    should_block = DeviceEvent.HSCROLL_LEFT in self._blocked_events
                 elif delta < 0:
-                    event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
-                    should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+                    event = DeviceEvent(DeviceEvent.HSCROLL_RIGHT, abs(delta))
+                    should_block = DeviceEvent.HSCROLL_RIGHT in self._blocked_events
 
                 if self.invert_hscroll:
                     if delta != 0 and self._ri_hwnd and not should_block:
@@ -497,7 +497,7 @@ class MouseHook(BaseMouseHook):
             try:
                 self._process_raw_input(lParam)
             except Exception as exc:
-                print(f"[MouseHook] Raw Input error: {exc}")
+                print(f"[DeviceHook] Raw Input error: {exc}")
             return 0
 
         if msg == WM_APP_INJECT_VSCROLL:
@@ -561,12 +561,12 @@ class MouseHook(BaseMouseHook):
             if not self._gesture_active:
                 self._gesture_active = True
                 self._gesture_triggered = False
-                print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
+                print(f"[DeviceHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
         elif not extra_now and extra_prev:
             if self._gesture_active:
                 self._gesture_active = False
-                print("[MouseHook] Gesture UP")
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+                print("[DeviceHook] Gesture UP")
+                self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _setup_raw_input(self):
         instance = GetModuleHandleW(None)
@@ -595,7 +595,7 @@ class MouseHook(BaseMouseHook):
             None,
         )
         if not self._ri_hwnd:
-            print("[MouseHook] CreateWindowExW failed — gesture detection unavailable")
+            print("[DeviceHook] CreateWindowExW failed — gesture detection unavailable")
             return False
 
         ShowWindow(self._ri_hwnd, SW_HIDE)
@@ -619,15 +619,15 @@ class MouseHook(BaseMouseHook):
         devices[3].hwndTarget = self._ri_hwnd
 
         if RegisterRawInputDevices(devices, 4, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice + Logitech HID + consumer")
+            print("[DeviceHook] Raw Input: mice + Logitech HID + consumer")
             return True
         if RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice + Logitech HID short")
+            print("[DeviceHook] Raw Input: mice + Logitech HID short")
             return True
         if RegisterRawInputDevices(devices, 1, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice only")
+            print("[DeviceHook] Raw Input: mice only")
             return True
-        print("[MouseHook] Raw Input registration failed")
+        print("[DeviceHook] Raw Input registration failed")
         return False
 
     def _dispatch_worker(self):
@@ -639,7 +639,7 @@ class MouseHook(BaseMouseHook):
             try:
                 self._dispatch(event)
             except Exception as exc:
-                print(f"[MouseHook] dispatch worker error: {exc}")
+                print(f"[DeviceHook] dispatch worker error: {exc}")
 
     def _run_hook(self):
         self._thread_id = windll.kernel32.GetCurrentThreadId()
@@ -653,9 +653,9 @@ class MouseHook(BaseMouseHook):
         if not self._hook:
             self._startup_ok = False
             self._startup_event.set()
-            print("[MouseHook] Failed to install hook!")
+            print("[DeviceHook] Failed to install hook!")
             return
-        print("[MouseHook] Hook installed successfully")
+        print("[DeviceHook] Hook installed successfully")
         self._setup_raw_input()
         self._running = True
         self._startup_ok = True
@@ -676,14 +676,14 @@ class MouseHook(BaseMouseHook):
             UnhookWindowsHookEx(self._hook)
             self._hook = None
         self._running = False
-        print("[MouseHook] Hook removed")
+        print("[DeviceHook] Hook removed")
 
     def _on_device_change(self):
         now = time.time()
         if now - self._last_rehook_time < 2.0:
             return
         self._last_rehook_time = now
-        print("[MouseHook] Device change detected — refreshing hook")
+        print("[DeviceHook] Device change detected — refreshing hook")
         self._device_name_cache.clear()
         self._prev_raw_buttons.clear()
         self._reinstall_hook()
@@ -700,9 +700,9 @@ class MouseHook(BaseMouseHook):
             0,
         )
         if self._hook:
-            print("[MouseHook] Hook reinstalled successfully")
+            print("[DeviceHook] Hook reinstalled successfully")
         else:
-            print("[MouseHook] Failed to reinstall hook!")
+            print("[DeviceHook] Failed to reinstall hook!")
 
     def _on_hid_gesture_down(self):
         if not self._gesture_active:
@@ -732,23 +732,23 @@ class MouseHook(BaseMouseHook):
                 }
             )
             if should_click:
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+                self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
         self._emit_debug("HID mode shift button up")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
         self._emit_debug("HID DPI switch button down")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
         self._emit_debug("HID DPI switch button up")
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
         self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
@@ -770,7 +770,7 @@ class MouseHook(BaseMouseHook):
         self._hook_thread = threading.Thread(target=self._run_hook, daemon=True)
         self._hook_thread.start()
         if not self._startup_event.wait(2):
-            print("[MouseHook] Hook startup timed out")
+            print("[DeviceHook] Hook startup timed out")
             self.stop()
             return False
         if not self._startup_ok:
@@ -802,11 +802,11 @@ class MouseHook(BaseMouseHook):
         self._startup_event.clear()
 
 
-MouseHook._platform_module = sys.modules[__name__]
+DeviceHook._platform_module = sys.modules[__name__]
 
 
 __all__ = [
-    "MouseHook",
+    "DeviceHook",
     "HidGestureListener",
     "MSLLHOOKSTRUCT",
     "WM_XBUTTONDOWN",

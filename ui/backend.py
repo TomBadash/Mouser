@@ -592,7 +592,7 @@ class Backend(QObject):
             return {
                 "connected": False, "type": device_type, "name": "",
                 "transport": "", "buttons": [], "interactive": False,
-                "layoutKind": "", "hotspots": [], "crown": None,
+                "recognized": False, "layoutKind": "", "hotspots": [], "crown": None,
                 "note": "", "image": "", "imageWidth": 220,
                 "imageHeight": 220, "hasCrown": False, "battery": -1,
                 "actionCategories": self._action_categories_for(
@@ -623,6 +623,10 @@ class Backend(QObject):
         crown = layout.get("crown") if any(
             str(b).startswith("crown_") for b in supported_set
         ) else None
+        # "Recognized" = matched a catalog entry (not a generic fallback layout).
+        recognized = getattr(device, "ui_layout", "") not in (
+            "generic_mouse", "generic_keyboard",
+        )
         return {
             "connected": True,
             "type": device_type,
@@ -630,6 +634,7 @@ class Backend(QObject):
             "transport": getattr(device, "transport", "") or "",
             "buttons": buttons,
             "interactive": bool(layout.get("interactive", False)),
+            "recognized": recognized,
             "layoutKind": layout.get("layout_kind", ""),
             "hotspots": hotspots,
             "crown": crown,
@@ -1740,11 +1745,39 @@ class Backend(QObject):
             return name
 
     @Slot(result=str)
-    def dumpDeviceInfo(self):
-        """Return JSON describing the connected device for contributor use."""
+    @Slot(str, result=str)
+    def dumpDeviceInfo(self, deviceType=""):
+        """Return JSON describing a connected device for contributor use.
+
+        ``deviceType`` ("mouse"/"keyboard") dumps that device in a multi-device
+        setup; without it, the engine's primary device.
+        """
         import json
         if not self._engine:
             return ""
+        if deviceType:
+            devices = self._engine.connected_devices or []
+            device = next(
+                (d for d in devices
+                 if (getattr(d, "device_type", "mouse") or "mouse") == deviceType),
+                None,
+            )
+            if device is not None:
+                pid = getattr(device, "product_id", None)
+                info = {
+                    "display_name": getattr(device, "display_name", ""),
+                    "product_id": f"0x{pid:04X}" if pid else None,
+                    "product_name": getattr(device, "product_name", ""),
+                    "transport": getattr(device, "transport", ""),
+                    "device_type": getattr(device, "device_type", "mouse"),
+                    "ui_layout": getattr(device, "ui_layout", ""),
+                    "supported_buttons": list(
+                        getattr(device, "supported_buttons", ()) or ()),
+                }
+                inv = getattr(device, "capability_inventory", None)
+                if inv is not None and hasattr(inv, "to_dict"):
+                    info["capabilities"] = inv.to_dict()
+                return json.dumps(info, indent=2)
         info = self._engine.dump_device_info()
         if not info:
             return ""

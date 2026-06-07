@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, call, patch
 
 import core
-from core import mouse_hook
-from core.mouse_hook_base import BaseMouseHook
-from core.mouse_hook_types import HidRuntimeState
+from core import device_hook
+from core.device_hook_base import BaseDeviceHook
+from core.device_hook_types import HidRuntimeState
 
 
 class _FakeEvdevDevice:
@@ -79,14 +79,14 @@ class _FakeLinuxUInput:
         self.close = Mock()
 
 
-class BaseMouseHookRuntimeStateTests(unittest.TestCase):
+class BaseDeviceHookRuntimeStateTests(unittest.TestCase):
     def test_default_runtime_state_is_disconnected(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
 
         self.assertEqual(hook.hid_runtime_state, HidRuntimeState())
 
     def test_runtime_state_projects_hid_identity(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         device = SimpleNamespace(name="MX Master 3S")
         hook._hid_gesture = SimpleNamespace(connected_device=device)
 
@@ -98,7 +98,7 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
         self.assertIs(state.connected_device, device)
 
     def test_status_callback_is_optional(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         hook._emit_status("ignored")
         messages = []
 
@@ -109,9 +109,9 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
 
 
 
-class BaseMouseHookDispatchQueueTests(unittest.TestCase):
+class BaseDeviceHookDispatchQueueTests(unittest.TestCase):
     def test_enqueue_keeps_queue_bounded_and_drops_oldest(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         hook._init_dispatch_queue(maxsize=2)
 
         hook._enqueue_dispatch_event(SimpleNamespace(event_type="e1", raw_data=None))
@@ -125,7 +125,7 @@ class BaseMouseHookDispatchQueueTests(unittest.TestCase):
         self.assertEqual(second.event_type, "e3")
 
     def test_enqueue_drops_and_emits_debug_when_still_full(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         hook._init_dispatch_queue(maxsize=1)
         hook.debug_mode = True
         hook.set_debug_callback(Mock())
@@ -139,7 +139,7 @@ class BaseMouseHookDispatchQueueTests(unittest.TestCase):
         self.assertIn("Dropped event due to full dispatch queue", hook._debug_callback.call_args[0][0])
 
 
-class LinuxMouseHookReconnectTests(unittest.TestCase):
+class LinuxDeviceHookReconnectTests(unittest.TestCase):
     def _reload_for_linux(self):
         fake_evdev = SimpleNamespace(
             ecodes=_FakeLinuxEcodes,
@@ -150,20 +150,20 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch.object(sys, "platform", "linux"),
             patch.dict(sys.modules, {"evdev": fake_evdev}),
         ):
-            sys.modules.pop("core.mouse_hook_linux", None)
-            if hasattr(core, "mouse_hook_linux"):
-                delattr(core, "mouse_hook_linux")
-            mouse_hook_linux = importlib.import_module("core.mouse_hook_linux")
-            importlib.reload(mouse_hook)
+            sys.modules.pop("core.device_hook_linux", None)
+            if hasattr(core, "device_hook_linux"):
+                delattr(core, "device_hook_linux")
+            device_hook_linux = importlib.import_module("core.device_hook_linux")
+            importlib.reload(device_hook)
 
         def cleanup():
-            sys.modules.pop("core.mouse_hook_linux", None)
-            if hasattr(core, "mouse_hook_linux"):
-                delattr(core, "mouse_hook_linux")
-            importlib.reload(mouse_hook)
+            sys.modules.pop("core.device_hook_linux", None)
+            if hasattr(core, "device_hook_linux"):
+                delattr(core, "device_hook_linux")
+            importlib.reload(device_hook)
 
         self.addCleanup(cleanup)
-        return mouse_hook
+        return device_hook
 
     def _fake_caps(self, module, *, include_side=True):
         ecodes = module._ecodes
@@ -209,7 +209,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             },
         )
         with patches[0], patches[1]:
-            chosen = module.MouseHook()._find_mouse_device()
+            chosen = module.DeviceHook()._find_mouse_device()
 
         self.assertIs(chosen, logi)
         self.assertTrue(generic.close.called)
@@ -240,7 +240,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             },
         )
         with patches[0], patches[1]:
-            chosen = module.MouseHook()._find_mouse_device()
+            chosen = module.DeviceHook()._find_mouse_device()
 
         self.assertIs(chosen, modern)
         self.assertTrue(legacy.close.called)
@@ -269,7 +269,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             },
         )
         with patches[0], patches[1]:
-            chosen = module.MouseHook()._find_mouse_device()
+            chosen = module.DeviceHook()._find_mouse_device()
 
         self.assertIsNone(chosen)
 
@@ -282,7 +282,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch.object(module, "_InputDevice", side_effect=PermissionError("denied")),
             patch("builtins.print") as print_mock,
         ):
-            chosen = module.MouseHook()._find_mouse_device()
+            chosen = module.DeviceHook()._find_mouse_device()
 
         self.assertIsNone(chosen)
         messages = [
@@ -310,7 +310,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch("builtins.print") as print_mock,
         ):
             module._LOG_ONCE_KEYS.clear()
-            chosen = module.MouseHook()._find_mouse_device()
+            chosen = module.DeviceHook()._find_mouse_device()
 
         self.assertIs(chosen, logi)
         messages = [
@@ -323,7 +323,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_reconnect_requests_rescan_for_fallback_evdev_device(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         hook._hid_gesture = SimpleNamespace(connected_device={"name": "MX Master 3S"})
         hook._evdev_device = SimpleNamespace(info=SimpleNamespace(vendor=0x1234))
@@ -346,7 +346,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_connect_wakes_evdev_scan_when_no_evdev_device_is_grabbed(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         hook._hid_gesture = SimpleNamespace(connected_device={"name": "MX Master 3S"})
 
@@ -358,7 +358,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_reconnect_does_not_rescan_when_evdev_already_grabs_logitech(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._hid_gesture = SimpleNamespace(connected_device={"name": "MX Master 3S"})
         hook._evdev_device = SimpleNamespace(
             info=SimpleNamespace(vendor=module._LOGI_VENDOR)
@@ -381,7 +381,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_connect_does_not_mark_device_connected_when_evdev_is_missing(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._hid_gesture = SimpleNamespace(connected_device={"name": "MX Master 3S"})
         hook._evdev_device = SimpleNamespace(info=SimpleNamespace(vendor=0x1234))
 
@@ -391,7 +391,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_disconnect_keeps_evdev_driven_connected_state(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._hid_gesture = SimpleNamespace(connected_device={"name": "MX Master 3S"})
         hook._evdev_device = SimpleNamespace(info=SimpleNamespace(vendor=module._LOGI_VENDOR))
         hook._evdev_connected_device = {"name": "MX Master 3S"}
@@ -414,7 +414,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_setup_evdev_marks_connected_and_populates_fallback_device_info(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         logi = _FakeEvdevDevice(
             name="MX Master 3S",
             path="/dev/input/event1",
@@ -440,7 +440,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_setup_evdev_in_passthrough_detects_without_uinput_or_grab(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook.set_ui_passthrough(True)
         logi = _FakeEvdevDevice(
             name="MX Master 3S",
@@ -463,7 +463,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_setup_evdev_uinput_failure_keeps_detection_without_remap(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         messages = []
         hook.set_status_callback(messages.append)
         logi = _FakeEvdevDevice(
@@ -488,7 +488,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_setup_evdev_grab_failure_keeps_detection_without_remap(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         messages = []
         hook.set_status_callback(messages.append)
         hook._dispatch = Mock()
@@ -528,7 +528,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_filtered_uinput_events_drop_hi_res_wheel_codes(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         module._ecodes.EV_FF = 0x15
         module._ecodes.REL_WHEEL_HI_RES = 0x0B
         module._ecodes.REL_HWHEEL_HI_RES = 0x0C
@@ -571,7 +571,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_listen_loop_exits_when_rescan_is_requested(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         hook._set_evdev_remap_ready(True)
         hook._evdev_device = SimpleNamespace(fd=11, read=Mock(return_value=[]))
@@ -590,7 +590,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_listen_loop_waits_without_polling_when_remap_is_not_ready(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         hook._evdev_device = SimpleNamespace(fd=11, read=Mock(return_value=[]))
         select_mock = Mock()
@@ -610,7 +610,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_evdev_loop_clears_rescan_and_retries_after_listen_returns(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         setup_calls = []
         seen_rescan_state = []
@@ -645,7 +645,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_evdev_loop_detection_only_waits_without_reopening(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._running = True
         setup_calls = []
         cleanup_calls = []
@@ -680,7 +680,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_evdev_remap_status_dedupes_by_ready_reason_tuple(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         messages = []
         hook.set_status_callback(messages.append)
 
@@ -698,7 +698,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_evdev_remap_helpers_are_idempotent(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
 
         self.assertFalse(hook._acquire_evdev_grab())
         hook._disable_evdev_remapping()
@@ -719,7 +719,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_hid_mode_shift_dispatches_when_evdev_remap_is_unavailable(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         hook._ui_passthrough = False
         hook._set_evdev_remap_ready(False, "grab_failed")
         hook._dispatch = Mock()
@@ -736,8 +736,8 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch.object(module, "HidGestureListener", _CapturingListener),
             patch.object(module, "_EVDEV_OK", False),
         ):
-            hook = module.MouseHook()
-            hook.register(module.MouseEvent.GESTURE_CLICK, lambda event: seen.append(event.event_type))
+            hook = module.DeviceHook()
+            hook.register(module.DeviceEvent.GESTURE_CLICK, lambda event: seen.append(event.event_type))
             hook.start()
             listener = hook._hid_gesture
 
@@ -750,12 +750,12 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
         self.assertEqual(
             seen,
-            [module.MouseEvent.GESTURE_CLICK, module.MouseEvent.GESTURE_CLICK],
+            [module.DeviceEvent.GESTURE_CLICK, module.DeviceEvent.GESTURE_CLICK],
         )
 
     def test_ui_passthrough_does_not_mirror_ungrabbed_events(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         forwarded = Mock()
         uinput = SimpleNamespace(write_event=forwarded, write=Mock())
         hook._uinput = uinput
@@ -777,7 +777,7 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
     def test_ui_passthrough_releases_grab_and_wakes_evdev_loop(self):
         module = self._reload_for_linux()
-        hook = module.MouseHook()
+        hook = module.DeviceHook()
         dev = _FakeEvdevDevice(
             name="MX Master 3S",
             path="/dev/input/event1",
@@ -803,10 +803,10 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             patch.object(module, "HidGestureListener", _CapturingListener),
             patch.object(module, "_EVDEV_OK", False),
         ):
-            hook = module.MouseHook()
+            hook = module.DeviceHook()
             hook.divert_mode_shift = True
-            hook.register(module.MouseEvent.MODE_SHIFT_DOWN, lambda event: seen.append(event.event_type))
-            hook.register(module.MouseEvent.MODE_SHIFT_UP, lambda event: seen.append(event.event_type))
+            hook.register(module.DeviceEvent.MODE_SHIFT_DOWN, lambda event: seen.append(event.event_type))
+            hook.register(module.DeviceEvent.MODE_SHIFT_UP, lambda event: seen.append(event.event_type))
             hook.start()
             listener = hook._hid_gesture
 
@@ -820,10 +820,10 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         self.assertEqual(
             seen,
             [
-                module.MouseEvent.MODE_SHIFT_DOWN,
-                module.MouseEvent.MODE_SHIFT_UP,
-                module.MouseEvent.MODE_SHIFT_DOWN,
-                module.MouseEvent.MODE_SHIFT_UP,
+                module.DeviceEvent.MODE_SHIFT_DOWN,
+                module.DeviceEvent.MODE_SHIFT_UP,
+                module.DeviceEvent.MODE_SHIFT_DOWN,
+                module.DeviceEvent.MODE_SHIFT_UP,
             ],
         )
 
@@ -834,15 +834,15 @@ class MacOSEventTapDisabledTests(unittest.TestCase):
 
     def setUp(self):
         self.mock_quartz = MagicMock(name="Quartz")
-        mouse_hook.Quartz = self.mock_quartz
+        device_hook.Quartz = self.mock_quartz
 
     def tearDown(self):
-        if hasattr(mouse_hook, "Quartz") and isinstance(
-                mouse_hook.Quartz, MagicMock):
-            del mouse_hook.Quartz
+        if hasattr(device_hook, "Quartz") and isinstance(
+                device_hook.Quartz, MagicMock):
+            del device_hook.Quartz
 
     def _make_hook(self):
-        hook = mouse_hook.MouseHook()
+        hook = device_hook.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         return hook
@@ -852,7 +852,7 @@ class MacOSEventTapDisabledTests(unittest.TestCase):
         dummy = MagicMock(name="cg_event")
 
         hook._event_tap_callback(
-            None, mouse_hook._kCGEventTapDisabledByTimeout, dummy, None)
+            None, device_hook._kCGEventTapDisabledByTimeout, dummy, None)
 
         self.mock_quartz.CGEventTapEnable.assert_called_once_with(
             hook._tap, True)
@@ -862,7 +862,7 @@ class MacOSEventTapDisabledTests(unittest.TestCase):
         dummy = MagicMock(name="cg_event")
 
         hook._event_tap_callback(
-            None, mouse_hook._kCGEventTapDisabledByUserInput, dummy, None)
+            None, device_hook._kCGEventTapDisabledByUserInput, dummy, None)
 
         self.mock_quartz.CGEventTapEnable.assert_called_once_with(
             hook._tap, True)
@@ -887,20 +887,20 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
     def setUp(self):
         self.mock_quartz = MagicMock(name="Quartz")
         self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
-        mouse_hook.Quartz = self.mock_quartz
+        device_hook.Quartz = self.mock_quartz
 
     def tearDown(self):
-        if hasattr(mouse_hook, "Quartz") and isinstance(
-                mouse_hook.Quartz, MagicMock):
-            del mouse_hook.Quartz
+        if hasattr(device_hook, "Quartz") and isinstance(
+                device_hook.Quartz, MagicMock):
+            del device_hook.Quartz
 
     def _make_hook(self):
-        hook = mouse_hook.MouseHook()
+        hook = device_hook.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
-        hook.block(mouse_hook.MouseEvent.HSCROLL_LEFT)
-        hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        hook.block(device_hook.DeviceEvent.HSCROLL_LEFT)
+        hook.block(device_hook.DeviceEvent.HSCROLL_RIGHT)
         return hook
 
     def _mock_get_field(self, is_continuous, source_user_data=0):
@@ -971,7 +971,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertFalse(hook._dispatch_queue.empty())
         event = hook._dispatch_queue.get_nowait()
-        self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        self.assertEqual(event.event_type, device_hook.DeviceEvent.HSCROLL_RIGHT)
 
     def test_mouse_wheel_hscroll_dispatched_and_blocked(self):
         """Discrete mouse wheel horizontal scroll SHOULD dispatch and block."""
@@ -994,7 +994,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertIsNone(result)  # blocked
         self.assertFalse(hook._dispatch_queue.empty())
         event = hook._dispatch_queue.get_nowait()
-        self.assertEqual(event.event_type, mouse_hook.MouseEvent.HSCROLL_RIGHT)
+        self.assertEqual(event.event_type, device_hook.DeviceEvent.HSCROLL_RIGHT)
 
 
 if __name__ == "__main__":
