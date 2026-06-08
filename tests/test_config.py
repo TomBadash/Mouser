@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 12)
+        self.assertEqual(migrated["version"], 13)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -93,7 +93,7 @@ class ConfigMigrationTests(unittest.TestCase):
         migrated = config._migrate(cfg)
         mappings = migrated["profiles"]["default"]["mappings"]
 
-        self.assertEqual(migrated["version"], 12)
+        self.assertEqual(migrated["version"], 13)
         # craft_* keys renamed to kbd_* with their action preserved.
         self.assertNotIn("craft_volume_up", mappings)
         self.assertEqual(mappings["kbd_volume_up"], "zoom_in")
@@ -117,7 +117,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 12)
+        self.assertEqual(migrated["version"], 13)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -159,7 +159,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 12)
+        self.assertEqual(loaded["version"], 13)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -186,7 +186,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 12)
+        self.assertEqual(migrated["version"], 13)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
@@ -579,6 +579,55 @@ class AppCatalogTests(unittest.TestCase):
         self.assertEqual(resolved["label"], "Firefox")
         self.assertEqual(resolved["path"], "/opt/firefox/firefox")
         self.assertIn("/usr/lib64/firefox/firefox", resolved["aliases"])
+
+
+class PerProfileCrownSmoothTests(unittest.TestCase):
+    def _cfg(self):
+        return {
+            "version": 13,
+            "active_profile": "default",
+            "profiles": {
+                "default": {"label": "Default", "apps": [], "mappings": {}},
+                "game": {"label": "Game", "apps": ["game.exe"], "mappings": {}},
+            },
+            "settings": {"crown_smooth": False},
+        }
+
+    def test_profile_inherits_global_when_unset(self):
+        cfg = self._cfg()
+        cfg["settings"]["crown_smooth"] = True
+        self.assertTrue(config.get_profile_crown_smooth(cfg, "game"))
+
+    def test_profile_value_overrides_global(self):
+        cfg = self._cfg()
+        cfg["settings"]["crown_smooth"] = True
+        cfg["profiles"]["game"]["crown_smooth"] = False
+        self.assertFalse(config.get_profile_crown_smooth(cfg, "game"))
+        self.assertTrue(config.get_profile_crown_smooth(cfg, "default"))
+
+    def test_set_default_profile_updates_global_fallback(self):
+        cfg = self._cfg()
+        with patch.object(config, "save_config"):
+            config.set_profile_crown_smooth(cfg, True, "default")
+        self.assertTrue(cfg["profiles"]["default"]["crown_smooth"])
+        self.assertTrue(cfg["settings"]["crown_smooth"])
+
+    def test_set_non_default_profile_leaves_global_untouched(self):
+        cfg = self._cfg()
+        with patch.object(config, "save_config"):
+            config.set_profile_crown_smooth(cfg, True, "game")
+        self.assertTrue(cfg["profiles"]["game"]["crown_smooth"])
+        self.assertFalse(cfg["settings"]["crown_smooth"])
+
+
+class BacklightDefaultsTests(unittest.TestCase):
+    def test_migrate_adds_backlight_setting(self):
+        legacy = {"version": 12, "active_profile": "default",
+                  "profiles": {"default": {"apps": [], "mappings": {}}},
+                  "settings": {}}
+        migrated = config._migrate(legacy)
+        self.assertEqual(migrated["version"], 13)
+        self.assertFalse(migrated["settings"]["backlight_follow_theme"])
 
 
 if __name__ == "__main__":

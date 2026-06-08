@@ -46,7 +46,10 @@ ApplicationWindow {
         if (root.currentPage === page)
             return
         root.currentPage = page
-        root.forceActiveFocus(Qt.OtherFocusReason)
+        // ApplicationWindow is a Window, not an Item — focus lives on its
+        // contentItem. Move focus there so the nav item doesn't keep keyboard
+        // focus after switching pages.
+        root.contentItem.forceActiveFocus(Qt.OtherFocusReason)
     }
 
     color: theme.bg

@@ -102,7 +102,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 12,
+    "version": 13,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -137,7 +137,11 @@ DEFAULT_CONFIG = {
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
-        "crown_smooth": False,    # Craft crown feel: False=ratchet, True=smooth
+        "crown_smooth": False,    # Craft crown feel: False=ratchet, True=smooth (global fallback)
+        # Keyboard backlight (Craft/MX Keys, HID++ 0x1982). Brightness isn't
+        # software-settable on the Craft, so this only toggles on/off: when on,
+        # dark theme = backlight on, light theme = off.
+        "backlight_follow_theme": False,
         "gesture_threshold": 50,
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
@@ -284,6 +288,39 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
+def get_profile_crown_smooth(cfg, profile_name=None):
+    """Resolve the crown feel (True=smooth, False=ratchet) for a profile.
+
+    A profile may carry its own ``crown_smooth``; if absent it inherits the
+    global ``settings.crown_smooth`` fallback.
+    """
+    if profile_name is None:
+        profile_name = cfg.get("active_profile", "default")
+    global_default = bool(cfg.get("settings", {}).get("crown_smooth", False))
+    profile = cfg.get("profiles", {}).get(profile_name, {})
+    value = profile.get("crown_smooth")
+    if value is None:
+        return global_default
+    return bool(value)
+
+
+def set_profile_crown_smooth(cfg, smooth, profile_name=None):
+    """Persist a per-profile crown feel. For 'default' this also updates the
+    global fallback so existing single-profile setups behave unchanged."""
+    if profile_name is None:
+        profile_name = cfg.get("active_profile", "default")
+    profile = cfg.setdefault("profiles", {}).setdefault(profile_name, {
+        "label": profile_name,
+        "apps": [],
+        "mappings": dict(DEFAULT_CONFIG["profiles"]["default"]["mappings"]),
+    })
+    profile["crown_smooth"] = bool(smooth)
+    if profile_name == "default":
+        cfg.setdefault("settings", {})["crown_smooth"] = bool(smooth)
+    save_config(cfg)
+    return cfg
+
+
 def get_profile_for_app(cfg, exe_name):
     """Return the profile name that matches the given executable, or 'default'."""
     if not exe_name:
@@ -402,6 +439,14 @@ def _migrate(cfg):
                 mappings.setdefault(btn, action)
         cfg["version"] = 12
 
+    if version < 13:
+        # Keyboard backlight on/off-follows-theme + per-profile crown feel. The
+        # per-profile crown_smooth is optional (profiles without it inherit the
+        # global setting), so no profile rewrite is needed here.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("backlight_follow_theme", False)
+        cfg["version"] = 13
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -411,6 +456,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
     cfg["settings"].setdefault("crown_smooth", False)
+    cfg["settings"].setdefault("backlight_follow_theme", False)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

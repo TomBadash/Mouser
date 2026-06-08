@@ -49,11 +49,26 @@ Item {
         onClicked: crownCtl.panelOpen = !crownCtl.panelOpen
     }
 
+    // Click-outside dismiss layer. Covers the whole control beneath the panel
+    // (z:6); a click anywhere outside the panel closes it. Hidden when the
+    // panel is closed so it never intercepts other interactions.
+    MouseArea {
+        anchors.fill: parent
+        z: 5
+        visible: panelOpen
+        onClicked: crownCtl.panelOpen = false
+    }
+
     // ── Crown actions panel ───────────────────────────────────
     Rectangle {
         id: panel
         visible: panelOpen
         z: 6
+
+        // Absorb clicks on the panel's own background so they don't fall
+        // through to the dismiss layer below. The interactive controls live in
+        // panelCol (declared after this), so they sit above and still work.
+        MouseArea { anchors.fill: parent }
         width: 252
         height: panelCol.implicitHeight + 24
         radius: 14
@@ -88,22 +103,26 @@ Item {
                     model: [{ smooth: false }, { smooth: true }]
                     delegate: Rectangle {
                         required property var modelData
+                        readonly property bool isCurrent: devicePage.selectedCrownSmooth === modelData.smooth
                         width: 72; height: 24; radius: 7
-                        color: backend.crownSmooth === modelData.smooth ? theme.accent : "transparent"
+                        color: isCurrent ? theme.accent : "transparent"
                         border.width: 1
-                        border.color: backend.crownSmooth === modelData.smooth ? theme.accent : theme.border
+                        border.color: isCurrent ? theme.accent : theme.border
                         Text {
                             anchors.centerIn: parent
                             text: modelData.smooth
                                   ? (crownCtl.s["device.smooth"] || "Smooth")
                                   : (crownCtl.s["device.ratchet"] || "Ratchet")
                             font { family: uiState.fontFamily; pixelSize: 11; bold: true }
-                            color: backend.crownSmooth === modelData.smooth ? theme.bgCard : theme.textSecondary
+                            color: parent.isCurrent ? theme.bgCard : theme.textSecondary
                         }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: backend.setCrownSmooth(modelData.smooth)
+                            onClicked: {
+                                backend.setCrownSmoothForProfile(modelData.smooth, devicePage.selectedProfile)
+                                devicePage.refreshSelectedProfileMappings()
+                            }
                         }
                     }
                 }
@@ -121,7 +140,7 @@ Item {
                     radius: 8
                     readonly property bool sel: devicePage.selectedButton === modelData.key
                     color: sel ? Qt.rgba(0, 0.83, 0.67, 0.14)
-                                : (rowMa.containsMouse ? theme.bgHover : "transparent")
+                                : (rowMa.containsMouse ? theme.bgCardHover : "transparent")
                     border.width: sel ? 1 : 0
                     border.color: Qt.rgba(0, 0.83, 0.67, 0.4)
 
@@ -136,7 +155,14 @@ Item {
                             width: parent.width
                         }
                         Text {
-                            text: { var _l = lm.strings; return lm.trAction(modelData.actionLabel) }
+                            // Resolve the label from the profile being edited (not
+                            // the active one) so the crown menu matches the rest of
+                            // the page; fall back to the device's active mapping.
+                            text: {
+                                var _l = lm.strings
+                                var m = devicePage.selectedProfileMappingState[modelData.key]
+                                return lm.trAction(m ? m.actionLabel : modelData.actionLabel)
+                            }
                             font { family: uiState.fontFamily; pixelSize: 10 }
                             color: theme.textSecondary
                             elide: Text.ElideRight

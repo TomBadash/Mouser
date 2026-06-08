@@ -7,9 +7,9 @@
 English | [中文文档](README_CN.md)
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
-remapping Logitech HID++ mice. The current best experience is on the **MX Master**
-and **MX Anywhere** families, with detection and fallback UI support for additional
-Logitech models.
+remapping Logitech HID++ mice and keyboards. The current best experience is on
+the **MX Master**, **MX Anywhere** mice and the **Logitech Craft**, **MX Keys**
+keyboards, with detection and fallback UI support for additional Logitech models.
 
 **No telemetry. No cloud. No Logitech account required.**
 
@@ -21,6 +21,7 @@ Logitech models.
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Device coverage](#device-coverage)
+- [Keyboard support](#keyboard-support)
 - [Default mappings](#default-mappings)
 - [Available actions](#available-actions)
 - [Build from source](#build-from-source)
@@ -152,9 +153,38 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 | MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive per-model layouts |
 | MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive per-model layouts |
 | MX Vertical | Yes | Generic fallback card (with DPI switch button support) |
+| Logitech Craft | Yes | Dedicated interactive layout with **Crown** dial + top-row keys |
+| MX Keys | Yes | Dedicated interactive layout with top-row keys |
+| Unknown Logitech HID++ keyboards | Auto-classified by HID++ profile | Generic keyboard card (remappable top-row keys) |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> MX Master and MX Anywhere devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
+> MX Master, MX Anywhere, Craft and MX Keys devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
+
+---
+
+## Keyboard support
+
+Mouser remaps Logitech HID++ keyboards alongside mice. A mouse and a keyboard
+sharing a single Unifying receiver are multiplexed, so both work at once.
+
+- **Logitech Craft — Crown dial.** The Craft's rotary Crown is fully remappable.
+  Click the Crown in the device view to open its panel and assign actions to
+  **rotate left/right**, **click**, **touch**, and **click + rotate left/right**
+  (defaults: rotate = volume, click = play/pause, click+rotate = track skip).
+- **Ratchet ↔ smooth, per app.** The Crown's feel (clicky *ratchet* vs free-spin
+  *smooth*) is set in the Crown panel and is **saved per application profile**, so
+  it switches automatically when you change apps.
+- **Top-row keys.** Brightness, backlight, media and other top-row keys are
+  remappable over HID++ on Craft, MX Keys and auto-classified keyboards. They stay
+  native until you remap them.
+- **Backlight follows the system theme.** When enabled (Settings → Scroll), the
+  keyboard backlight (HID++ feature `0x1982`) tracks your OS light/dark theme —
+  brighter in dark mode, dimmer in light mode — or you can set a fixed brightness.
+- **Open Application action.** Any key, Crown sub-action, or mouse button can be
+  bound to **Open Application…**, which launches an executable you pick.
+
+Use [`tools/craft_probe.py`](tools/craft_probe.py) to discover HID++ features and
+control IDs on a connected keyboard (safe, read-only).
 
 ---
 
@@ -186,8 +216,10 @@ Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS
 | **Media** | Volume Up, Volume Down, Volume Mute, Play / Pause, Next Track, Previous Track |
 | **Scroll** | Switch Scroll Mode (Ratchet / Free Spin), Toggle SmartShift, Cycle DPI Presets |
 | **Mouse** | Left Click, Right Click, Middle Click, Back (Mouse Button 4), Forward (Mouse Button 5) |
-| **Custom** | User-defined keyboard shortcuts (any key combination, captured in the UI) |
+| **Custom** | User-defined keyboard shortcuts (any key combination, captured in the UI); **Open Application…** (launch an executable you pick) |
 | **Other** | Do Nothing (pass-through) |
+
+> Keyboards add remappable Crown sub-actions (Craft) and top-row keys, plus a system-theme-aware backlight. See [Keyboard support](#keyboard-support).
 
 ---
 

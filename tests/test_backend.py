@@ -1160,6 +1160,62 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         create_profile.assert_not_called()
         self.assertIn("Profile already exists", status_messages)
 
+    def test_copy_profile_config_copies_mappings_and_crown_keeps_apps(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["chrome"] = {
+            "label": "Chrome", "apps": ["chrome.exe"],
+            "mappings": {"middle": "copy", "xbutton1": "browser_back"},
+            "crown_smooth": True,
+        }
+        cfg["profiles"]["vscode"] = {
+            "label": "VS Code", "apps": ["Code.exe"],
+            "mappings": {"middle": "none"},
+        }
+        backend = self._make_backend(cfg=cfg)
+
+        with patch("ui.backend.save_config"):
+            backend.copyProfileConfig("chrome", "vscode")
+
+        vscode = backend._cfg["profiles"]["vscode"]
+        self.assertEqual(vscode["mappings"]["middle"], "copy")
+        self.assertEqual(vscode["mappings"]["xbutton1"], "browser_back")
+        self.assertTrue(vscode["crown_smooth"])
+        # Target keeps its own identity.
+        self.assertEqual(vscode["label"], "VS Code")
+        self.assertEqual(vscode["apps"], ["Code.exe"])
+        # Source is untouched.
+        self.assertEqual(backend._cfg["profiles"]["chrome"]["apps"], ["chrome.exe"])
+
+    def test_copy_profile_config_ignores_same_or_missing_profiles(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config"):
+            backend.copyProfileConfig("default", "default")     # same → no-op
+            backend.copyProfileConfig("ghost", "default")       # missing → no-op
+        # default profile still present and intact
+        self.assertIn("default", backend._cfg["profiles"])
+
+    def test_device_has_smart_shift_uses_mouse_in_multidevice(self):
+        from types import SimpleNamespace
+        kbd = SimpleNamespace(device_type="keyboard",
+                              supported_buttons=["kbd_brightness_up"])
+        mouse = SimpleNamespace(device_type="mouse",
+                                supported_buttons=["middle", "mode_shift"])
+        engine = _FakeEngine(connected_devices=[kbd, mouse],
+                             smart_shift_supported=True)
+        backend = self._make_backend(engine=engine)
+        # Effective device is the keyboard, but the mouse drives SmartShift.
+        backend._effective_supported_buttons = ["kbd_brightness_up"]
+        self.assertTrue(backend.deviceHasSmartShift)
+
+    def test_device_has_smart_shift_false_when_only_keyboard(self):
+        from types import SimpleNamespace
+        kbd = SimpleNamespace(device_type="keyboard",
+                              supported_buttons=["kbd_brightness_up"])
+        engine = _FakeEngine(connected_devices=[kbd])
+        backend = self._make_backend(engine=engine)
+        backend._effective_supported_buttons = ["kbd_brightness_up"]
+        self.assertFalse(backend.deviceHasSmartShift)
+
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendLoginStartupTests(unittest.TestCase):

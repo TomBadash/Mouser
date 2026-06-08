@@ -19,7 +19,7 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, get_profile_crown_smooth, set_profile_crown_smooth,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -39,7 +39,9 @@ from core.logi_devices import (
 )
 from core.key_simulator import (
     ACTIONS,
+    OPEN_APP_PREFIX,
     custom_action_label,
+    open_app_label,
     normalize_captured_shortcut_parts,
     valid_custom_key_names,
 )
@@ -76,6 +78,8 @@ from core.version import APP_VERSION
 def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
+    if action_id.startswith(OPEN_APP_PREFIX):
+        return open_app_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
 
 
@@ -218,6 +222,7 @@ class Backend(QObject):
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
     calibrationModeChanged = Signal()
+    calibrationCustomImageChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
@@ -252,6 +257,8 @@ class Backend(QObject):
         self._battery_level = -1
         self._battery_by_type = {}      # {device_type: level} for multi-device
         self._calibration_mode = False  # hidden dev layout-calibration overlay
+        self._calibration_custom_image = ""  # user-loaded calibration photo (URL)
+        self._system_dark = False       # last OS dark-mode state (for backlight)
         self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
@@ -426,7 +433,8 @@ class Backend(QObject):
                 {"id": aid, "label": data["label"]})
         result = [{"category": c, "actions": a} for c, a in cats.items()]
         result.append({"category": "Custom", "actions": [
-            {"id": "__custom__", "label": "Custom Shortcut…"}
+            {"id": "__custom__", "label": "Custom Shortcut…"},
+            {"id": "__open_app__", "label": "Open Application…"},
         ]})
         return result
 
@@ -450,7 +458,8 @@ class Backend(QObject):
             cats.setdefault(cat, []).append({"id": aid, "label": data["label"]})
         result = [{"category": c, "actions": a} for c, a in cats.items()]
         result.append({"category": "Custom", "actions": [
-            {"id": "__custom__", "label": "Custom Shortcut\u2026"}
+            {"id": "__custom__", "label": "Custom Shortcut\u2026"},
+            {"id": "__open_app__", "label": "Open Application\u2026"},
         ]})
         return result
 
@@ -473,6 +482,8 @@ class Backend(QObject):
             result.append({"id": aid, "label": data["label"],
                            "category": data["category"]})
         result.append({"id": "__custom__", "label": "Custom Shortcut\u2026",
+                        "category": "Custom"})
+        result.append({"id": "__open_app__", "label": "Open Application\u2026",
                         "category": "Custom"})
         return result
 
@@ -529,7 +540,22 @@ class Backend(QObject):
 
     @Property(bool, notify=deviceLayoutChanged)
     def deviceHasSmartShift(self):
-        """Whether the effective device has a mode_shift button (SmartShift)."""
+        """Whether a connected mouse exposes SmartShift (mode_shift).
+
+        Checked against the mouse specifically — in a multi-device setup (e.g. a
+        Craft keyboard + MX Master on one receiver) the keyboard may be the
+        'effective' device, and it must not hide the mouse's SmartShift control.
+        """
+        devices = self._engine.connected_devices if self._engine else []
+        mouse = next(
+            (d for d in devices
+             if (getattr(d, "device_type", "mouse") or "mouse") == "mouse"),
+            None,
+        )
+        if mouse is not None:
+            btns = getattr(mouse, "supported_buttons", None)
+            return btns is None or "mode_shift" in btns
+        # No connected mouse info: fall back to the effective device's buttons.
         btns = self._effective_supported_buttons
         return btns is None or "mode_shift" in btns
 
@@ -559,13 +585,64 @@ class Backend(QObject):
 
     @Property(bool, notify=settingsChanged)
     def crownSmooth(self):
-        """Craft crown feel: True = smooth (free-spin), False = ratchet."""
-        return self._cfg.get("settings", {}).get("crown_smooth", False)
+        """Crown feel for the active profile: True = smooth, False = ratchet.
+        Falls back to the global setting when the profile has no own value."""
+        return get_profile_crown_smooth(
+            self._cfg, self._cfg.get("active_profile", "default"))
 
     @Property(bool, notify=deviceInfoChanged)
     def crownAvailable(self):
         """True when a connected keyboard exposes the crown."""
         return self._device_type == "keyboard"
+
+    # ── Keyboard backlight (follows system theme via HID++ 0x1982) ──
+    @Property(bool, notify=deviceInfoChanged)
+    def backlightAvailable(self):
+        """True when a connected keyboard exposes a controllable backlight."""
+        return bool(getattr(self._engine, "backlight_supported", False)) \
+            if self._engine else False
+
+    @Property(bool, notify=settingsChanged)
+    def backlightFollowTheme(self):
+        return bool(self._cfg.get("settings", {}).get("backlight_follow_theme", False))
+
+    def _resolved_backlight(self):
+        """Return (enabled, brightness) for the current theme, or None when Mouser
+        should not manage the backlight (theme-following disabled). Opt-in only.
+
+        This Craft can't set brightness over HID++, only on/off, so theme-follow
+        means: dark theme → backlight on, light theme → backlight off."""
+        s = self._cfg.get("settings", {})
+        if not s.get("backlight_follow_theme", False):
+            return None
+        on = bool(self._system_dark)
+        return (on, 100 if on else 0)
+
+    def _apply_backlight(self):
+        if not self._engine or not hasattr(self._engine, "set_backlight"):
+            return
+        resolved = self._resolved_backlight()
+        if resolved is None:
+            return
+        self._engine.set_backlight(*resolved)
+
+    @Slot(bool)
+    def syncBacklight(self, isDark):
+        """Called by the UI when the effective theme changes (and at startup)."""
+        self._system_dark = bool(isDark)
+        follow = self._cfg.get("settings", {}).get("backlight_follow_theme", False)
+        print(f"[Backend] syncBacklight: dark={self._system_dark} "
+              f"follow_theme={follow} resolved={self._resolved_backlight()}")
+        self._apply_backlight()
+
+    @Slot(bool)
+    def setBacklightFollowTheme(self, value):
+        self._cfg.setdefault("settings", {})["backlight_follow_theme"] = bool(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()  # (re)divert the backlight keys
+        self._apply_backlight()
+        self.settingsChanged.emit()
 
     @Property(int, notify=deviceTickChanged)
     def deviceTick(self):
@@ -712,6 +789,34 @@ class Backend(QObject):
         if on != self._calibration_mode:
             self._calibration_mode = on
             self.calibrationModeChanged.emit()
+
+    @Property(str, notify=calibrationCustomImageChanged)
+    def calibrationCustomImage(self):
+        """A user-supplied photo to calibrate against (empty = use the built-in
+        device asset). Stored as a file:// URL ready for an Image source."""
+        return self._calibration_custom_image
+
+    @Slot()
+    def pickCalibrationImage(self):
+        """Open a file picker and load a custom photo into the calibration tool."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load calibration image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)",
+        )
+        if not path:
+            return
+        url = QUrl.fromLocalFile(os.path.abspath(path)).toString()
+        if url != self._calibration_custom_image:
+            self._calibration_custom_image = url
+            self.calibrationCustomImageChanged.emit()
+
+    @Slot()
+    def clearCalibrationImage(self):
+        """Revert the calibration tool to the built-in device asset."""
+        if self._calibration_custom_image:
+            self._calibration_custom_image = ""
+            self.calibrationCustomImageChanged.emit()
 
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
@@ -1493,11 +1598,41 @@ class Backend(QObject):
         value = bool(value)
         if self.crownSmooth == value:
             return
-        self._cfg.setdefault("settings", {})["crown_smooth"] = value
+        active = self._cfg.get("active_profile", "default")
+        # Mirror into the backend's in-memory copy so crownSmooth reflects it
+        # immediately; the engine owns persistence + the device write.
+        self._cfg.setdefault("profiles", {}).setdefault(active, {})["crown_smooth"] = value
+        if active == "default":
+            self._cfg.setdefault("settings", {})["crown_smooth"] = value
         if self._engine:
-            self._engine.set_crown_smooth(value)
+            self._engine.set_crown_smooth(value, active)
         else:
-            save_config(self._cfg)
+            set_profile_crown_smooth(self._cfg, value, active)
+        self.settingsChanged.emit()
+
+    @Slot(str, result=bool)
+    def crownSmoothForProfile(self, profileName):
+        """Crown feel for a specific profile (inherits global when unset)."""
+        return get_profile_crown_smooth(self._cfg, profileName)
+
+    @Slot(bool, str)
+    def setCrownSmoothForProfile(self, value, profileName):
+        """Set the crown feel for a specific profile (the one being edited in the
+        device view), not just the active one. Only pushes to the device when
+        that profile is currently active."""
+        value = bool(value)
+        if not profileName:
+            profileName = self._cfg.get("active_profile", "default")
+        if self.crownSmoothForProfile(profileName) == value:
+            return
+        # Keep the backend's in-memory copy consistent for immediate UI reads.
+        self._cfg.setdefault("profiles", {}).setdefault(profileName, {})["crown_smooth"] = value
+        if profileName == "default":
+            self._cfg.setdefault("settings", {})["crown_smooth"] = value
+        if self._engine:
+            self._engine.set_crown_smooth(value, profileName)
+        else:
+            set_profile_crown_smooth(self._cfg, value, profileName)
         self.settingsChanged.emit()
 
     @Slot(bool)
@@ -1640,6 +1775,28 @@ class Backend(QObject):
         self.profilesChanged.emit()
         self.statusMessage.emit("Profile created")
 
+    @Slot(str, str)
+    def pickAppForMapping(self, profileName, button):
+        """Open a file picker and bind the chosen app to a button as an
+        'Open Application' action (stored as 'open_app:<path>')."""
+        from PySide6.QtWidgets import QFileDialog
+        if sys.platform == "darwin":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application", "/Applications", "Apps (*.app)")
+        elif sys.platform == "linux":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application", os.path.expanduser("~"),
+                "Applications (*)")
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application",
+                os.environ.get("ProgramFiles", "C:\\Program Files"),
+                "Executables (*.exe)")
+        if not path:
+            return
+        path = os.path.realpath(path) if sys.platform == "linux" else os.path.normpath(path)
+        self.setProfileMapping(profileName, button, OPEN_APP_PREFIX + path)
+
     @Slot()
     def refreshKnownAppsSilently(self):
         app_catalog.get_app_catalog(refresh=True)
@@ -1655,6 +1812,35 @@ class Backend(QObject):
             self._engine.reload_mappings()
         self.profilesChanged.emit()
         self.statusMessage.emit("Profile deleted")
+
+    @Slot(str, str)
+    def copyProfileConfig(self, sourceName, targetName):
+        """Copy the configuration (button mappings + crown feel) from one profile
+        into another, leaving the target's apps and label untouched. Lets the user
+        share one set-up across several apps (e.g. Chrome + VS Code)."""
+        if not sourceName or not targetName or sourceName == targetName:
+            return
+        profiles = self._cfg.get("profiles", {})
+        src = profiles.get(sourceName)
+        tgt = profiles.get(targetName)
+        if src is None or tgt is None:
+            return
+        tgt["mappings"] = dict(src.get("mappings", {}))
+        if "crown_smooth" in src:
+            tgt["crown_smooth"] = bool(src["crown_smooth"])
+        else:
+            tgt.pop("crown_smooth", None)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+            self._engine.reload_mappings()
+            # Push the copied crown feel live if the target is the active profile.
+            self._engine.set_crown_smooth(
+                get_profile_crown_smooth(self._cfg, targetName), targetName)
+        self.profilesChanged.emit()
+        self.mappingsChanged.emit()
+        self._bump_device_tick()
+        self.statusMessage.emit("Configuration copied")
 
     @Slot(str, result=list)
     @Slot(str, str, result=list)

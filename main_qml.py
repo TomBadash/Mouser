@@ -1015,6 +1015,13 @@ def main():
     backend.settingsChanged.connect(
         lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
     )
+    # Keyboard backlight follows the effective light/dark theme. darkModeChanged
+    # fires for both OS colour-scheme changes and the in-app appearance toggle,
+    # so the backlight tracks whichever the user changes; re-sync once at startup.
+    ui_state.darkModeChanged.connect(
+        lambda: backend.syncBacklight(ui_state.darkMode)
+    )
+    backend.syncBacklight(ui_state.darkMode)
 
     # ── QML Engine ─────────────────────────────────────────────
     qml_engine = QQmlApplicationEngine()

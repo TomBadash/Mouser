@@ -618,6 +618,18 @@ FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 FEAT_CROWN          = 0x4600      # Crown dial (Logitech Craft keyboard)
+FEAT_BACKLIGHT2     = 0x1982      # Keyboard backlight (Craft, MX Keys)
+# BACKLIGHT2 function indices (Solaar): getBacklightConfig=0, setBacklightConfig=1.
+BACKLIGHT2_GET_CONFIG = 0
+BACKLIGHT2_SET_CONFIG = 1
+# getBacklightConfig (fn 0) returns a config block whose byte 0 is the on/off
+# flag. On the Craft, software brightness is NOT settable over 0x1982 (verified on
+# hardware: supported byte reports no manual mode, and the level byte is ignored —
+# the keyboard manages brightness itself via its ambient sensor and backlight
+# keys). So we only toggle byte 0. See craft-hidpp-protocol / backlight notes.
+BACKLIGHT2_ENABLED_IDX = 0
+BACKLIGHT2_ENABLED_ON  = 0x01
+BACKLIGHT2_ENABLED_OFF = 0x00
 # Crown function indices follow Solaar (read_fnid 0x10 → fn 1, write 0x20 → fn 2).
 CROWN_GET_MODE      = 1
 CROWN_SET_MODE      = 2
@@ -801,6 +813,10 @@ class HidGestureListener:
         self._crown_touch_lock = threading.Lock()
         self._crown_smooth_pref = False     # desired feel: True=smooth, False=ratchet
         self._pending_crown_smooth = None   # queued live feel change
+        # Keyboard backlight (BACKLIGHT2, feature 0x1982) state.
+        self._backlight_idx = None          # feature index of BACKLIGHT2, or None
+        self._backlight_pref = None         # desired (enabled: bool, pct: int 0-100)
+        self._pending_backlight = None      # queued live backlight change
         self._device_type = "mouse"         # current cursor device type
         # Multiplexer: per-device sessions keyed by HID++ device-index. The flat
         # self._* fields above act as a transient "cursor" reused by the
@@ -898,6 +914,8 @@ class HidGestureListener:
             feature_ids.append(self._battery_feature_id)
         if self._crown_idx is not None:
             feature_ids.append(FEAT_CROWN)
+        if self._backlight_idx is not None:
+            feature_ids.append(FEAT_BACKLIGHT2)
         feature_ids.extend(sorted(self._wheel_feature_indexes))
         return tuple(feature_ids)
 
@@ -918,6 +936,8 @@ class HidGestureListener:
             })
         if self._crown_idx is not None:
             features.append({"feature_id": FEAT_CROWN, "index": self._crown_idx})
+        if self._backlight_idx is not None:
+            features.append({"feature_id": FEAT_BACKLIGHT2, "index": self._backlight_idx})
         if self._battery_idx is not None and self._battery_feature_id is not None:
             features.append({
                 "feature_id": self._battery_feature_id,
@@ -1484,6 +1504,53 @@ class HidGestureListener:
         except Exception:
             pass
 
+    # ── Keyboard backlight (BACKLIGHT2, feature 0x1982) ───────────
+    def _find_backlight(self):
+        """Locate the BACKLIGHT2 feature (0x1982) on the current device index."""
+        fi = self._find_feature(FEAT_BACKLIGHT2)
+        if fi:
+            self._backlight_idx = fi
+            print(f"[HidGesture] Found BACKLIGHT2 @0x{fi:02X}")
+        return fi
+
+    def set_backlight(self, enabled, brightness):
+        """Set keyboard backlight on/off and brightness (0-100). Callable from
+        any thread; applied live on the listener thread when connected."""
+        try:
+            pct = max(0, min(100, int(brightness)))
+        except (TypeError, ValueError):
+            pct = 0
+        self._backlight_pref = (bool(enabled), pct)
+        self._pending_backlight = (bool(enabled), pct)
+
+    def _apply_pending_backlight(self):
+        pending = self._pending_backlight
+        self._pending_backlight = None
+        if pending is None:
+            return
+        enabled, pct = pending
+        if self._sessions:
+            self._load_session_with("_backlight_idx")
+        if self._backlight_idx is None:
+            return
+        self._backlight_pref = (enabled, pct)
+        # This firmware only honours the on/off (enabled) byte over 0x1982 — the
+        # brightness level is firmware-managed (ambient sensor + the keyboard's own
+        # backlight keys), so we toggle on/off and leave the level untouched via a
+        # read-modify-write. Never let a backlight quirk tear down the session.
+        try:
+            # _request returns the full (devIdx, feat, func, sw, params) tuple.
+            resp = self._request(self._backlight_idx, BACKLIGHT2_GET_CONFIG, [])
+            cfg = list(resp[4]) if resp else []
+            params = cfg + [0] * (16 - len(cfg)) if len(cfg) < 16 else cfg
+            params[BACKLIGHT2_ENABLED_IDX] = (
+                BACKLIGHT2_ENABLED_ON if enabled else BACKLIGHT2_ENABLED_OFF)
+            self._request(self._backlight_idx, BACKLIGHT2_SET_CONFIG, params[:16])
+            print(f"[HidGesture] Backlight: {'on' if enabled else 'off'}")
+        except Exception as exc:
+            print(f"[HidGesture] Backlight apply failed: {exc}")
+        self._save_cursor_session()
+
     def _enable_receiver_notifications(self, pid):
         """Write the receiver NOTIFICATIONS register so crown events are
         delivered. Sent as a short HID++ report on the FF00/0x0001 collection;
@@ -1790,6 +1857,23 @@ class HidGestureListener:
                        for s in self._sessions.values())
         return self._smart_shift_idx is not None
 
+    @property
+    def backlight_supported(self):
+        # Check every bound device, not just the live cursor — in a multi-device
+        # session the cursor flips between devices as reports are processed.
+        if self._sessions:
+            return any(s.get("_backlight_idx") is not None
+                       for s in self._sessions.values())
+        return self._backlight_idx is not None
+
+    @property
+    def crown_present(self):
+        """True when any bound device exposes the crown (multi-device safe)."""
+        if self._sessions:
+            return any(s.get("_crown_idx") is not None
+                       for s in self._sessions.values())
+        return self._crown_idx is not None
+
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
         """Queue a Smart Shift settings change.
         mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
@@ -2053,6 +2137,7 @@ class HidGestureListener:
         "_crown_pressed", "_crown_rotated_while_pressed", "_crown_touch_active",
         "_crown_touch_pending", "_crown_touch_timer", "_extra_diverts",
         "_last_controls", "_connected_device_info", "_crown_smooth_pref",
+        "_backlight_idx", "_backlight_pref",
         "_last_logged_battery", "_device_type",
     )
 
@@ -2173,6 +2258,7 @@ class HidGestureListener:
         self._battery_feature_id = None
         self._wheel_feature_indexes = {}
         self._crown_idx = None
+        self._backlight_idx = None
         self._crown_accum = 0
         self._crown_pressed = False
         self._crown_rotated_while_pressed = False
@@ -2431,6 +2517,9 @@ class HidGestureListener:
                     crown_ok = False
                     if self._find_crown() is not None:
                         crown_ok = self._divert_crown()
+                    # Probe the keyboard backlight (BACKLIGHT2). No divert needed;
+                    # just locate it so set_backlight() can drive it.
+                    self._find_backlight()
 
                     # Bind if we can divert the gesture button OR the crown.
                     # Keyboards have no gesture CID, so gesture divert fails on
@@ -2485,9 +2574,16 @@ class HidGestureListener:
                         if self._primary_dev_idx is None:
                             self._primary_dev_idx = idx
                         print(f"[HidGesture] Bound {self._device_type} "
-                              f"'{hidpp_name or product}' @devIdx=0x{idx:02X}")
+                              f"'{hidpp_name or product}' @devIdx=0x{idx:02X} "
+                              f"transport={actual_transport} "
+                              f"crown={'y' if crown_ok else 'n'} "
+                              f"backlight={'y' if self._backlight_idx else 'n'}")
                         if idx == BT_DEV_IDX:
-                            break  # a Bluetooth-direct connection is one device
+                            # A Bluetooth HID interface represents exactly one
+                            # device; additional Bluetooth keyboards/mice surface
+                            # as separate interfaces handled by the outer
+                            # candidate loop, so this is not a global BT limit.
+                            break
                         continue
                     continue     # divert failed — try next receiver slot
 
@@ -2497,8 +2593,12 @@ class HidGestureListener:
                 if self._primary_dev_idx in self._sessions:
                     self._load_cursor(self._sessions[self._primary_dev_idx])
                 self._consecutive_request_timeouts = 0
-                print(f"[HidGesture] Multi-device: bound "
-                      f"{len(self._sessions)} device(s) on one receiver")
+                bound = ", ".join(
+                    f"0x{i:02X}:{s.get('_device_type', '?')}"
+                    for i, s in sorted(self._sessions.items())
+                )
+                print(f"[HidGesture] Bound {len(self._sessions)} device(s) on "
+                      f"this interface [{bound}] primary=0x{self._primary_dev_idx:02X}")
                 return True
 
             if not reprog_found:
@@ -2568,6 +2668,8 @@ class HidGestureListener:
                         self._apply_pending_extra_diverts()
                     if self._pending_crown_smooth is not None:
                         self._apply_pending_crown_smooth()
+                    if self._pending_backlight is not None:
+                        self._apply_pending_backlight()
                     if self._pending_battery is not None:
                         if self._pending_battery == "read_all":
                             self._apply_pending_read_battery_all()

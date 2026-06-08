@@ -809,5 +809,37 @@ class HidReconnectInvariantTests(unittest.TestCase):
         extra_up.assert_called_once_with()
 
 
+class MultiDeviceFeatureFlagTests(unittest.TestCase):
+    """backlight/crown support must consider every bound device, not just the
+    live cursor (which flips between devices as reports are processed)."""
+
+    def test_backlight_supported_true_when_any_session_has_it(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._sessions = {
+            0x02: {"_backlight_idx": 0x0A, "_crown_idx": 0x12},  # keyboard
+            0x03: {"_backlight_idx": None, "_crown_idx": None},  # mouse
+        }
+        # Cursor currently points at the mouse (no backlight)…
+        listener._backlight_idx = None
+        listener._crown_idx = None
+        # …but support must still be reported from the keyboard session.
+        self.assertTrue(listener.backlight_supported)
+        self.assertTrue(listener.crown_present)
+
+    def test_backlight_supported_false_when_no_session_has_it(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._sessions = {0x03: {"_backlight_idx": None, "_crown_idx": None}}
+        listener._backlight_idx = None
+        listener._crown_idx = None
+        self.assertFalse(listener.backlight_supported)
+        self.assertFalse(listener.crown_present)
+
+    def test_single_device_falls_back_to_cursor(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._sessions = {}
+        listener._backlight_idx = 0x0A
+        self.assertTrue(listener.backlight_supported)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,8 +16,12 @@ class _FakeDeviceHook:
         self.connected_device = None
         self.device_connected = False
         self._hid_gesture = None
+        self.divert_keyboard_keys = {}
         self.start_called = False
         self.stop_called = False
+
+    def refresh_diverts(self):
+        pass
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -512,6 +516,71 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
 
         engine.hook._hid_gesture.read_all_batteries.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+
+class EngineBacklightThemeOnOffTests(unittest.TestCase):
+    def _make_engine(self, follow=True, up_map="none", down_map="none"):
+        from core.engine import Engine
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["backlight_follow_theme"] = follow
+        cfg["profiles"]["default"]["mappings"]["kbd_backlight_up"] = up_map
+        cfg["profiles"]["default"]["mappings"]["kbd_backlight_down"] = down_map
+        with (
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_capable_when_following_and_up_unmapped(self):
+        self.assertTrue(self._make_engine(follow=True)._backlight_reenable_capable)
+
+    def test_not_capable_when_following_disabled(self):
+        self.assertFalse(self._make_engine(follow=False)._backlight_reenable_capable)
+
+    def test_not_capable_when_up_remapped(self):
+        self.assertFalse(
+            self._make_engine(up_map="volume_up")._backlight_reenable_capable)
+
+    def test_off_arms_up_divert_on_releases_to_passthrough(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        down = KEYBOARD_KEY_CIDS["kbd_backlight_down"]
+        engine = self._make_engine(follow=True)
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+
+        engine.set_backlight(False, 0)            # light theme: off
+        self.assertTrue(engine._backlight_reenable_active)
+        self.assertIn(up, engine.hook.divert_keyboard_keys)
+        self.assertNotIn(down, engine.hook.divert_keyboard_keys)  # DOWN passthrough
+
+        engine.set_backlight(True, 100)           # dark theme: on
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
+
+    def test_reenable_handler_turns_on_and_releases_up(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        engine = self._make_engine(follow=True)
+        engine._enabled = True
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+        engine.set_backlight(False, 0)            # arm
+
+        engine._make_backlight_reenable_handler()(SimpleNamespace())
+
+        self.assertEqual(engine._backlight_state, (True, 100))
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
+        engine.hook._hid_gesture.set_backlight.assert_called_with(True, 100)
+
+    def test_dark_theme_is_passthrough(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        engine = self._make_engine(follow=True)
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+        engine.set_backlight(True, 100)           # dark theme
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
 
 
 if __name__ == "__main__":

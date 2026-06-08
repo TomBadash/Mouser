@@ -77,6 +77,8 @@ Item {
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
     property var selectedProfileMappingState: ({})
+    // Crown ratchet/smooth feel for the profile currently being edited.
+    property bool selectedCrownSmooth: false
     property string appSearchText: ""
     property var filteredKnownApps: []
     property var suggestedKnownApps: []
@@ -96,6 +98,7 @@ Item {
             mappingState[mapping.key] = mapping
         }
         selectedProfileMappingState = mappingState
+        selectedCrownSmooth = backend.crownSmoothForProfile(selectedProfile)
     }
 
     function mappingFor(key) {
@@ -430,22 +433,35 @@ Item {
         return "none"
     }
 
+    function _sentinelIndex(sentinelId) {
+        var actions = backend.allActions
+        for (var i = 0; i < actions.length; i++)
+            if (actions[i].id === sentinelId) return i
+        return 0
+    }
+
     function actionIndexForId(actionId) {
         var actions = backend.allActions
         for (var i = 0; i < actions.length; i++)
             if (actions[i].id === actionId) return i
-        // Custom shortcut: point to the __custom__ sentinel at the end
-        if (actionId.startsWith("custom:")) return actions.length - 1
+        // Parameterized actions point at their sentinel chip.
+        if (actionId.startsWith("custom:")) return _sentinelIndex("__custom__")
+        if (actionId.startsWith("open_app:")) return _sentinelIndex("__open_app__")
         return 0
     }
 
     function customLabel(actionId) {
-        if (!actionId.startsWith("custom:")) return ""
+        if (!actionId.startsWith("custom:") && !actionId.startsWith("open_app:"))
+            return ""
         return backend.actionLabelFor(actionId)
     }
 
     function isCustomAction(actionId) {
         return actionId.startsWith("custom:")
+    }
+
+    function isOpenAppAction(actionId) {
+        return actionId.startsWith("open_app:")
     }
 
     function gestureSummary() {
@@ -801,6 +817,49 @@ Item {
                             }
                             spacing: 8
 
+                            // Copy configuration from another profile
+                            Rectangle {
+                                visible: selectedProfile !== "" && backend.profiles.length > 1
+                                width: copyRow.implicitWidth + 18
+                                height: 28
+                                radius: 10
+                                color: copyMa.containsMouse ? theme.bgCardHover : theme.bgSubtle
+                                border.width: 1
+                                border.color: theme.border
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                Row {
+                                    id: copyRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14; height: 14
+                                        name: "sliders-horizontal"
+                                        iconColor: theme.textSecondary
+                                    }
+
+                                    Text {
+                                        text: s["device.copy_profile"] || "Copy from…"
+                                        font { family: uiState.fontFamily; pixelSize: 10; bold: true }
+                                        color: theme.textPrimary
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: copyMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        copyFromDialog.refreshSources()
+                                        copyFromDialog.open()
+                                    }
+                                }
+                            }
+
                             // Delete profile button (not for default)
                             Rectangle {
                                 visible: selectedProfile !== ""
@@ -1005,7 +1064,7 @@ Item {
                         height: (deviceConnectedHere && !pageDevice.interactive) ? 600
                                 : (deviceConnectedHere
                                    && pageDevice.layoutKind === "keyboard")
-                                  ? (deviceImg.height + 150) : 420
+                                  ? (deviceImg.height + 48) : 420
 
                         Rectangle {
                             anchors.fill: parent
@@ -1021,7 +1080,7 @@ Item {
                             readonly property bool isKbd: pageDevice.layoutKind === "keyboard"
                             readonly property real kbdAspect: pageDevice.imageHeight > 0
                                 ? pageDevice.imageWidth / pageDevice.imageHeight : 2
-                            width: isKbd ? Math.min(parent.width - 32, 1000)
+                            width: isKbd ? Math.min(parent.width - 32, 760)
                                          : pageDevice.imageWidth
                             height: isKbd ? width / kbdAspect : pageDevice.imageHeight
                             anchors.centerIn: parent
@@ -1514,13 +1573,17 @@ Item {
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 11 }
                                     currentIndex: actionIndexForId(gestureTapActionId)
-                                    displayText: isCustomAction(gestureTapActionId)
+                                    displayText: (isCustomAction(gestureTapActionId) || isOpenAppAction(gestureTapActionId))
                                                  ? customLabel(gestureTapActionId)
                                                  : (lm.strings, lm.trAction(currentText))
                                     onActivated: function(index) {
                                         var aid = backend.allActions[index].id
                                         if (aid === "__custom__") {
                                             keyCaptureDialog.open(selectedProfile, "gesture")
+                                            return
+                                        }
+                                        if (aid === "__open_app__") {
+                                            backend.pickAppForMapping(selectedProfile, "gesture")
                                             return
                                         }
                                         backend.setProfileMapping(selectedProfile, "gesture", aid)
@@ -1609,13 +1672,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureLeftActionId)
-                                        displayText: isCustomAction(gestureLeftActionId)
+                                        displayText: (isCustomAction(gestureLeftActionId) || isOpenAppAction(gestureLeftActionId))
                                                      ? customLabel(gestureLeftActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_left")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, "gesture_left")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1643,13 +1710,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureRightActionId)
-                                        displayText: isCustomAction(gestureRightActionId)
+                                        displayText: (isCustomAction(gestureRightActionId) || isOpenAppAction(gestureRightActionId))
                                                      ? customLabel(gestureRightActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_right")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, "gesture_right")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1677,13 +1748,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureUpActionId)
-                                        displayText: isCustomAction(gestureUpActionId)
+                                        displayText: (isCustomAction(gestureUpActionId) || isOpenAppAction(gestureUpActionId))
                                                      ? customLabel(gestureUpActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_up")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, "gesture_up")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1711,13 +1786,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureDownActionId)
-                                        displayText: isCustomAction(gestureDownActionId)
+                                        displayText: (isCustomAction(gestureDownActionId) || isOpenAppAction(gestureDownActionId))
                                                      ? customLabel(gestureDownActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_down")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, "gesture_down")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1757,15 +1836,22 @@ Item {
                                                 model: modelData.actions
                                                 delegate: ActionChip {
                                                     actionId: modelData.id
-                                                    actionLabel: modelData.id === "__custom__" && isCustomAction(selectedActionId)
+                                                    actionLabel: (modelData.id === "__custom__" && isCustomAction(selectedActionId))
+                                                                 || (modelData.id === "__open_app__" && isOpenAppAction(selectedActionId))
                                                                  ? customLabel(selectedActionId)
                                                                  : (lm.strings, lm.trAction(modelData.label))
                                                     isCurrent: modelData.id === "__custom__"
                                                                ? isCustomAction(selectedActionId)
-                                                               : modelData.id === selectedActionId
+                                                               : modelData.id === "__open_app__"
+                                                                 ? isOpenAppAction(selectedActionId)
+                                                                 : modelData.id === selectedActionId
                                                     onPicked: function(aid) {
                                                         if (aid === "__custom__") {
                                                             keyCaptureDialog.open(selectedProfile, selectedButton)
+                                                            return
+                                                        }
+                                                        if (aid === "__open_app__") {
+                                                            backend.pickAppForMapping(selectedProfile, selectedButton)
                                                             return
                                                         }
                                                         backend.setProfileMapping(
@@ -2822,6 +2908,78 @@ Item {
                 width: parent.width
                 text: s["device.delete_dialog.desc"]
                 font { family: uiState.fontFamily; pixelSize: 12 }
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
+    // ── Copy configuration from another profile ──────────────
+    Dialog {
+        id: copyFromDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        title: s["device.copy_dialog.title"] || "Copy configuration"
+        width: 400
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        // Profiles that can be a copy source (everything except the target).
+        property var sourceProfiles: []
+        function refreshSources() {
+            var out = []
+            var profs = backend.profiles
+            for (var i = 0; i < profs.length; i++)
+                if (profs[i].name !== selectedProfile)
+                    out.push(profs[i])
+            sourceProfiles = out
+            sourceCombo.currentIndex = out.length > 0 ? 0 : -1
+        }
+
+        onAccepted: {
+            if (sourceProfiles.length > 0 && sourceCombo.currentIndex >= 0) {
+                backend.copyProfileConfig(
+                    sourceProfiles[sourceCombo.currentIndex].name, selectedProfile)
+                refreshSelectedProfileMappings()
+            }
+        }
+
+        contentItem: Column {
+            width: copyFromDialog.availableWidth
+            spacing: 12
+
+            Text {
+                width: parent.width
+                text: (s["device.copy_dialog.desc"]
+                       || "Copy the button mappings and crown feel into ")
+                      + selectedProfileLabel + "."
+                font { family: uiState.fontFamily; pixelSize: 13 }
+                color: theme.textPrimary
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                text: s["device.copy_dialog.source"] || "Copy from profile:"
+                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                color: theme.textSecondary
+            }
+
+            ComboBox {
+                id: sourceCombo
+                width: parent.width
+                model: copyFromDialog.sourceProfiles
+                textRole: "label"
+                Material.accent: theme.accent
+                font { family: uiState.fontFamily; pixelSize: 12 }
+            }
+
+            Text {
+                width: parent.width
+                text: s["device.copy_dialog.warn"]
+                      || "This replaces the current mappings of this profile."
+                font { family: uiState.fontFamily; pixelSize: 11 }
                 color: theme.textSecondary
                 wrapMode: Text.WordWrap
             }

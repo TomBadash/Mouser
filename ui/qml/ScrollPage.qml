@@ -1079,6 +1079,68 @@ Item {
                             }
                         }
                     }
+
+                    // ── Keyboard backlight (only when a backlight is present) ──
+                    Rectangle {
+                        width: parent.width
+                        height: backlightCol.implicitHeight + 24
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.backlightAvailable
+
+                        Column {
+                            id: backlightCol
+                            anchors {
+                                left: parent.left; right: parent.right
+                                verticalCenter: parent.verticalCenter
+                                leftMargin: 16; rightMargin: 16
+                            }
+                            spacing: 10
+
+                            RowLayout {
+                                width: parent.width
+                                spacing: 12
+
+                                Column {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+                                    Text {
+                                        text: s["scroll.backlight_follow_theme"] || "Backlight follows system theme"
+                                        font { family: uiState.fontFamily; pixelSize: 13 }
+                                        color: scrollPage.theme.textPrimary
+                                    }
+                                    Text {
+                                        width: parent.width
+                                        text: s["scroll.backlight_follow_theme_desc"]
+                                              || "Brighten the keyboard in dark mode and dim it in light mode."
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: scrollPage.theme.textSecondary
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                Switch {
+                                    id: backlightFollowSwitch
+                                    checked: backend.backlightFollowTheme
+                                    Material.accent: scrollPage.theme.accent
+                                    onToggled: backend.setBacklightFollowTheme(checked)
+                                }
+                            }
+
+                            // Hint: brightness isn't software-settable on this
+                            // keyboard, so theme-follow is on/off (dark = on,
+                            // light = off); the backlight keys toggle on/off too.
+                            Text {
+                                width: parent.width
+                                visible: backend.backlightFollowTheme
+                                text: s["scroll.backlight_onoff_hint"]
+                                      || "Dark theme turns the backlight on, light theme off. The keyboard's backlight keys toggle it on/off."
+                                wrapMode: Text.WordWrap
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: scrollPage.theme.textSecondary
+                            }
+                        }
+                    }
                 }
             }
 

@@ -101,13 +101,60 @@ def _parse_custom_combo(action_id, key_name_to_code):
 
 
 # ==================================================================
+# "Open Application" action (shared across platforms)
+# ==================================================================
+# Stored as "open_app:<absolute path>" — analogous to the "custom:" shortcut
+# scheme. The path is launched detached so the foreground app is never blocked.
+
+OPEN_APP_PREFIX = "open_app:"
+
+
+def parse_open_app(action_id):
+    """Return the target path for an 'open_app:<path>' action, else None."""
+    if not action_id.startswith(OPEN_APP_PREFIX):
+        return None
+    return action_id[len(OPEN_APP_PREFIX):].strip()
+
+
+def open_app_label(action_id):
+    """Friendly label for an 'open_app:<path>' action (e.g. 'Open Code')."""
+    path = parse_open_app(action_id)
+    if path is None:
+        return action_id
+    if not path:
+        return "Open Application"
+    name = os.path.basename(path.rstrip("\\/")) or path
+    stem = os.path.splitext(name)[0]
+    return f"Open {stem}"
+
+
+def launch_application(path):
+    """Launch an application/file path detached, cross-platform."""
+    if not path:
+        print("[KeySimulator] launch_application: empty path")
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 — user-configured launch target
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.Popen(["open", path])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", path])
+        print(f"[KeySimulator] launch_application: {path}")
+    except Exception as exc:
+        print(f"[KeySimulator] launch_application failed for {path!r}: {exc}")
+
+
+# ==================================================================
 # Windows implementation
 # ==================================================================
 
 if sys.platform == "win32":
     import ctypes
     import ctypes.wintypes as wintypes
-    from ctypes import Structure, Union, c_ulong, c_ushort, c_long, sizeof
+    from ctypes import Structure, Union, c_ulong, c_ushort, c_long, c_uint, sizeof
 
     INPUT_MOUSE = 0
     INPUT_KEYBOARD = 1
@@ -220,6 +267,15 @@ if sys.platform == "win32":
     SendInput = ctypes.windll.user32.SendInput
     SendInput.argtypes = [c_ulong, ctypes.POINTER(INPUT), ctypes.c_int]
     SendInput.restype = c_ulong
+
+    WM_SYSCOMMAND = 0x0112
+    SC_CLOSE = 0xF060
+    GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
+    GetForegroundWindow.restype = wintypes.HWND
+    GetForegroundWindow.argtypes = []
+    PostMessageW = ctypes.windll.user32.PostMessageW
+    PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
+    PostMessageW.restype = wintypes.BOOL
 
     MOUSEEVENTF_LEFTDOWN   = 0x0002
     MOUSEEVENTF_LEFTUP     = 0x0004
@@ -506,9 +562,19 @@ if sys.platform == "win32":
             "keys": [VK_CONTROL, VK_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window",
+            "keys": [VK_MENU, VK_F4],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Ctrl+T)",
             "keys": [VK_CONTROL, VK_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Ctrl+Shift+T)",
+            "keys": [VK_CONTROL, VK_SHIFT, VK_T],
             "category": "Browser",
         },
         "find": {
@@ -677,6 +743,9 @@ if sys.platform == "win32":
                 if keys:
                     send_key_combo(keys)
                 return
+            if action_id.startswith(OPEN_APP_PREFIX):
+                launch_application(parse_open_app(action_id))
+                return
             if is_mouse_button_action(action_id):
                 print(f"[KeySimulator] execute_action: mouse click for {action_id}")
                 inject_mouse_down(action_id)
@@ -689,6 +758,15 @@ if sys.platform == "win32":
                 _brightness.adjust(-_BrightnessController._STEP)
                 return
             action = ACTIONS.get(action_id)
+            if action_id == "close_window":
+                hwnd = GetForegroundWindow()
+                if hwnd:
+                    if not PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0):
+                        err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                        print(f"[KeySimulator] execute_action: PostMessageW failed! error={err}")
+                else:
+                    send_key_combo(action["keys"])
+                return
             if not action or not action["keys"]:
                 print(f"[KeySimulator] execute_action: no keys for '{action_id}'")
                 return
@@ -1107,9 +1185,19 @@ elif sys.platform == "darwin":
             "keys": [kVK_Command, kVK_ANSI_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window (Cmd+Shift+W)",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_W],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Cmd+T)",
             "keys": [kVK_Command, kVK_ANSI_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Cmd+Shift+T)",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_T],
             "category": "Browser",
         },
         "find": {
@@ -1303,6 +1391,9 @@ elif sys.platform == "darwin":
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if action_id.startswith(OPEN_APP_PREFIX):
+            launch_application(parse_open_app(action_id))
             return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
@@ -1567,9 +1658,19 @@ elif sys.platform == "linux":
             "keys": [KEY_LEFTCTRL, KEY_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window (Alt+F4)",
+            "keys": [KEY_LEFTALT, KEY_F4],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Ctrl+T)",
             "keys": [KEY_LEFTCTRL, KEY_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Ctrl+Shift+T)",
+            "keys": [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_T],
             "category": "Browser",
         },
         "find": {
@@ -1729,6 +1830,9 @@ elif sys.platform == "linux":
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if action_id.startswith(OPEN_APP_PREFIX):
+            launch_application(parse_open_app(action_id))
             return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)

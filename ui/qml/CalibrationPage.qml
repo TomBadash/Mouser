@@ -43,7 +43,9 @@ Item {
 
     Image {
         id: calibImg
-        source: calibPage.layout ? calibPage.layout.image : ""
+        source: backend.calibrationCustomImage
+                ? backend.calibrationCustomImage
+                : (calibPage.layout ? calibPage.layout.image : "")
         fillMode: Image.PreserveAspectFit
         readonly property real aspect:
             (calibPage.layout && calibPage.layout.imageHeight > 0)
@@ -165,7 +167,7 @@ Item {
         border.width: 2; border.color: Qt.rgba(0, 0.83, 0.67, 0.7)
     }
 
-    // ── Top bar: layout selector + preview toggle ─────────────
+    // ── Top bar: device layout selector (selectable devices only) ─
     Flow {
         id: topBar
         z: 12
@@ -191,10 +193,20 @@ Item {
                 }
             }
         }
-        Rectangle { width: 1; height: 24; color: Qt.rgba(1, 1, 1, 0.3) }
+    }
+
+    // ── Tool bar: actions (separate row so they aren't mistaken for
+    //    selectable devices above). Pill-shaped to look distinct.
+    Flow {
+        id: toolBar
+        z: 12
+        anchors { top: topBar.bottom; left: parent.left; right: parent.right
+                  leftMargin: 10; rightMargin: 10; topMargin: 8 }
+        spacing: 6
         Rectangle {
-            width: pvT.implicitWidth + 16; height: 24; radius: 6
+            width: pvT.implicitWidth + 20; height: 26; radius: 13
             color: calibPage.preview ? "#ffaa00" : Qt.rgba(0, 0, 0, 0.85)
+            border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.25)
             Text {
                 id: pvT; anchors.centerIn: parent
                 text: (calibPage.preview ? "● " : "○ ")
@@ -206,6 +218,40 @@ Item {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 onClicked: calibPage.preview = !calibPage.preview
+            }
+        }
+        // Load a custom photo to calibrate against (overrides the built-in asset).
+        Rectangle {
+            width: loadT.implicitWidth + 20; height: 26; radius: 13
+            color: backend.calibrationCustomImage ? calibPage.theme.accent : Qt.rgba(0, 0, 0, 0.85)
+            border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.25)
+            Text {
+                id: loadT; anchors.centerIn: parent
+                text: (calibPage.s["calib.load_image"] || "load image…")
+                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                color: backend.calibrationCustomImage ? calibPage.theme.bgCard : "#ffffff"
+            }
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: backend.pickCalibrationImage()
+            }
+        }
+        Rectangle {
+            visible: !!backend.calibrationCustomImage
+            width: clrT.implicitWidth + 20; height: 26; radius: 13
+            color: Qt.rgba(0, 0, 0, 0.85)
+            border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.25)
+            Text {
+                id: clrT; anchors.centerIn: parent
+                text: (calibPage.s["calib.clear_image"] || "✕ reset image")
+                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                color: "#ffffff"
+            }
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: backend.clearCalibrationImage()
             }
         }
     }
