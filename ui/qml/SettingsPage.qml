@@ -5,7 +5,7 @@ import QtQuick.Layouts
 import "Theme.js" as Theme
 
 Item {
-    id: scrollPage
+    id: settingsPage
     readonly property var theme: Theme.palette(uiState.darkMode)
 
     // Reactive shortcut — all s["key"] bindings update when lm.languageChanged fires
@@ -64,6 +64,40 @@ Item {
         return presets
     }
 
+    // Pill button matching the app's button aesthetic (used for the update
+    // actions so they're consistent with the rest of the UI's buttons).
+    component PillButton: Rectangle {
+        id: pill
+        property string text: ""
+        property bool enabled: true
+        signal clicked()
+        implicitWidth: pillText.implicitWidth + 28
+        implicitHeight: 32
+        radius: 8
+        color: !pill.enabled
+               ? settingsPage.theme.bgSubtle
+               : (pillMa.containsMouse ? Qt.darker(settingsPage.theme.accent, 1.12)
+                                       : settingsPage.theme.accent)
+        opacity: pill.enabled ? 1 : 0.6
+        Behavior on color { ColorAnimation { duration: 120 } }
+
+        Text {
+            id: pillText
+            anchors.centerIn: parent
+            text: pill.text
+            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+            color: pill.enabled ? settingsPage.theme.bgCard : settingsPage.theme.textSecondary
+        }
+        MouseArea {
+            id: pillMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: pill.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: pill.clicked()
+        }
+    }
+
     ScrollView {
         id: pageScroll
         anchors.fill: parent
@@ -94,7 +128,7 @@ Item {
                             pixelSize: 24
                             bold: true
                         }
-                        color: scrollPage.theme.textPrimary
+                        color: settingsPage.theme.textPrimary
                     }
 
                     Text {
@@ -103,7 +137,7 @@ Item {
                             family: uiState.fontFamily
                             pixelSize: 13
                         }
-                        color: scrollPage.theme.textSecondary
+                        color: settingsPage.theme.textSecondary
                     }
                 }
             }
@@ -111,11 +145,35 @@ Item {
             Rectangle {
                 width: parent.width - 72
                 height: 1
-                color: scrollPage.theme.border
+                color: settingsPage.theme.border
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
             Item { width: 1; height: 24 }
+
+            // ═══════════ Mouse settings section ═══════════
+            Item {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: 24
+                Row {
+                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                    spacing: 8
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 15; height: 15
+                        name: "mouse-simple"
+                        iconColor: settingsPage.theme.textSecondary
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: s["scroll.section_mouse"] || "Mouse"
+                        font { family: uiState.fontFamily; pixelSize: 12; bold: true; capitalization: Font.AllUppercase }
+                        color: settingsPage.theme.textSecondary
+                    }
+                }
+            }
+            Item { width: 1; height: 8 }
 
             // ── DPI / Pointer Speed ───────────────────────────────
             Rectangle {
@@ -125,9 +183,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: dpiContent.implicitHeight + 40
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 Column {
                     id: dpiContent
@@ -146,7 +204,7 @@ Item {
                             pixelSize: 16
                             bold: true
                         }
-                        color: scrollPage.theme.textPrimary
+                        color: settingsPage.theme.textPrimary
                     }
 
                     Text {
@@ -161,7 +219,7 @@ Item {
                             family: uiState.fontFamily
                             pixelSize: 12
                         }
-                        color: scrollPage.theme.textSecondary
+                        color: settingsPage.theme.textSecondary
                     }
 
                     RowLayout {
@@ -174,7 +232,7 @@ Item {
                                 family: uiState.fontFamily
                                 pixelSize: 11
                             }
-                            color: scrollPage.theme.textDim
+                            color: settingsPage.theme.textDim
                         }
 
                         WheelSafeSlider {
@@ -184,9 +242,9 @@ Item {
                             to: backend.deviceDpiMax
                             stepSize: 50
                             value: backend.dpi
-                            accentColor: scrollPage.theme.accent
-                            accentDimColor: scrollPage.theme.accentDim
-                            trackColor: scrollPage.theme.border
+                            accentColor: settingsPage.theme.accent
+                            accentDimColor: settingsPage.theme.accentDim
+                            trackColor: settingsPage.theme.border
 
                             onMoved: {
                                 dpiLabel.text = Math.round(value) + " DPI"
@@ -200,14 +258,14 @@ Item {
                                 family: uiState.fontFamily
                                 pixelSize: 11
                             }
-                            color: scrollPage.theme.textDim
+                            color: settingsPage.theme.textDim
                         }
 
                         Rectangle {
                             Layout.preferredWidth: 104
                             Layout.preferredHeight: 36
                             radius: 10
-                            color: scrollPage.theme.accentDim
+                            color: settingsPage.theme.accentDim
 
                             Text {
                                 id: dpiLabel
@@ -218,7 +276,7 @@ Item {
                                     pixelSize: 14
                                     bold: true
                                 }
-                                color: scrollPage.theme.accent
+                                color: settingsPage.theme.accent
                             }
                         }
                     }
@@ -239,23 +297,23 @@ Item {
                                 family: uiState.fontFamily
                                 pixelSize: 11
                             }
-                            color: scrollPage.theme.textDim
+                            color: settingsPage.theme.textDim
                         }
 
                         Repeater {
-                            model: scrollPage.dpiPresets
+                            model: settingsPage.dpiPresets
 
                             delegate: Rectangle {
                                 width: presetText.implicitWidth + 20
                                 height: 30
                                 radius: 8
                                 color: dpiSlider.value === modelData
-                                       ? scrollPage.theme.accent
+                                       ? settingsPage.theme.accent
                                        : presetMouse.containsMouse
-                                         ? scrollPage.theme.bgCardHover
-                                         : scrollPage.theme.bgSubtle
+                                         ? settingsPage.theme.bgCardHover
+                                         : settingsPage.theme.bgSubtle
                                 border.width: 1
-                                border.color: scrollPage.theme.border
+                                border.color: settingsPage.theme.border
 
                                 Accessible.role: Accessible.Button
                                 Accessible.name: modelData + " DPI"
@@ -271,8 +329,8 @@ Item {
                                         pixelSize: 12
                                     }
                                     color: dpiSlider.value === modelData
-                                           ? scrollPage.theme.bgSidebar
-                                           : scrollPage.theme.textPrimary
+                                           ? settingsPage.theme.bgSidebar
+                                           : settingsPage.theme.textPrimary
                                 }
 
                                 MouseArea {
@@ -289,6 +347,42 @@ Item {
                             }
                         }
                     }
+
+                    // HID++ caveat — kept inside the DPI card.
+                    Rectangle {
+                        width: parent.width
+                        height: noteRow.implicitHeight + 28
+                        radius: 10
+                        color: settingsPage.theme.bgSubtle
+
+                        Row {
+                            id: noteRow
+                            anchors {
+                                fill: parent
+                                margins: 14
+                            }
+                            spacing: 10
+
+                            AppIcon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 18
+                                height: 18
+                                name: "warning"
+                                iconColor: settingsPage.theme.warning
+                            }
+
+                            Text {
+                                width: parent.width - 28
+                                text: s["scroll.dpi_note"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 12
+                                }
+                                color: settingsPage.theme.textDim
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
                 }
             }
 
@@ -301,9 +395,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: smartShiftContent.implicitHeight + 40
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 Column {
                     id: smartShiftContent
@@ -330,7 +424,7 @@ Item {
                                     pixelSize: 16
                                     bold: true
                                 }
-                                color: scrollPage.theme.textPrimary
+                                color: settingsPage.theme.textPrimary
                             }
 
                             Text {
@@ -339,7 +433,7 @@ Item {
                                     family: uiState.fontFamily
                                     pixelSize: 12
                                 }
-                                color: scrollPage.theme.textSecondary
+                                color: settingsPage.theme.textSecondary
                                 wrapMode: Text.WordWrap
                                 width: parent.width
                             }
@@ -349,7 +443,7 @@ Item {
                             id: smartShiftToggle
                             checked: backend.smartShiftEnabled
                             focusPolicy: Qt.StrongFocus
-                            Material.accent: scrollPage.theme.accent
+                            Material.accent: settingsPage.theme.accent
                             Accessible.name: "SmartShift"
                             onClicked: backend.setSmartShiftEnabled(checked)
                         }
@@ -369,7 +463,7 @@ Item {
                                 bold: true
                                 letterSpacing: 0.8
                             }
-                            color: scrollPage.theme.textDim
+                            color: settingsPage.theme.textDim
                         }
 
                         RowLayout {
@@ -379,7 +473,7 @@ Item {
                             Text {
                                 text: "1"
                                 font { family: uiState.fontFamily; pixelSize: 11 }
-                                color: scrollPage.theme.textDim
+                                color: settingsPage.theme.textDim
                             }
 
                             WheelSafeSlider {
@@ -389,9 +483,9 @@ Item {
                                 to: 50
                                 stepSize: 1
                                 value: backend.smartShiftThreshold
-                                accentColor: scrollPage.theme.accent
-                                accentDimColor: scrollPage.theme.accentDim
-                                trackColor: scrollPage.theme.border
+                                accentColor: settingsPage.theme.accent
+                                accentDimColor: settingsPage.theme.accentDim
+                                trackColor: settingsPage.theme.border
 
                                 onMoved: {
                                     smartShiftLabel.text = Math.round(value * 2) + "%"
@@ -402,14 +496,14 @@ Item {
                             Text {
                                 text: "50"
                                 font { family: uiState.fontFamily; pixelSize: 11 }
-                                color: scrollPage.theme.textDim
+                                color: settingsPage.theme.textDim
                             }
 
                             Rectangle {
                                 Layout.preferredWidth: 72
                                 Layout.preferredHeight: 36
                                 radius: 10
-                                color: scrollPage.theme.accentDim
+                                color: settingsPage.theme.accentDim
 
                                 Text {
                                     id: smartShiftLabel
@@ -420,7 +514,7 @@ Item {
                                         pixelSize: 14
                                         bold: true
                                     }
-                                    color: scrollPage.theme.accent
+                                    color: settingsPage.theme.accent
                                 }
                             }
                         }
@@ -446,7 +540,7 @@ Item {
                                 bold: true
                                 letterSpacing: 0.8
                             }
-                            color: scrollPage.theme.textDim
+                            color: settingsPage.theme.textDim
                         }
 
                         Row {
@@ -465,12 +559,12 @@ Item {
                                     height: 38
                                     radius: 10
                                     color: backend.smartShiftMode === modelData.value
-                                           ? scrollPage.theme.accentDim
-                                           : scrollPage.theme.bgSubtle
+                                           ? settingsPage.theme.accentDim
+                                           : settingsPage.theme.bgSubtle
                                     border.width: backend.smartShiftMode === modelData.value ? 2 : 1
                                     border.color: backend.smartShiftMode === modelData.value
-                                                  ? scrollPage.theme.accent
-                                                  : scrollPage.theme.border
+                                                  ? settingsPage.theme.accent
+                                                  : settingsPage.theme.border
 
                                     Text {
                                         id: ssText
@@ -482,8 +576,8 @@ Item {
                                             bold: backend.smartShiftMode === modelData.value
                                         }
                                         color: backend.smartShiftMode === modelData.value
-                                               ? scrollPage.theme.accent
-                                               : scrollPage.theme.textPrimary
+                                               ? settingsPage.theme.accent
+                                               : settingsPage.theme.textPrimary
                                     }
 
                                     MouseArea {
@@ -500,15 +594,320 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            // ── Scroll Direction ──────────────────────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: scrollContent.implicitHeight + 40
+                radius: Theme.radius
+                color: settingsPage.theme.bgCard
+                border.width: 1
+                border.color: settingsPage.theme.border
+
+                Column {
+                    id: scrollContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.scroll_direction"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: settingsPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["scroll.scroll_direction_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: settingsPage.theme.textSecondary
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: settingsPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: s["scroll.invert_vertical"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: settingsPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: vscrollSwitch
+                                checked: backend.invertVScroll
+                                focusPolicy: Qt.StrongFocus
+                                Material.accent: settingsPage.theme.accent
+                                Accessible.name: s["scroll.invert_vertical"]
+                                onClicked: backend.setInvertVScroll(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 52
+                        radius: 10
+                        color: settingsPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: s["scroll.invert_horizontal"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: settingsPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: hscrollSwitch
+                                checked: backend.invertHScroll
+                                focusPolicy: Qt.StrongFocus
+                                Material.accent: settingsPage.theme.accent
+                                Accessible.name: s["scroll.invert_horizontal"]
+                                onClicked: backend.setInvertHScroll(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 62
+                        radius: 10
+                        color: settingsPage.theme.bgSubtle
+                        visible: backend.isMacOS
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+                            spacing: 12
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: s["scroll.ignore_trackpad"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: settingsPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: s["scroll.ignore_trackpad_desc"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: settingsPage.theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            Switch {
+                                id: ignoreTrackpadSwitch
+                                checked: backend.ignoreTrackpad
+                                Material.accent: settingsPage.theme.accent
+                                Accessible.name: s["scroll.ignore_trackpad"]
+                                onToggled: backend.setIgnoreTrackpad(checked)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
+            // ═══════════ Keyboard settings section ═══════════
+            Item {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: 24
+                visible: backend.backlightAvailable
+                Row {
+                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                    spacing: 8
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 15; height: 15
+                        name: "keyboard-simple"
+                        iconColor: settingsPage.theme.textSecondary
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: s["scroll.section_keyboard"] || "Keyboard"
+                        font { family: uiState.fontFamily; pixelSize: 12; bold: true; capitalization: Font.AllUppercase }
+                        color: settingsPage.theme.textSecondary
+                    }
+                }
+            }
+            Item { width: 1; height: 8; visible: backend.backlightAvailable }
+
+            // ── Keyboard backlight (only when a backlight is present) ──
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: backlightCard.implicitHeight + 40
+                radius: Theme.radius
+                color: settingsPage.theme.bgCard
+                border.width: 1
+                border.color: settingsPage.theme.border
+                visible: backend.backlightAvailable
+
+                Column {
+                    id: backlightCard
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.backlight_title"] || "Keyboard backlight"
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: settingsPage.theme.textPrimary
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: backlightCol.implicitHeight + 24
+                        radius: 10
+                        color: settingsPage.theme.bgSubtle
+
+                        Column {
+                            id: backlightCol
+                            anchors {
+                                left: parent.left; right: parent.right
+                                verticalCenter: parent.verticalCenter
+                                leftMargin: 16; rightMargin: 16
+                            }
+                            spacing: 10
+
+                            RowLayout {
+                                width: parent.width
+                                spacing: 12
+
+                                Column {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+                                    Text {
+                                        text: s["scroll.backlight_follow_theme"] || "Backlight follows system theme"
+                                        font { family: uiState.fontFamily; pixelSize: 13 }
+                                        color: settingsPage.theme.textPrimary
+                                    }
+                                    Text {
+                                        width: parent.width
+                                        text: s["scroll.backlight_follow_theme_desc"]
+                                              || "Turns the keyboard backlight on in dark mode and off in light mode. This keyboard supports on/off only, not brightness."
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: settingsPage.theme.textSecondary
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                Switch {
+                                    id: backlightFollowSwitch
+                                    checked: backend.backlightFollowTheme
+                                    Material.accent: settingsPage.theme.accent
+                                    onToggled: backend.setBacklightFollowTheme(checked)
+                                }
+                            }
+
+                            // Explain the manual re-enable behaviour: in light mode
+                            // the backlight is off, but the backlight-up key turns
+                            // it back on until the next theme change.
+                            Text {
+                                width: parent.width
+                                visible: backend.backlightFollowTheme
+                                text: s["scroll.backlight_onoff_hint"]
+                                      || "In light mode the backlight is off; press the keyboard's backlight-up key to switch it on until the next theme change."
+                                wrapMode: Text.WordWrap
+                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                color: settingsPage.theme.textSecondary
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
+            // ═══════════ General settings section ═══════════
+            Item {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: 24
+                Row {
+                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                    spacing: 8
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 15; height: 15
+                        name: "sliders-horizontal"
+                        iconColor: settingsPage.theme.textSecondary
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: s["scroll.section_general"] || "General"
+                        font { family: uiState.fontFamily; pixelSize: 12; bold: true; capitalization: Font.AllUppercase }
+                        color: settingsPage.theme.textSecondary
+                    }
+                }
+            }
+            Item { width: 1; height: 8 }
+
             // ── Appearance ────────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: appearanceContent.implicitHeight + 40
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 Column {
                     id: appearanceContent
@@ -527,7 +926,7 @@ Item {
                             pixelSize: 16
                             bold: true
                         }
-                        color: scrollPage.theme.textPrimary
+                        color: settingsPage.theme.textPrimary
                     }
 
                     Text {
@@ -536,7 +935,7 @@ Item {
                             family: uiState.fontFamily
                             pixelSize: 12
                         }
-                        color: scrollPage.theme.textSecondary
+                        color: settingsPage.theme.textSecondary
                     }
 
                     Row {
@@ -544,7 +943,7 @@ Item {
                         spacing: 10
 
                         Repeater {
-                            model: scrollPage.appearanceOptions
+                            model: settingsPage.appearanceOptions
 
                             delegate: Rectangle {
                                 required property var modelData
@@ -552,14 +951,14 @@ Item {
                                 height: 38
                                 radius: 10
                                 color: backend.appearanceMode === modelData.value
-                                       ? scrollPage.theme.accent
+                                       ? settingsPage.theme.accent
                                        : optionMouse.containsMouse
-                                         ? scrollPage.theme.bgCardHover
-                                         : scrollPage.theme.bgSubtle
+                                         ? settingsPage.theme.bgCardHover
+                                         : settingsPage.theme.bgSubtle
                                 border.width: 1
                                 border.color: backend.appearanceMode === modelData.value
-                                              ? scrollPage.theme.accent
-                                              : scrollPage.theme.border
+                                              ? settingsPage.theme.accent
+                                              : settingsPage.theme.border
 
                                 Accessible.role: Accessible.Button
                                 Accessible.name: modelData.label
@@ -576,8 +975,8 @@ Item {
                                         bold: backend.appearanceMode === modelData.value
                                     }
                                     color: backend.appearanceMode === modelData.value
-                                           ? scrollPage.theme.bgSidebar
-                                           : scrollPage.theme.textPrimary
+                                           ? settingsPage.theme.bgSidebar
+                                           : settingsPage.theme.textPrimary
                                 }
 
                                 MouseArea {
@@ -601,9 +1000,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: languageContent.implicitHeight + 40
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 Column {
                     id: languageContent
@@ -622,7 +1021,7 @@ Item {
                             pixelSize: 16
                             bold: true
                         }
-                        color: scrollPage.theme.textPrimary
+                        color: settingsPage.theme.textPrimary
                     }
 
                     Text {
@@ -631,7 +1030,7 @@ Item {
                             family: uiState.fontFamily
                             pixelSize: 12
                         }
-                        color: scrollPage.theme.textSecondary
+                        color: settingsPage.theme.textSecondary
                     }
 
                     Row {
@@ -647,14 +1046,14 @@ Item {
                                 height: 38
                                 radius: 10
                                 color: lm.language === modelData.code
-                                       ? scrollPage.theme.accent
+                                       ? settingsPage.theme.accent
                                        : langMa.containsMouse
-                                         ? scrollPage.theme.bgCardHover
-                                         : scrollPage.theme.bgSubtle
+                                         ? settingsPage.theme.bgCardHover
+                                         : settingsPage.theme.bgSubtle
                                 border.width: 1
                                 border.color: lm.language === modelData.code
-                                              ? scrollPage.theme.accent
-                                              : scrollPage.theme.border
+                                              ? settingsPage.theme.accent
+                                              : settingsPage.theme.border
 
                                 Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -668,8 +1067,8 @@ Item {
                                         bold: lm.language === modelData.code
                                     }
                                     color: lm.language === modelData.code
-                                           ? scrollPage.theme.bgSidebar
-                                           : scrollPage.theme.textPrimary
+                                           ? settingsPage.theme.bgSidebar
+                                           : settingsPage.theme.textPrimary
                                 }
 
                                 MouseArea {
@@ -694,9 +1093,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: startupContent.implicitHeight + 40
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 Column {
                     id: startupContent
@@ -715,7 +1114,7 @@ Item {
                             pixelSize: 16
                             bold: true
                         }
-                        color: scrollPage.theme.textPrimary
+                        color: settingsPage.theme.textPrimary
                     }
 
                     Text {
@@ -724,7 +1123,7 @@ Item {
                             family: uiState.fontFamily
                             pixelSize: 12
                         }
-                        color: scrollPage.theme.textSecondary
+                        color: settingsPage.theme.textSecondary
                         wrapMode: Text.WordWrap
                         width: parent.width
                     }
@@ -733,7 +1132,7 @@ Item {
                         width: parent.width
                         height: 52
                         radius: 10
-                        color: scrollPage.theme.bgSubtle
+                        color: settingsPage.theme.bgSubtle
                         visible: backend.supportsStartAtLogin
 
                         RowLayout {
@@ -749,7 +1148,7 @@ Item {
                                     family: uiState.fontFamily
                                     pixelSize: 13
                                 }
-                                color: scrollPage.theme.textPrimary
+                                color: settingsPage.theme.textPrimary
                                 Layout.fillWidth: true
                             }
 
@@ -757,7 +1156,7 @@ Item {
                                 id: startAtLoginSwitch
                                 checked: backend.startAtLogin
                                 focusPolicy: Qt.StrongFocus
-                                Material.accent: scrollPage.theme.accent
+                                Material.accent: settingsPage.theme.accent
                                 Accessible.name: s["scroll.start_at_login"]
                                 onClicked: backend.setStartAtLogin(checked)
                             }
@@ -768,7 +1167,7 @@ Item {
                         width: parent.width
                         height: 52
                         radius: 10
-                        color: scrollPage.theme.bgSubtle
+                        color: settingsPage.theme.bgSubtle
 
                         RowLayout {
                             anchors {
@@ -783,7 +1182,7 @@ Item {
                                     family: uiState.fontFamily
                                     pixelSize: 13
                                 }
-                                color: scrollPage.theme.textPrimary
+                                color: settingsPage.theme.textPrimary
                                 Layout.fillWidth: true
                             }
 
@@ -791,7 +1190,7 @@ Item {
                                 id: startMinimizedSwitch
                                 checked: backend.startMinimized
                                 focusPolicy: Qt.StrongFocus
-                                Material.accent: scrollPage.theme.accent
+                                Material.accent: settingsPage.theme.accent
                                 Accessible.name: s["scroll.start_minimized"]
                                 onClicked: backend.setStartMinimized(checked)
                             }
@@ -802,7 +1201,7 @@ Item {
                         width: parent.width
                         height: 118
                         radius: 10
-                        color: scrollPage.theme.bgSubtle
+                        color: settingsPage.theme.bgSubtle
 
                         ColumnLayout {
                             anchors {
@@ -828,7 +1227,7 @@ Item {
                                             family: uiState.fontFamily
                                             pixelSize: 13
                                         }
-                                        color: scrollPage.theme.textPrimary
+                                        color: settingsPage.theme.textPrimary
                                     }
 
                                     Text {
@@ -838,7 +1237,7 @@ Item {
                                             family: uiState.fontFamily
                                             pixelSize: 11
                                         }
-                                        color: scrollPage.theme.textSecondary
+                                        color: settingsPage.theme.textSecondary
                                         wrapMode: Text.WordWrap
                                     }
                                 }
@@ -847,7 +1246,7 @@ Item {
                                     id: checkUpdatesSwitch
                                     checked: backend.checkForUpdates
                                     focusPolicy: Qt.StrongFocus
-                                    Material.accent: scrollPage.theme.accent
+                                    Material.accent: settingsPage.theme.accent
                                     Accessible.name: s["scroll.check_for_updates"]
                                     onClicked: backend.setCheckForUpdates(checked)
                                 }
@@ -859,12 +1258,12 @@ Item {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: scrollPage.updateStatusText()
+                                    text: settingsPage.updateStatusText()
                                     font {
                                         family: uiState.fontFamily
                                         pixelSize: 11
                                     }
-                                    color: scrollPage.theme.textSecondary
+                                    color: settingsPage.theme.textSecondary
                                     elide: Text.ElideRight
                                 }
 
@@ -876,13 +1275,13 @@ Item {
                                     value: backend.updateInstallProgress
                                 }
 
-                                Button {
+                                PillButton {
                                     text: s["scroll.update_check"]
                                     enabled: !backend.updateInstallInProgress
                                     onClicked: backend.manualCheckForUpdates()
                                 }
 
-                                Button {
+                                PillButton {
                                     text: backend.isWindows ? s["scroll.update_download"] : s["scroll.update_verify"]
                                     visible: backend.latestUpdateVersion !== ""
                                              && !backend.updateInstallCanInstall
@@ -891,7 +1290,7 @@ Item {
                                     onClicked: backend.prepareLatestUpdate()
                                 }
 
-                                Button {
+                                PillButton {
                                     text: s["scroll.update_cancel"]
                                     visible: backend.updateInstallStatus === "checking"
                                              || backend.updateInstallStatus === "downloading"
@@ -899,14 +1298,14 @@ Item {
                                     onClicked: backend.cancelUpdatePreparation()
                                 }
 
-                                Button {
+                                PillButton {
                                     text: s["scroll.update_install"]
                                     visible: backend.updateInstallCanInstall && backend.updateInstallEnabled
                                     enabled: !backend.updateInstallInProgress
                                     onClicked: backend.installPreparedUpdate()
                                 }
 
-                                Button {
+                                PillButton {
                                     text: s["scroll.update_open_release"]
                                     visible: backend.latestUpdateVersion !== ""
                                     enabled: !backend.updateInstallInProgress
@@ -923,277 +1322,15 @@ Item {
                 height: backend.supportsStartAtLogin ? 16 : 0
             }
 
-            // ── Scroll Direction ──────────────────────────────────
-            Rectangle {
-                width: parent.width - 72
-                anchors.horizontalCenter: parent.horizontalCenter
-                height: scrollContent.implicitHeight + 40
-                radius: Theme.radius
-                color: scrollPage.theme.bgCard
-                border.width: 1
-                border.color: scrollPage.theme.border
-
-                Column {
-                    id: scrollContent
-                    anchors {
-                        left: parent.left
-                        right: parent.right
-                        top: parent.top
-                        margins: 20
-                    }
-                    spacing: 12
-
-                    Text {
-                        text: s["scroll.scroll_direction"]
-                        font {
-                            family: uiState.fontFamily
-                            pixelSize: 16
-                            bold: true
-                        }
-                        color: scrollPage.theme.textPrimary
-                    }
-
-                    Text {
-                        text: s["scroll.scroll_direction_desc"]
-                        font {
-                            family: uiState.fontFamily
-                            pixelSize: 12
-                        }
-                        color: scrollPage.theme.textSecondary
-                    }
-
-                    Rectangle {
-                        width: parent.width
-                        height: 52
-                        radius: 10
-                        color: scrollPage.theme.bgSubtle
-
-                        RowLayout {
-                            anchors {
-                                fill: parent
-                                leftMargin: 16
-                                rightMargin: 16
-                            }
-
-                            Text {
-                                text: s["scroll.invert_vertical"]
-                                font {
-                                    family: uiState.fontFamily
-                                    pixelSize: 13
-                                }
-                                color: scrollPage.theme.textPrimary
-                                Layout.fillWidth: true
-                            }
-
-                            Switch {
-                                id: vscrollSwitch
-                                checked: backend.invertVScroll
-                                focusPolicy: Qt.StrongFocus
-                                Material.accent: scrollPage.theme.accent
-                                Accessible.name: s["scroll.invert_vertical"]
-                                onClicked: backend.setInvertVScroll(checked)
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: parent.width
-                        height: 52
-                        radius: 10
-                        color: scrollPage.theme.bgSubtle
-
-                        RowLayout {
-                            anchors {
-                                fill: parent
-                                leftMargin: 16
-                                rightMargin: 16
-                            }
-
-                            Text {
-                                text: s["scroll.invert_horizontal"]
-                                font {
-                                    family: uiState.fontFamily
-                                    pixelSize: 13
-                                }
-                                color: scrollPage.theme.textPrimary
-                                Layout.fillWidth: true
-                            }
-
-                            Switch {
-                                id: hscrollSwitch
-                                checked: backend.invertHScroll
-                                focusPolicy: Qt.StrongFocus
-                                Material.accent: scrollPage.theme.accent
-                                Accessible.name: s["scroll.invert_horizontal"]
-                                onClicked: backend.setInvertHScroll(checked)
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: parent.width
-                        height: 62
-                        radius: 10
-                        color: scrollPage.theme.bgSubtle
-                        visible: backend.isMacOS
-
-                        RowLayout {
-                            anchors {
-                                fill: parent
-                                leftMargin: 16
-                                rightMargin: 16
-                            }
-                            spacing: 12
-
-                            Column {
-                                Layout.fillWidth: true
-                                spacing: 3
-
-                                Text {
-                                    text: s["scroll.ignore_trackpad"]
-                                    font {
-                                        family: uiState.fontFamily
-                                        pixelSize: 13
-                                    }
-                                    color: scrollPage.theme.textPrimary
-                                }
-
-                                Text {
-                                    width: parent.width
-                                    text: s["scroll.ignore_trackpad_desc"]
-                                    font {
-                                        family: uiState.fontFamily
-                                        pixelSize: 11
-                                    }
-                                    color: scrollPage.theme.textSecondary
-                                    wrapMode: Text.WordWrap
-                                }
-                            }
-
-                            Switch {
-                                id: ignoreTrackpadSwitch
-                                checked: backend.ignoreTrackpad
-                                Material.accent: scrollPage.theme.accent
-                                Accessible.name: s["scroll.ignore_trackpad"]
-                                onToggled: backend.setIgnoreTrackpad(checked)
-                            }
-                        }
-                    }
-
-                    // ── Keyboard backlight (only when a backlight is present) ──
-                    Rectangle {
-                        width: parent.width
-                        height: backlightCol.implicitHeight + 24
-                        radius: 10
-                        color: scrollPage.theme.bgSubtle
-                        visible: backend.backlightAvailable
-
-                        Column {
-                            id: backlightCol
-                            anchors {
-                                left: parent.left; right: parent.right
-                                verticalCenter: parent.verticalCenter
-                                leftMargin: 16; rightMargin: 16
-                            }
-                            spacing: 10
-
-                            RowLayout {
-                                width: parent.width
-                                spacing: 12
-
-                                Column {
-                                    Layout.fillWidth: true
-                                    spacing: 3
-                                    Text {
-                                        text: s["scroll.backlight_follow_theme"] || "Backlight follows system theme"
-                                        font { family: uiState.fontFamily; pixelSize: 13 }
-                                        color: scrollPage.theme.textPrimary
-                                    }
-                                    Text {
-                                        width: parent.width
-                                        text: s["scroll.backlight_follow_theme_desc"]
-                                              || "Brighten the keyboard in dark mode and dim it in light mode."
-                                        font { family: uiState.fontFamily; pixelSize: 11 }
-                                        color: scrollPage.theme.textSecondary
-                                        wrapMode: Text.WordWrap
-                                    }
-                                }
-
-                                Switch {
-                                    id: backlightFollowSwitch
-                                    checked: backend.backlightFollowTheme
-                                    Material.accent: scrollPage.theme.accent
-                                    onToggled: backend.setBacklightFollowTheme(checked)
-                                }
-                            }
-
-                            // Hint: brightness isn't software-settable on this
-                            // keyboard, so theme-follow is on/off (dark = on,
-                            // light = off); the backlight keys toggle on/off too.
-                            Text {
-                                width: parent.width
-                                visible: backend.backlightFollowTheme
-                                text: s["scroll.backlight_onoff_hint"]
-                                      || "Dark theme turns the backlight on, light theme off. The keyboard's backlight keys toggle it on/off."
-                                wrapMode: Text.WordWrap
-                                font { family: uiState.fontFamily; pixelSize: 11 }
-                                color: scrollPage.theme.textSecondary
-                            }
-                        }
-                    }
-                }
-            }
-
-            Item { width: 1; height: 16 }
-
-            // ── DPI note ──────────────────────────────────────────
-            Rectangle {
-                width: parent.width - 72
-                anchors.horizontalCenter: parent.horizontalCenter
-                height: noteRow.implicitHeight + 28
-                radius: Theme.radius
-                color: scrollPage.theme.bgCard
-                border.width: 1
-                border.color: scrollPage.theme.border
-
-                Row {
-                    id: noteRow
-                    anchors {
-                        fill: parent
-                        margins: 14
-                    }
-                    spacing: 10
-
-                    AppIcon {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 18
-                        height: 18
-                        name: "warning"
-                        iconColor: scrollPage.theme.warning
-                    }
-
-                    Text {
-                        width: parent.width - 28
-                        text: s["scroll.dpi_note"]
-                        font {
-                            family: uiState.fontFamily
-                            pixelSize: 12
-                        }
-                        color: scrollPage.theme.textDim
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-
             // ── Developer ─────────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: calibRow.implicitHeight + 24
                 radius: Theme.radius
-                color: scrollPage.theme.bgCard
+                color: settingsPage.theme.bgCard
                 border.width: 1
-                border.color: scrollPage.theme.border
+                border.color: settingsPage.theme.border
 
                 RowLayout {
                     id: calibRow
@@ -1211,7 +1348,7 @@ Item {
                         Text {
                             text: s["scroll.calibration_mode"] || "Layout calibration (developer)"
                             font { family: uiState.fontFamily; pixelSize: 13 }
-                            color: scrollPage.theme.textPrimary
+                            color: settingsPage.theme.textPrimary
                         }
 
                         Text {
@@ -1219,7 +1356,7 @@ Item {
                             text: s["scroll.calibration_mode_desc"]
                                   || "Overlay a grid to measure device-layout coordinates, with a layout picker and optional hotspot preview — works without the device connected."
                             font { family: uiState.fontFamily; pixelSize: 11 }
-                            color: scrollPage.theme.textSecondary
+                            color: settingsPage.theme.textSecondary
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -1229,13 +1366,13 @@ Item {
                         Layout.preferredHeight: 34
                         radius: 9
                         color: openCalibMa.containsMouse
-                               ? scrollPage.theme.accentHover : scrollPage.theme.accent
+                               ? settingsPage.theme.accentHover : settingsPage.theme.accent
                         Text {
                             id: openCalibText
                             anchors.centerIn: parent
                             text: s["scroll.calibration_open"] || "Open calibration"
                             font { family: uiState.fontFamily; pixelSize: 12; bold: true }
-                            color: scrollPage.theme.bgSidebar
+                            color: settingsPage.theme.bgSidebar
                         }
                         MouseArea {
                             id: openCalibMa

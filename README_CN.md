@@ -90,9 +90,25 @@
 
 ## 截图
 
-| 鼠标与配置 | 指针与滚动 |
-|---|---|
-| <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" /> | <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" /> |
+<p align="center">
+  <img src="images/Screenshot_mouse.png" alt="Mouser — 鼠标与配置页面" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_keyboard.png" alt="Mouser — 键盘页面（Craft / MX Keys 布局）" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_1.png" alt="Mouser — 鼠标设置" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_2.png" alt="Mouser — 键盘设置" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_3.png" alt="Mouser — 通用设置" />
+</p>
 
 ---
 
@@ -166,7 +182,7 @@ Mouser 在重映射鼠标的同时也支持罗技 HID++ 键盘。共用一个 Un
 - **Logitech Craft — Crown 旋钮。** Craft 的旋钮可完全重映射：在设备视图中点击旋钮打开面板，为 **左/右旋转**、**按下**、**触摸** 以及 **按下+左/右旋转** 分配动作（默认：旋转 = 音量，按下 = 播放/暂停，按下+旋转 = 切换曲目）。
 - **棘轮 ↔ 平滑，按应用区分。** 旋钮手感（有段落感的 *棘轮* 与自由旋转的 *平滑*）在旋钮面板中设置，并 **按应用配置（Profile）分别保存**，切换应用时自动生效。
 - **顶行按键。** 亮度、背光、媒体等顶行按键可在 Craft、MX Keys 及自动归类的键盘上通过 HID++ 重映射；在你重映射之前它们保持原生功能。
-- **背光跟随系统主题。** 启用后（设置 → 滚动），键盘背光（HID++ 特征 `0x1982`）会跟随系统浅色/深色主题——深色更亮、浅色更暗——也可设置固定亮度。
+- **背光跟随系统主题。** 在**设置**中启用后，键盘背光（HID++ 特征 `0x1982`）会在**深色模式下开启、浅色模式下关闭**。此键盘仅支持开关，不支持软件亮度调节；在浅色模式下，可按键盘的背光增强键将其重新开启，直到下次主题切换。
 - **打开应用程序动作。** 任意按键、Crown 子动作或鼠标按键都可绑定到 **打开应用程序…**，启动你选择的可执行文件。
 
 可使用 [`tools/craft_probe.py`](tools/craft_probe.py) 探测已连接键盘的 HID++ 特征与控制 ID（安全、只读）。

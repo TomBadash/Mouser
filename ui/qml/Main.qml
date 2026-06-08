@@ -269,7 +269,7 @@ ApplicationWindow {
             DevicePage { deviceFilter: "mouse" }      // index 0
             Loader {                                  // index 1
                 active: root.currentPage === 1 || item
-                source: "ScrollPage.qml"
+                source: "SettingsPage.qml"
             }
             DevicePage { deviceFilter: "keyboard" }    // index 2 — keyboards
         }

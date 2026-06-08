@@ -93,9 +93,25 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 ## Screenshots
 
-| Mouse & Profiles | Point & Scroll |
-|---|---|
-| <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" /> | <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" /> |
+<p align="center">
+  <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_keyboard.png" alt="Mouser — Keyboard page (Craft / MX Keys layout)" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_1.png" alt="Mouser — Mouse settings" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_2.png" alt="Mouser — Keyboard settings" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_3.png" alt="Mouser — General settings" />
+</p>
 
 ---
 
@@ -177,9 +193,11 @@ sharing a single Unifying receiver are multiplexed, so both work at once.
 - **Top-row keys.** Brightness, backlight, media and other top-row keys are
   remappable over HID++ on Craft, MX Keys and auto-classified keyboards. They stay
   native until you remap them.
-- **Backlight follows the system theme.** When enabled (Settings → Scroll), the
-  keyboard backlight (HID++ feature `0x1982`) tracks your OS light/dark theme —
-  brighter in dark mode, dimmer in light mode — or you can set a fixed brightness.
+- **Backlight follows the system theme.** When enabled in **Settings**, the
+  keyboard backlight (HID++ feature `0x1982`) turns **on in dark mode and off in
+  light mode**. This keyboard exposes on/off only (not software brightness); in
+  light mode you can switch it back on with the keyboard's backlight-up key until
+  the next theme change.
 - **Open Application action.** Any key, Crown sub-action, or mouse button can be
   bound to **Open Application…**, which launches an executable you pick.
 

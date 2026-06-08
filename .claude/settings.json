@@ -51,7 +51,14 @@
       "Bash(./.venv/Scripts/python.exe -m unittest tests.test_engine tests.test_hid_gesture tests.test_smart_shift)",
       "Bash(./.venv/Scripts/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\) for f in ['core/engine.py','core/hid_gesture.py','ui/backend.py','core/config.py']]; print\\('syntax OK'\\)\")",
       "Bash(./.venv/Scripts/python.exe -m unittest tests.test_engine tests.test_config tests.test_backend tests.test_hid_gesture)",
-      "Bash(./.venv/Scripts/python.exe -m unittest tests.test_engine tests.test_smart_shift tests.test_hid_gesture)"
+      "Bash(./.venv/Scripts/python.exe -m unittest tests.test_engine tests.test_smart_shift tests.test_hid_gesture)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(echo \"=== EXIT: $? \\(vuoto = identici\\) ===\")",
+      "Bash(./.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('ui/locale_manager.py',encoding='utf-8'\\).read\\(\\)\\); print\\('locale OK'\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m unittest tests.test_backend tests.test_engine tests.test_config)",
+      "Bash(grep -iv \"checked\\\\|checkupdate\\\\|checkfor\\\\|update_check\\\\|//\\\\|background-check\")",
+      "Bash(python -c ' *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\aless\\.claude\\projects\\c--Users-aless-GitHub-Repositories-mouser-Mouser\\memory"

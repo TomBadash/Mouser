@@ -241,6 +241,7 @@ class Backend(QObject):
     def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
         self._engine = engine
+        self._locale = None  # LocaleManager, set by main_qml for status toasts
         self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._cfg = load_config()
         self._mouse_connected = False
@@ -653,6 +654,21 @@ class Backend(QObject):
     def _bump_device_tick(self):
         self._device_tick += 1
         self.deviceTickChanged.emit()
+
+    def set_locale_manager(self, locale_mgr):
+        """Wire the LocaleManager so status toasts can be localized."""
+        self._locale = locale_mgr
+
+    def _tr(self, key, fallback):
+        """Translate a status-toast key via the LocaleManager (English fallback)."""
+        lm = self._locale
+        if lm is None:
+            return fallback
+        try:
+            val = lm.tr(key)
+        except Exception:
+            return fallback
+        return val if val and val != key else fallback
 
     @Slot(str, result="QVariant")
     def deviceInfoForType(self, device_type):
@@ -1730,14 +1746,14 @@ class Backend(QObject):
         app_spec = self._stored_profile_app_spec(entry, appId)
         label = entry.get("label", appId)
         if self._profile_has_app(app_spec):
-            self.statusMessage.emit("Profile already exists")
+            self.statusMessage.emit(self._tr("toast.profile_exists", "Profile already exists"))
             return
         safe_name = re.sub(r"[^a-z0-9_]", "_", label.lower())[:32].strip("_")
         self._cfg = create_profile(self._cfg, safe_name, label=label, apps=[app_spec])
         if self._engine:
             self._engine.cfg = self._cfg
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile created")
+        self.statusMessage.emit(self._tr("toast.profile_created", "Profile created"))
 
     @Slot()
     def browseForAppProfile(self):
@@ -1766,14 +1782,14 @@ class Backend(QObject):
         label = entry.get("label") if entry else os.path.splitext(os.path.basename(path))[0]
         app_spec = self._stored_profile_app_spec(entry, path) if entry else path
         if self._profile_has_app(app_spec):
-            self.statusMessage.emit("Profile already exists")
+            self.statusMessage.emit(self._tr("toast.profile_exists", "Profile already exists"))
             return
         safe_name = re.sub(r"[^a-z0-9_]", "_", label.lower())[:32].strip("_")
         self._cfg = create_profile(self._cfg, safe_name, label=label, apps=[app_spec])
         if self._engine:
             self._engine.cfg = self._cfg
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile created")
+        self.statusMessage.emit(self._tr("toast.profile_created", "Profile created"))
 
     @Slot(str, str)
     def pickAppForMapping(self, profileName, button):
@@ -1811,7 +1827,7 @@ class Backend(QObject):
             self._engine.cfg = self._cfg
             self._engine.reload_mappings()
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile deleted")
+        self.statusMessage.emit(self._tr("toast.profile_deleted", "Profile deleted"))
 
     @Slot(str, str)
     def copyProfileConfig(self, sourceName, targetName):
@@ -1840,7 +1856,7 @@ class Backend(QObject):
         self.profilesChanged.emit()
         self.mappingsChanged.emit()
         self._bump_device_tick()
-        self.statusMessage.emit("Configuration copied")
+        self.statusMessage.emit(self._tr("toast.config_copied", "Configuration copied"))
 
     @Slot(str, result=list)
     @Slot(str, str, result=list)
@@ -2088,7 +2104,8 @@ class Backend(QObject):
         self.activeProfileChanged.emit()
         self.mappingsChanged.emit()
         self.profilesChanged.emit()
-        self.statusMessage.emit(f"Profile: {profile_name}")
+        self.statusMessage.emit(
+            f"{self._tr('toast.profile_active', 'Profile:')} {profile_name}")
 
     @Slot(int)
     def _handleDpiRead(self, dpi):
