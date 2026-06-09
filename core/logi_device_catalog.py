@@ -44,10 +44,12 @@ G502_BUTTONS = (
 
 # G602: HID++ 2.0 over its dedicated wireless receiver (USB 0xC537), but no
 # REPROG_CONTROLS feature in any version, so buttons cannot be diverted via
-# HID++. No tilt wheel either. Only the buttons the default onboard profile
-# emits as standard OS events are mappable; the six side buttons (G4-G9) and
-# top G10/G11 emit non-standard codes handled by the onboard profile.
-# Battery (0x1000) and ADJUSTABLE_DPI (0x2201) are exposed.
+# HID++. No tilt wheel either. Default onboard mappings (per the official
+# quick-start guide): G4=Forward, G5=Back (standard OS mouse buttons --
+# covered by xbutton2/xbutton1 below); G7/G8/G9 type keyboard keys 1/2/3
+# (keyboard events, outside the mouse hooks' reach); G6 = battery-check
+# (internal, no OS event); G10/G11 = DPI +/- (onboard). Battery (0x1000)
+# and ADJUSTABLE_DPI (0x2201) are exposed.
 G602_BUTTONS = (
     "middle",
     "xbutton1",
@@ -319,9 +321,10 @@ LOGI_DEVICE_LAYOUTS = {
         # Manual-selectable for the same reason as the g502 layout above.
         "manual_selectable": True,
         "note": (
-            "G602 buttons are remapped at the OS level. The six side buttons "
-            "(G4-G9) and top G10/G11 are handled by the mouse's onboard "
-            "profile and cannot be remapped here yet."
+            "G602 buttons are remapped at the OS level. Side buttons G4/G5 "
+            "act as Forward/Back and are mappable; G7-G9 type keyboard keys "
+            "1/2/3 and G10/G11 adjust DPI onboard, so they cannot be "
+            "remapped here yet."
         ),
         "hotspots": [],
     },
