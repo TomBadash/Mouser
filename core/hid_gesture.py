@@ -1942,10 +1942,12 @@ class HidGestureListener:
     def _set_native_wheel_invert_vertical(self, invert: bool) -> bool:
         """Read-modify-write the 0x2121 wheel mode to native low-res with
         the invert bit reflecting `invert`. Listener-thread only. Returns
-        True when the feature is absent (no-op success) or the device
-        acknowledges the write."""
+        True when the device acknowledges the write, or when the feature
+        is absent AND no inversion was requested -- claiming success for
+        an invert the firmware cannot perform would make the engine
+        suppress the OS-layer fallback and lose the inversion entirely."""
         if self._hires_wheel_idx is None:
-            return True
+            return not invert
         if self._dev is None:
             return False
         target_mode = self._WHEEL_MODE_BIT_INVERT if invert else 0x00
@@ -1960,9 +1962,10 @@ class HidGestureListener:
 
     def _set_native_wheel_invert_horizontal(self, invert: bool) -> bool:
         """Set firmware invert on the thumbwheel (0x2150 fn 2) without
-        diverting. Listener-thread only."""
+        diverting. Listener-thread only. Absent feature counts as success
+        only when no inversion was requested (see vertical twin)."""
         if self._thumbwheel_idx is None:
-            return True
+            return not invert
         if self._dev is None:
             return False
         invert_byte = 0x01 if invert else 0x00
@@ -1993,6 +1996,14 @@ class HidGestureListener:
             ok_v = self._set_native_wheel_invert_vertical(invert_v)
             ok_h = self._set_native_wheel_invert_horizontal(invert_h)
             success = bool(ok_v and ok_h)
+            if not success:
+                # The engine treats failure as "fall back to OS-layer
+                # inversion on BOTH axes", so any axis the firmware did
+                # apply must be reverted or scrolling double-inverts.
+                if ok_v and invert_v:
+                    self._set_native_wheel_invert_vertical(False)
+                if ok_h and invert_h:
+                    self._set_native_wheel_invert_horizontal(False)
         self._wheel_divert_state = bool(success)
         with self._wheel_divert_lock:
             self._wheel_divert_result = success

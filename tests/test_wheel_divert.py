@@ -244,6 +244,69 @@ class NativeInvertApplyTests(unittest.TestCase):
                 "Vertical setWheelMode must not write when current == target",
             )
 
+    def test_apply_invert_fails_when_hscroll_requested_without_thumbwheel(self):
+        # Device exposes 0x2121 but not 0x2150 (e.g. MX Anywhere). Claiming
+        # success for invert_h would suppress the OS-layer fallback and the
+        # user would get no horizontal inversion at all.
+        listener = self._setup_capable_listener()
+        listener._thumbwheel_idx = None
+        get_mode = _resp([0x00])
+        with patch.object(
+            listener, "_request",
+            side_effect=self._request_router(get_mode),
+        ):
+            with listener._wheel_divert_lock:
+                listener._pending_wheel_divert = (True, True)
+            listener._apply_pending_native_wheel_invert()
+            self.assertFalse(listener._wheel_divert_state)
+
+    def test_apply_invert_succeeds_vertical_only_without_thumbwheel(self):
+        # Same device, but no horizontal inversion requested: the absent
+        # thumbwheel feature must still count as a no-op success.
+        listener = self._setup_capable_listener()
+        listener._thumbwheel_idx = None
+        get_mode = _resp([0x00])
+        with patch.object(
+            listener, "_request",
+            side_effect=self._request_router(get_mode),
+        ) as req:
+            with listener._wheel_divert_lock:
+                listener._pending_wheel_divert = (True, False)
+            listener._apply_pending_native_wheel_invert()
+            self.assertTrue(listener._wheel_divert_state)
+            req.assert_any_call(0x07, 2, [0x04])
+
+    def test_apply_invert_rolls_back_vertical_when_horizontal_write_fails(self):
+        # Vertical write acks, thumbwheel write fails: the vertical invert
+        # must be reverted before reporting failure, otherwise the OS-layer
+        # fallback double-inverts vertical scrolling.
+        listener = self._setup_capable_listener()
+        wheel_mode = [0x00]  # stateful: reads reflect the last write
+
+        def _route(feat, func, params, timeout_ms=2000):
+            if feat == 0x07 and func == 1:
+                return _resp([wheel_mode[0]])
+            if feat == 0x07 and func == 2:
+                wheel_mode[0] = params[0]
+                return _resp([0])
+            if feat == 0x08:
+                return None  # thumbwheel write fails
+            return _resp([0])
+
+        with patch.object(listener, "_request", side_effect=_route) as req:
+            with listener._wheel_divert_lock:
+                listener._pending_wheel_divert = (True, True)
+            listener._apply_pending_native_wheel_invert()
+            self.assertFalse(listener._wheel_divert_state)
+            vertical_writes = [
+                c.args[2] for c in req.call_args_list if c.args[:2] == (0x07, 2)
+            ]
+            self.assertIn([0x04], vertical_writes, "invert applied first")
+            self.assertEqual(
+                vertical_writes[-1], [0x00],
+                "vertical invert must be rolled back after horizontal failure",
+            )
+
     def test_request_native_invert_idempotent(self):
         """Two consecutive request_wheel_native_invert calls each issue
         fresh device reads/writes (firmware can forget after sleep)."""
