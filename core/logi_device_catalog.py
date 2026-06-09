@@ -298,7 +298,10 @@ LOGI_DEVICE_LAYOUTS = {
         "image_width": 220,
         "image_height": 220,
         "interactive": False,
-        "manual_selectable": False,
+        # Manual-selectable so G502 owners whose device connects with an
+        # unrecognized PID/name (e.g. via a receiver) can still pick the
+        # right button set from the layout dropdown.
+        "manual_selectable": True,
         "note": (
             "G502 buttons are remapped at the OS level. DPI up/down and the "
             "sniper button are handled by the mouse's onboard profile and "
