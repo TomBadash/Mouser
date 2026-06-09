@@ -316,7 +316,8 @@ LOGI_DEVICE_LAYOUTS = {
         "image_width": 220,
         "image_height": 220,
         "interactive": False,
-        "manual_selectable": False,
+        # Manual-selectable for the same reason as the g502 layout above.
+        "manual_selectable": True,
         "note": (
             "G602 buttons are remapped at the OS level. The six side buttons "
             "(G4-G9) and top G10/G11 are handled by the mouse's onboard "
