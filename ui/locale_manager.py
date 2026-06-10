@@ -696,6 +696,7 @@ _CATEGORY_TR: dict[str, dict[str, str]] = {
         "Media":      "\u5a92\u4f53",
         "Navigation": "\u5bfc\u822a",
         "Scroll":     "\u6eda\u8f6e",
+        "Screenshot": "\u622a\u56fe",
         "Custom":     "\u81ea\u5b9a\u4e49",
     },
     "zh_TW": {
@@ -705,6 +706,7 @@ _CATEGORY_TR: dict[str, dict[str, str]] = {
         "Media":      "\u5a92\u9ad4",
         "Navigation": "\u5c0e\u822a",
         "Scroll":     "\u6eda\u8f2a",
+        "Screenshot": "\u622a\u5716",
         "Custom":     "\u81ea\u8a02",
     },
 }
@@ -784,6 +786,12 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         "Toggle SmartShift":                        "\u5207\u6362 SmartShift \u5f00\u5173",
         "Switch Scroll Mode (Ratchet / Free Spin)": "\u5207\u6362\u6eda\u8f6e\u6a21\u5f0f\uff08\u68d8\u8f6e / \u98de\u8f6e\uff09",
 
+        # ── Screenshot ────────────────────────────────────────────────
+        "Screenshot Region \u2192 Clipboard":       "\u533a\u57df\u622a\u56fe \u2192 \u526a\u8d34\u677f",
+        "Screenshot Region \u2192 File":            "\u533a\u57df\u622a\u56fe \u2192 \u6587\u4ef6",
+        "Screenshot Full Screen \u2192 Clipboard":  "\u5168\u5c4f\u622a\u56fe \u2192 \u526a\u8d34\u677f",
+        "Screenshot Full Screen \u2192 File":       "\u5168\u5c4f\u622a\u56fe \u2192 \u6587\u4ef6",
+
         # ── Custom ────────────────────────────────────────────────────
         "Custom Shortcut\u2026": "\u81ea\u5b9a\u4e49\u5feb\u6377\u952e\u2026",
     },
@@ -857,6 +865,12 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         # ── Scroll ────────────────────────────────────────────────────
         "Toggle SmartShift":                        "\u5207\u63db SmartShift \u958b\u95dc",
         "Switch Scroll Mode (Ratchet / Free Spin)": "\u5207\u63db\u6eda\u8f2a\u6a21\u5f0f\uff08\u68d8\u8f2a / \u98db\u8f2a\uff09",
+
+        # ── Screenshot ────────────────────────────────────────────────
+        "Screenshot Region \u2192 Clipboard":       "\u5340\u57df\u622a\u5716 \u2192 \u526a\u8cbc\u7c3f",
+        "Screenshot Region \u2192 File":            "\u5340\u57df\u622a\u5716 \u2192 \u6a94\u6848",
+        "Screenshot Full Screen \u2192 Clipboard":  "\u5168\u87a2\u5e55\u622a\u5716 \u2192 \u526a\u8cbc\u7c3f",
+        "Screenshot Full Screen \u2192 File":       "\u5168\u87a2\u5e55\u622a\u5716 \u2192 \u6a94\u6848",
 
         # ── Custom ────────────────────────────────────────────────────
         "Custom Shortcut\u2026": "\u81ea\u8a02\u5feb\u901f\u9375\u2026",

@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+import types
 import unittest
 from unittest.mock import call, patch
 
@@ -119,6 +120,57 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
         self.assertEqual(module._KEY_NAME_TO_CODE["insert"], 110)
         self.assertIn(module._KEY_NAME_TO_CODE["semicolon"], module._ALL_KEY_CODES)
         self.assertIn(module._KEY_NAME_TO_CODE["f24"], module._ALL_KEY_CODES)
+
+
+class WindowsScreenshotActionTests(unittest.TestCase):
+    _ACTIONS = {
+        "screenshot_region_clip": "Screenshot Region → Clipboard",
+        "screenshot_region_file": "Screenshot Region → File",
+        "screenshot_full_clip": "Screenshot Full Screen → Clipboard",
+        "screenshot_full_file": "Screenshot Full Screen → File",
+    }
+
+    def _reload_for_windows(self):
+        import ctypes
+
+        def fake_send_input(*_args):
+            return 1
+
+        fake_send_input.argtypes = []
+        fake_send_input.restype = 1
+        fake_windll = types.SimpleNamespace(
+            user32=types.SimpleNamespace(SendInput=fake_send_input)
+        )
+        platform_patch = patch.object(sys, "platform", "win32")
+        windll_patch = patch.object(ctypes, "windll", fake_windll, create=True)
+        platform_patch.start()
+        windll_patch.start()
+        module = importlib.reload(key_simulator)
+        self.addCleanup(importlib.reload, key_simulator)
+        self.addCleanup(platform_patch.stop)
+        self.addCleanup(windll_patch.stop)
+        return module
+
+    def test_windows_screenshot_actions_are_native_requests(self):
+        module = self._reload_for_windows()
+
+        for action_id, label in self._ACTIONS.items():
+            self.assertIn(action_id, module.ACTIONS)
+            self.assertEqual(module.ACTIONS[action_id]["label"], label)
+            self.assertEqual(module.ACTIONS[action_id]["category"], "Screenshot")
+            self.assertEqual(module.ACTIONS[action_id]["keys"], [])
+            self.assertTrue(module.is_screenshot_action(action_id))
+
+    def test_windows_screenshot_actions_dispatch_to_handler_not_keys(self):
+        module = self._reload_for_windows()
+        calls = []
+        module.set_screenshot_action_handler(calls.append)
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("screenshot_full_clip")
+
+        self.assertEqual(calls, ["screenshot_full_clip"])
+        send_key_combo.assert_not_called()
 
 
 class MacOSZoomActionTests(unittest.TestCase):
