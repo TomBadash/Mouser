@@ -1060,16 +1060,6 @@ def main():
 
     root_window = qml_engine.rootObjects()[0]
 
-    def _sync_linux_ui_passthrough(*_args):
-        if sys.platform != "linux":
-            return
-        engine.set_ui_passthrough(bool(root_window.isVisible()))
-
-    root_window.activeChanged.connect(_sync_linux_ui_passthrough)
-    root_window.visibilityChanged.connect(_sync_linux_ui_passthrough)
-    app.applicationStateChanged.connect(_sync_linux_ui_passthrough)
-    _sync_linux_ui_passthrough()
-
     def show_main_window():
         # Promote BEFORE show so the window registers with WindowServer's
         # foreground-app surfaces (Dock + Cmd+Tab + Mission Control) at
@@ -1133,9 +1123,6 @@ def main():
 
     # ── Accessibility check (macOS) ──────────────────────────────
     accessibility_granted = _check_accessibility(locale_mgr)
-
-    if sys.platform == "linux":
-        engine.set_ui_passthrough(not launch_hidden)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
     _schedule_engine_start(engine, accessibility_granted=accessibility_granted)

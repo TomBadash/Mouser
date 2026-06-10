@@ -151,14 +151,20 @@ class MouseHook(BaseMouseHook):
             return
         self._ui_passthrough = enabled
         if enabled:
+            message = "Linux input passthrough enabled; evdev remapping paused"
             self._disable_evdev_remapping()
             self._rescan_requested.set()
             self._evdev_wakeup.set()
+            print(f"[MouseHook] {message}")
+            self._emit_status(message)
         else:
+            message = "Linux input passthrough disabled; evdev remapping restored"
             self._rescan_requested.clear()
             if self._evdev_device is not None:
                 self._enable_evdev_remapping()
             self._evdev_wakeup.set()
+            print(f"[MouseHook] {message}")
+            self._emit_status(message)
 
     def _acquire_evdev_grab(self):
         dev = self._evdev_device
