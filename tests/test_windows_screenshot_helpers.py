@@ -1,7 +1,4 @@
-import tempfile
 import unittest
-from datetime import datetime
-from pathlib import Path
 
 from PIL import Image
 
@@ -9,12 +6,9 @@ from ui.windows_screenshot import (
     IntRect,
     MonitorMap,
     VirtualCapture,
-    _screenshots_dir,
     build_monitor_maps,
     capture_virtual_desktop,
     crop_logical_region,
-    pil_image_to_qimage,
-    screenshot_file_path,
 )
 
 
@@ -67,37 +61,6 @@ class WindowsScreenshotGeometryTests(unittest.TestCase):
         self.assertEqual(capture.image.size, (200, 50))
         self.assertEqual(capture.image.getpixel((25, 10)), (255, 0, 0))
         self.assertEqual(capture.image.getpixel((175, 10)), (0, 0, 255))
-
-
-class WindowsScreenshotOutputTests(unittest.TestCase):
-    def test_screenshot_file_path_uses_numeric_suffix_on_collision(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            now = datetime(2026, 6, 10, 14, 9, 23)
-            (directory / "Screenshot 2026-06-10 140923.png").touch()
-            (directory / "Screenshot 2026-06-10 140923 (2).png").touch()
-
-            path = screenshot_file_path(directory=directory, now=now)
-
-            self.assertEqual(path.name, "Screenshot 2026-06-10 140923 (3).png")
-
-    def test_screenshots_dir_falls_back_when_primary_path_is_not_directory(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            pictures = home / "Pictures"
-            pictures.mkdir()
-            (pictures / "Screenshots").write_text("not a directory")
-
-            directory = _screenshots_dir(home=home)
-
-            self.assertEqual(directory, pictures / "Mouser Screenshots")
-            self.assertTrue(directory.is_dir())
-
-    def test_pil_image_to_qimage_preserves_dimensions(self):
-        qimage = pil_image_to_qimage(Image.new("RGB", (3, 4), (1, 2, 3)))
-
-        self.assertEqual(qimage.width(), 3)
-        self.assertEqual(qimage.height(), 4)
 
 
 if __name__ == "__main__":

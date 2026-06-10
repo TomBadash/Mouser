@@ -1662,22 +1662,22 @@ elif sys.platform == "linux":
         },
         "screenshot_region_clip": {
             "label": "Screenshot Region → Clipboard",
-            "keys": [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_SYSRQ],
+            "keys": [],
             "category": "Screenshot",
         },
         "screenshot_region_file": {
             "label": "Screenshot Region → File",
-            "keys": [KEY_LEFTSHIFT, KEY_SYSRQ],
+            "keys": [],
             "category": "Screenshot",
         },
         "screenshot_full_clip": {
             "label": "Screenshot Full Screen → Clipboard",
-            "keys": [KEY_LEFTCTRL, KEY_SYSRQ],
+            "keys": [],
             "category": "Screenshot",
         },
         "screenshot_full_file": {
             "label": "Screenshot Full Screen → File",
-            "keys": [KEY_SYSRQ],
+            "keys": [],
             "category": "Screenshot",
         },
         "none": {
@@ -1721,6 +1721,8 @@ elif sys.platform == "linux":
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
+            return
+        if request_screenshot_action(action_id):
             return
         action = ACTIONS.get(action_id)
         if not action or not action["keys"]:

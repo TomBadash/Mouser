@@ -1025,6 +1025,16 @@ def main():
         )
         app._mouser_screenshot_controller = screenshot_controller
         set_screenshot_action_handler(screenshot_controller.request_action)
+    elif sys.platform == "linux":
+        from core.key_simulator import set_screenshot_action_handler
+        from ui.linux_screenshot import LinuxScreenshotController
+
+        screenshot_controller = LinuxScreenshotController(
+            status_callback=backend.statusMessage.emit,
+            parent=app,
+        )
+        app._mouser_screenshot_controller = screenshot_controller
+        set_screenshot_action_handler(screenshot_controller.request_action)
 
     # ── QML Engine ─────────────────────────────────────────────
     qml_engine = QQmlApplicationEngine()
