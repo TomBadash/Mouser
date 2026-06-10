@@ -441,6 +441,7 @@ TryExec=@TRY_EXEC@
 Path=@WORKDIR@
 Icon=@ICON@
 X-Mouser-SourcePath=@SOURCE_PATH@
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
 @AUTOSTART_LINES@
 """
 
@@ -480,6 +481,10 @@ X-Mouser-SourcePath=@SOURCE_PATH@
         self.assertIn("TryExec=/tmp/Mouser Build/.venv/bin/python", launcher_text)
         self.assertIn("Path=/tmp/Mouser Build", launcher_text)
         self.assertIn("X-Mouser-SourcePath=/tmp/Mouser Build/main_qml.py", launcher_text)
+        self.assertIn(
+            "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2",
+            launcher_text,
+        )
         self.assertNotIn("X-GNOME-Autostart-enabled=true", launcher_text)
         self.assertIn("X-GNOME-Autostart-enabled=true", autostart_text)
         self.assertIn(

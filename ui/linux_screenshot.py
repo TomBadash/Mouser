@@ -1,40 +1,57 @@
-"""Linux screenshot actions backed by the desktop portal or KDE Spectacle."""
+"""Linux screenshot actions backed by KWin, the desktop portal, or Spectacle."""
 from __future__ import annotations
 
 import os
+import select
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import traceback
 import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from PIL import Image
-from PySide6.QtCore import QObject, QEventLoop, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QEventLoop, QRect, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QGuiApplication, QImage
 
 try:
     from PySide6.QtCore import SLOT
-    from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
+    from PySide6.QtDBus import (
+        QDBusConnection,
+        QDBusInterface,
+        QDBusMessage,
+        QDBusUnixFileDescriptor,
+    )
 except Exception:  # pragma: no cover - depends on platform PySide6 build
     SLOT = None
     QDBusConnection = None
     QDBusInterface = None
     QDBusMessage = None
+    QDBusUnixFileDescriptor = None
 
 from ui.screenshot_common import (
     SCREENSHOT_ACTIONS,
     SCREENSHOT_CLIPBOARD_ACTIONS,
     SCREENSHOT_FILE_ACTIONS,
+    SCREENSHOT_FULL_ACTIONS,
     SCREENSHOT_FULL_CLIP,
     SCREENSHOT_FULL_FILE,
     SCREENSHOT_REGION_ACTIONS,
     SCREENSHOT_REGION_CLIP,
     SCREENSHOT_REGION_FILE,
     copy_image_to_clipboard,
-    screenshot_file_path,
+    save_image_to_file,
+)
+from ui.screenshot_overlay import (
+    IntRect,
+    RegionSelectionOverlay,
+    rect_from_qrect,
+    union_rect,
 )
 
 
@@ -48,9 +65,23 @@ PORTAL_REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 PORTAL_TARGET_SCREEN = 1
 PORTAL_TARGET_AREA = 4
 
+KWIN_SERVICE = "org.kde.KWin.ScreenShot2"
+KWIN_PATH = "/org/kde/KWin/ScreenShot2"
+KWIN_INTERFACE = "org.kde.KWin.ScreenShot2"
+KWIN_REQUIRED_METHODS = frozenset({"CaptureWorkspace", "CaptureArea"})
+KWIN_NOT_AUTHORIZED = "org.kde.KWin.ScreenShot2.Error.NoAuthorized"
+KWIN_CANCELLED = "org.kde.KWin.ScreenShot2.Error.Cancelled"
+SPECTACLE_REGION_GUIDANCE = (
+    "Region was not saved. Press Enter/Accept in Spectacle to finish, or Esc to cancel."
+)
+
 
 class ScreenshotError(RuntimeError):
     """Screenshot action failed."""
+
+
+class BackendUnavailable(ScreenshotError):
+    """Screenshot backend is unavailable and the controller should try the next backend."""
 
 
 class ScreenshotCancelled(Exception):
@@ -60,18 +91,53 @@ class ScreenshotCancelled(Exception):
 @dataclass(frozen=True)
 class ScreenshotResult:
     action_id: str
-    path: Path | None = None
-    image: Image.Image | None = None
+    image: Image.Image
+
+
+def desktop_names(environ: Mapping[str, str] | None = None) -> list[str]:
+    env = environ or os.environ
+    raw = (env.get("XDG_CURRENT_DESKTOP") or "").replace(";", ":")
+    return [part.strip().lower() for part in raw.split(":") if part.strip()]
 
 
 def is_gnome_desktop(environ: Mapping[str, str] | None = None) -> bool:
-    env = environ or os.environ
-    desktops = [
-        part.strip().lower()
-        for part in (env.get("XDG_CURRENT_DESKTOP") or "").replace(";", ":").split(":")
-        if part.strip()
-    ]
-    return "gnome" in desktops
+    return "gnome" in desktop_names(environ)
+
+
+def is_kde_desktop(environ: Mapping[str, str] | None = None) -> bool:
+    names = desktop_names(environ)
+    return any(name in {"kde", "plasma"} or "plasma" in name for name in names)
+
+
+def select_linux_screenshot_backends(
+    environ: Mapping[str, str] | None = None,
+    kwin_detector: Callable[[], "KWinScreenshotBackend | None"] | None = None,
+    portal_factory: Callable[[], "PortalScreenshotClient"] | None = None,
+    spectacle_detector: Callable[
+        [], "SpectacleScreenshotBackend | None"
+    ] | None = None,
+) -> list[object]:
+    backends: list[object] = []
+    if is_kde_desktop(environ):
+        detector = kwin_detector or (
+            lambda: KWinScreenshotBackend.detect(
+                environ=environ,
+                client_factory=None,
+            )
+        )
+        backend = detector()
+        if backend is not None:
+            backends.append(backend)
+
+    portal = PortalScreenshotBackend.detect(client_factory=portal_factory)
+    if portal is not None:
+        backends.append(portal)
+
+    detector = spectacle_detector or SpectacleScreenshotBackend.detect
+    spectacle = detector()
+    if spectacle is not None:
+        backends.append(spectacle)
+    return backends
 
 
 def select_linux_screenshot_backend(
@@ -81,25 +147,200 @@ def select_linux_screenshot_backend(
         [], "SpectacleScreenshotBackend | None"
     ] | None = None,
 ):
-    if is_gnome_desktop(environ):
-        portal = PortalScreenshotBackend.detect(client_factory=portal_factory)
-        if portal is not None:
-            return portal
-    detector = spectacle_detector or SpectacleScreenshotBackend.detect
-    return detector()
+    backends = select_linux_screenshot_backends(
+        environ=environ,
+        portal_factory=portal_factory,
+        spectacle_detector=spectacle_detector,
+    )
+    return backends[0] if backends else None
+
+
+def _capture_for_action(backend, action_id: str) -> Image.Image:
+    if action_id in SCREENSHOT_FULL_ACTIONS:
+        return backend.capture_full()
+    if action_id in SCREENSHOT_REGION_ACTIONS:
+        return backend.capture_region(None)
+    raise ValueError(f"unknown screenshot action: {action_id}")
+
+
+class KWinScreenshotBackend:
+    needs_mouser_region_selection = True
+
+    def __init__(
+        self,
+        client_factory: Callable[[], "KWinScreenshotClient"] | None = None,
+        probe_rect_factory: Callable[[], IntRect] | None = None,
+    ):
+        self._client_factory = client_factory or KWinScreenshotClient
+        self._probe_rect_factory = probe_rect_factory or _default_probe_rect
+        self._probe_ok: bool | None = None
+        self._probe_error = "Screenshot backend unavailable: KWin ScreenShot2 is unavailable"
+
+    @classmethod
+    def detect(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        client_factory: Callable[[], "KWinScreenshotClient"] | None = None,
+    ) -> "KWinScreenshotBackend | None":
+        if not is_kde_desktop(environ):
+            return None
+        factory = client_factory or KWinScreenshotClient
+        try:
+            client = factory()
+            methods = client.available_methods()
+        except Exception:
+            return None
+        if not KWIN_REQUIRED_METHODS.issubset(methods):
+            return None
+        return cls(client_factory=factory)
+
+    def probe(self) -> None:
+        if self._probe_ok is True:
+            return
+        if self._probe_ok is False:
+            raise BackendUnavailable(self._probe_error)
+        try:
+            self._client_factory().capture_area(
+                self._probe_rect_factory(),
+                options=kwin_capture_options(),
+                timeout_seconds=FULLSCREEN_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            self._probe_ok = False
+            detail = str(exc) or "KWin ScreenShot2 probe failed"
+            self._probe_error = f"Screenshot backend unavailable: {detail}"
+            raise BackendUnavailable(self._probe_error) from exc
+        self._probe_ok = True
+
+    def capture_full(self) -> Image.Image:
+        self.probe()
+        return self._client_factory().capture_workspace(
+            options=kwin_capture_options(),
+            timeout_seconds=FULLSCREEN_TIMEOUT_SECONDS,
+        )
+
+    def capture_region(self, rect: IntRect | None) -> Image.Image:
+        if rect is None or rect.is_empty:
+            raise ScreenshotError("Screenshot failed: no region was selected")
+        self.probe()
+        return self._client_factory().capture_area(
+            rect,
+            options=kwin_capture_options(),
+            timeout_seconds=FULLSCREEN_TIMEOUT_SECONDS,
+        )
+
+
+class KWinScreenshotClient:
+    def __init__(
+        self,
+        bus=None,
+        interface_factory=None,
+        unix_fd_factory=None,
+        fd_reader: Callable[[int, int, float], bytes] | None = None,
+    ):
+        if (
+            QDBusConnection is None
+            or QDBusInterface is None
+            or QDBusUnixFileDescriptor is None
+        ):
+            raise BackendUnavailable("QtDBus Unix file descriptor support is not available")
+        self._bus = bus or QDBusConnection.sessionBus()
+        if not self._bus.isConnected():
+            raise BackendUnavailable("D-Bus session bus is not connected")
+        self._interface_factory = interface_factory or QDBusInterface
+        self._unix_fd_factory = unix_fd_factory or QDBusUnixFileDescriptor
+        self._fd_reader = fd_reader or _read_fd_exact
+
+    def available_methods(self) -> set[str]:
+        interface = self._interface_factory(
+            KWIN_SERVICE,
+            KWIN_PATH,
+            "org.freedesktop.DBus.Introspectable",
+            self._bus,
+        )
+        reply = interface.call("Introspect")
+        if _is_dbus_error(reply):
+            raise BackendUnavailable(_dbus_error_text(reply))
+        args = reply.arguments()
+        if not args:
+            return set()
+        return kwin_methods_from_introspection(str(_unwrap_dbus_value(args[0])))
+
+    def capture_workspace(
+        self,
+        options: Mapping[str, object] | None = None,
+        timeout_seconds: int = FULLSCREEN_TIMEOUT_SECONDS,
+    ) -> Image.Image:
+        return self._capture(
+            "CaptureWorkspace",
+            [dict(options or kwin_capture_options())],
+            timeout_seconds,
+        )
+
+    def capture_area(
+        self,
+        rect: IntRect,
+        options: Mapping[str, object] | None = None,
+        timeout_seconds: int = FULLSCREEN_TIMEOUT_SECONDS,
+    ) -> Image.Image:
+        return self._capture(
+            "CaptureArea",
+            [
+                int(rect.left),
+                int(rect.top),
+                int(rect.width),
+                int(rect.height),
+                dict(options or kwin_capture_options()),
+            ],
+            timeout_seconds,
+        )
+
+    def _capture(
+        self,
+        method: str,
+        args: Sequence[object],
+        timeout_seconds: int,
+    ) -> Image.Image:
+        read_fd, write_fd = os.pipe()
+        try:
+            try:
+                interface = self._interface_factory(
+                    KWIN_SERVICE,
+                    KWIN_PATH,
+                    KWIN_INTERFACE,
+                    self._bus,
+                )
+                if hasattr(interface, "setTimeout"):
+                    interface.setTimeout(int(timeout_seconds * 1000))
+                reply = interface.call(method, *args, self._unix_fd_factory(write_fd))
+            finally:
+                os.close(write_fd)
+            if _is_dbus_error(reply):
+                _raise_kwin_reply_error(reply)
+            args = reply.arguments()
+            if not args:
+                raise ScreenshotError("Screenshot failed: KWin did not return image metadata")
+            metadata = _metadata_dict(_unwrap_dbus_value(args[0]))
+            byte_count = int(metadata.get("stride", 0)) * int(metadata.get("height", 0))
+            if byte_count <= 0:
+                raise ScreenshotError("Screenshot failed: KWin returned invalid image metadata")
+            data = self._fd_reader(read_fd, byte_count, float(timeout_seconds))
+            return kwin_raw_image_to_pil(metadata, data)
+        finally:
+            os.close(read_fd)
 
 
 class SpectacleScreenshotBackend:
+    needs_mouser_region_selection = False
+
     def __init__(
         self,
         executable: str = "spectacle",
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
-        path_factory: Callable[[], Path] | None = None,
         temp_dir: Path | None = None,
     ):
         self.executable = executable
         self._runner = runner or subprocess.run
-        self._path_factory = path_factory or screenshot_file_path
         self._temp_dir = temp_dir
 
     @classmethod
@@ -108,6 +349,18 @@ class SpectacleScreenshotBackend:
         if not executable:
             return None
         return cls(executable=executable)
+
+    def probe(self) -> None:
+        return None
+
+    def capture_full(self) -> Image.Image:
+        return self._capture_to_temp_image(SCREENSHOT_FULL_FILE)
+
+    def capture_region(self, rect: IntRect | None = None) -> Image.Image:
+        return self._capture_to_temp_image(SCREENSHOT_REGION_FILE)
+
+    def perform_action(self, action_id: str) -> ScreenshotResult:
+        return ScreenshotResult(action_id=action_id, image=_capture_for_action(self, action_id))
 
     def command_for_action(self, action_id: str, output_path: Path) -> list[str]:
         if action_id not in SCREENSHOT_ACTIONS:
@@ -120,16 +373,6 @@ class SpectacleScreenshotBackend:
             return REGION_TIMEOUT_SECONDS
         return FULLSCREEN_TIMEOUT_SECONDS
 
-    def perform_action(self, action_id: str) -> ScreenshotResult:
-        if action_id in SCREENSHOT_FILE_ACTIONS:
-            path = self._path_factory()
-            self.capture_to_path(action_id, path)
-            return ScreenshotResult(action_id=action_id, path=path)
-        if action_id in SCREENSHOT_CLIPBOARD_ACTIONS:
-            image = self._capture_to_temp_image(action_id)
-            return ScreenshotResult(action_id=action_id, image=image)
-        raise ValueError(f"unknown screenshot action: {action_id}")
-
     def capture_to_path(self, action_id: str, output_path: Path) -> Path:
         cmd = self.command_for_action(action_id, output_path)
         try:
@@ -141,7 +384,7 @@ class SpectacleScreenshotBackend:
                 timeout=self.timeout_for_action(action_id),
             )
         except FileNotFoundError as exc:
-            raise ScreenshotError("Screenshot backend unavailable: Spectacle is not installed") from exc
+            raise BackendUnavailable("Screenshot backend unavailable: Spectacle is not installed") from exc
         except subprocess.TimeoutExpired as exc:
             raise ScreenshotError("Screenshot timed out") from exc
 
@@ -188,27 +431,26 @@ class SpectacleScreenshotBackend:
                 "On Nobara/KDE, remove ~/.local/share/applications/org.kde.spectacle.desktop "
                 "or check KDE screenshot permissions."
             )
+        if action_id in SCREENSHOT_REGION_ACTIONS and output_missing:
+            _unlink_empty_file(output_path)
+            raise ScreenshotError(SPECTACLE_REGION_GUIDANCE)
         if completed.returncode != 0:
             _unlink_empty_file(output_path)
-            if action_id in SCREENSHOT_REGION_ACTIONS and output_missing:
-                raise ScreenshotCancelled()
             detail = combined_output.strip() or f"Spectacle exited with status {completed.returncode}"
             raise ScreenshotError(f"Screenshot failed: {detail}")
         if output_missing:
             _unlink_empty_file(output_path)
-            if action_id in SCREENSHOT_REGION_ACTIONS:
-                raise ScreenshotCancelled()
             raise ScreenshotError("Screenshot failed: Spectacle did not create an image")
 
 
 class PortalScreenshotBackend:
+    needs_mouser_region_selection = False
+
     def __init__(
         self,
         client_factory: Callable[[], "PortalScreenshotClient"] | None = None,
-        path_factory: Callable[[], Path] | None = None,
     ):
         self._client_factory = client_factory or PortalScreenshotClient
-        self._path_factory = path_factory or screenshot_file_path
 
     @classmethod
     def detect(
@@ -226,7 +468,19 @@ class PortalScreenshotBackend:
             return None
         return cls(client_factory=factory)
 
+    def probe(self) -> None:
+        return None
+
+    def capture_full(self) -> Image.Image:
+        return self._capture_action(SCREENSHOT_FULL_FILE)
+
+    def capture_region(self, rect: IntRect | None = None) -> Image.Image:
+        return self._capture_action(SCREENSHOT_REGION_FILE)
+
     def perform_action(self, action_id: str) -> ScreenshotResult:
+        return ScreenshotResult(action_id=action_id, image=_capture_for_action(self, action_id))
+
+    def _capture_action(self, action_id: str) -> Image.Image:
         client = self._client_factory()
         uri = client.request_screenshot(
             action_id,
@@ -237,14 +491,8 @@ class PortalScreenshotBackend:
                 "Screenshot failed: portal response did not include an image URI"
             )
         source = portal_file_uri_to_path(uri)
-        if action_id in SCREENSHOT_FILE_ACTIONS:
-            target = self._path_factory()
-            shutil.copyfile(source, target)
-            return ScreenshotResult(action_id=action_id, path=target)
-        if action_id in SCREENSHOT_CLIPBOARD_ACTIONS:
-            with Image.open(source) as image:
-                return ScreenshotResult(action_id=action_id, image=image.convert("RGBA"))
-        raise ValueError(f"unknown screenshot action: {action_id}")
+        with Image.open(source) as image:
+            return image.convert("RGBA")
 
     def timeout_for_action(self, action_id: str) -> int:
         return PORTAL_RESPONSE_TIMEOUT_MS
@@ -259,10 +507,10 @@ class PortalScreenshotClient(QObject):
     ):
         super().__init__(parent)
         if QDBusConnection is None or QDBusInterface is None:
-            raise ScreenshotError("Screenshot backend unavailable: QtDBus is not available")
+            raise BackendUnavailable("Screenshot backend unavailable: QtDBus is not available")
         self._bus = bus or QDBusConnection.sessionBus()
         if not self._bus.isConnected():
-            raise ScreenshotError(
+            raise BackendUnavailable(
                 "Screenshot backend unavailable: D-Bus session bus is not connected"
             )
         self._token_factory = token_factory or (lambda: f"mouser_{uuid.uuid4().hex}")
@@ -335,7 +583,7 @@ class PortalScreenshotClient(QObject):
 
         if self._response_code is None:
             raise ScreenshotError(
-                "Screenshot failed: GNOME portal did not respond. "
+                "Screenshot failed: desktop portal did not respond. "
                 "Open the Mouser window once and retry if this is the first "
                 "screenshot permission request."
             )
@@ -362,23 +610,33 @@ _DEFAULT_BACKEND = object()
 class LinuxScreenshotController(QObject):
     _requestAction = Signal(str)
     _workerFinished = Signal(str, object, str)
+    _regionSelectionReady = Signal(str, object, str)
 
     def __init__(
         self,
         backend=_DEFAULT_BACKEND,
         status_callback: Callable[[str], None] | None = None,
         thread_factory: Callable[..., threading.Thread] | None = None,
+        region_overlay_factory=RegionSelectionOverlay,
+        logical_bounds_factory: Callable[[], IntRect] | None = None,
         parent=None,
     ):
         super().__init__(parent)
-        self._backend = (
-            select_linux_screenshot_backend() if backend is _DEFAULT_BACKEND else backend
-        )
+        self._backends = _coerce_backends(backend)
         self._status_callback = status_callback
         self._thread_factory = thread_factory or threading.Thread
+        self._region_overlay_factory = region_overlay_factory
+        self._logical_bounds_factory = logical_bounds_factory or _system_logical_bounds
         self._busy = False
+        self._overlay = None
+        self._region_action = ""
+        self._region_backend = None
         self._requestAction.connect(self._handle_request, Qt.ConnectionType.QueuedConnection)
         self._workerFinished.connect(self._finish_worker, Qt.ConnectionType.QueuedConnection)
+        self._regionSelectionReady.connect(
+            self._begin_region_selection,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def request_action(self, action_id: str) -> None:
         self._requestAction.emit(action_id)
@@ -387,25 +645,41 @@ class LinuxScreenshotController(QObject):
     def _handle_request(self, action_id: str) -> None:
         if action_id not in SCREENSHOT_ACTIONS:
             return
-        if self._backend is None:
+        if not self._backends:
             self._emit_status("Screenshot backend unavailable")
             return
         if self._busy:
             self._emit_status("Finish the current screenshot first")
             return
         self._busy = True
-        thread = self._thread_factory(
-            target=self._run_action,
-            args=(action_id,),
-            daemon=True,
-            name="LinuxScreenshot",
-        )
-        thread.start()
+        self._start_thread(self._run_action, action_id, name="LinuxScreenshot")
 
     def _run_action(self, action_id: str) -> None:
         try:
-            result = self._backend.perform_action(action_id)
-            self._workerFinished.emit(action_id, result, "")
+            for backend in self._backends:
+                try:
+                    probe = getattr(backend, "probe", None)
+                    if callable(probe):
+                        probe()
+                except BackendUnavailable as exc:
+                    print(f"[Screenshot] backend unavailable: {exc}")
+                    continue
+
+                if (
+                    action_id in SCREENSHOT_REGION_ACTIONS
+                    and getattr(backend, "needs_mouser_region_selection", False)
+                ):
+                    self._regionSelectionReady.emit(action_id, backend, "")
+                    return
+
+                try:
+                    image = _capture_for_action(backend, action_id)
+                    self._workerFinished.emit(action_id, image, "")
+                    return
+                except BackendUnavailable as exc:
+                    print(f"[Screenshot] backend unavailable: {exc}")
+                    continue
+            self._workerFinished.emit(action_id, None, "Screenshot backend unavailable")
         except ScreenshotCancelled:
             self._workerFinished.emit(action_id, None, "cancelled")
         except ScreenshotError as exc:
@@ -416,7 +690,74 @@ class LinuxScreenshotController(QObject):
             self._workerFinished.emit(action_id, None, f"Screenshot failed: {exc}")
 
     @Slot(str, object, str)
-    def _finish_worker(self, action_id: str, result: ScreenshotResult | None, error: str) -> None:
+    def _begin_region_selection(self, action_id: str, backend, error: str = "") -> None:
+        if error:
+            self._busy = False
+            self._emit_status(error)
+            return
+        try:
+            logical_bounds = self._logical_bounds_factory()
+        except Exception as exc:
+            self._busy = False
+            self._emit_status(f"Screenshot failed: {exc}")
+            return
+
+        self._region_action = action_id
+        self._region_backend = backend
+        self._overlay = self._region_overlay_factory(logical_bounds)
+        self._overlay.selected.connect(self._finish_region)
+        self._overlay.cancelled.connect(self._cancel_region)
+        self._overlay.show()
+
+    @Slot(QRect)
+    def _finish_region(self, rect: QRect) -> None:
+        overlay = self._overlay
+        self._overlay = None
+        if overlay is not None:
+            overlay.deleteLater()
+        action_id = self._region_action
+        backend = self._region_backend
+        self._region_action = ""
+        self._region_backend = None
+        try:
+            selected = rect_from_qrect(rect)
+        except Exception as exc:
+            self._workerFinished.emit(action_id, None, f"Screenshot failed: {exc}")
+            return
+        self._start_thread(
+            self._run_selected_region,
+            action_id,
+            backend,
+            selected,
+            name="LinuxScreenshotRegion",
+        )
+
+    @Slot()
+    def _cancel_region(self) -> None:
+        overlay = self._overlay
+        self._overlay = None
+        self._region_action = ""
+        self._region_backend = None
+        if overlay is not None:
+            overlay.deleteLater()
+        self._busy = False
+        self._emit_status("Screenshot cancelled")
+
+    def _run_selected_region(self, action_id: str, backend, rect: IntRect) -> None:
+        try:
+            image = backend.capture_region(rect)
+            self._workerFinished.emit(action_id, image, "")
+        except ScreenshotCancelled:
+            self._workerFinished.emit(action_id, None, "cancelled")
+        except ScreenshotError as exc:
+            self._workerFinished.emit(action_id, None, str(exc))
+        except Exception as exc:
+            print(f"[Screenshot] Linux region screenshot failed: {exc}")
+            traceback.print_exc()
+            self._workerFinished.emit(action_id, None, f"Screenshot failed: {exc}")
+
+    @Slot(str, object, str)
+    def _finish_worker(self, action_id: str, image: Image.Image | None, error: str) -> None:
         self._busy = False
         if error == "cancelled":
             self._emit_status("Screenshot cancelled")
@@ -424,25 +765,41 @@ class LinuxScreenshotController(QObject):
         if error:
             self._emit_status(error)
             return
-        if result is None:
+        if image is None:
             return
         try:
-            if action_id in (SCREENSHOT_REGION_CLIP, SCREENSHOT_FULL_CLIP):
-                if result.image is None:
-                    raise ScreenshotError("Screenshot failed: no image was captured")
-                copy_image_to_clipboard(result.image)
+            if action_id in SCREENSHOT_CLIPBOARD_ACTIONS:
+                copy_image_to_clipboard(image)
                 self._emit_status("Screenshot copied to clipboard")
-            elif action_id in (SCREENSHOT_REGION_FILE, SCREENSHOT_FULL_FILE):
-                if result.path is None:
-                    raise ScreenshotError("Screenshot failed: no file was captured")
-                self._emit_status(f"Screenshot saved to {result.path}")
+            elif action_id in SCREENSHOT_FILE_ACTIONS:
+                path = save_image_to_file(image)
+                self._emit_status(f"Screenshot saved to {path}")
         except Exception as exc:
             self._emit_status(f"Screenshot failed: {exc}")
             print(f"[Screenshot] Linux delivery failed: {exc}")
 
+    def _start_thread(self, target, *args, name: str) -> None:
+        thread = self._thread_factory(
+            target=target,
+            args=args,
+            daemon=True,
+            name=name,
+        )
+        thread.start()
+
     def _emit_status(self, message: str) -> None:
         if self._status_callback is not None:
             self._status_callback(message)
+
+
+def _coerce_backends(backend) -> list[object]:
+    if backend is _DEFAULT_BACKEND:
+        return select_linux_screenshot_backends()
+    if backend is None:
+        return []
+    if isinstance(backend, (list, tuple)):
+        return list(backend)
+    return [backend]
 
 
 def _combined_process_output(completed: subprocess.CompletedProcess) -> str:
@@ -457,6 +814,121 @@ def _unlink_empty_file(path: Path) -> None:
             path.unlink()
     except OSError:
         pass
+
+
+def _system_logical_bounds() -> IntRect:
+    app = QGuiApplication.instance()
+    screens = app.screens() if app is not None else []
+    if not screens and app is not None and app.primaryScreen() is not None:
+        screens = [app.primaryScreen()]
+    rects = [rect_from_qrect(screen.geometry()) for screen in screens]
+    return union_rect(rects)
+
+
+def _default_probe_rect() -> IntRect:
+    try:
+        bounds = _system_logical_bounds()
+        return IntRect(bounds.left, bounds.top, bounds.left + 1, bounds.top + 1)
+    except Exception:
+        return IntRect(0, 0, 1, 1)
+
+
+def kwin_capture_options() -> dict[str, object]:
+    return {
+        "native-resolution": True,
+        "include-cursor": False,
+        "include-shadow": False,
+        "hide-caller-windows": False,
+    }
+
+
+def kwin_methods_from_introspection(xml_text: str) -> set[str]:
+    root = ET.fromstring(xml_text)
+    methods: set[str] = set()
+    for interface in root.findall(".//interface"):
+        if interface.attrib.get("name") != KWIN_INTERFACE:
+            continue
+        methods.update(
+            method.attrib["name"]
+            for method in interface.findall("method")
+            if method.attrib.get("name")
+        )
+    return methods
+
+
+def kwin_raw_image_to_pil(metadata: Mapping[str, object], data: bytes) -> Image.Image:
+    meta = _metadata_dict(metadata)
+    image_type = str(meta.get("type", "raw"))
+    if image_type != "raw":
+        raise ScreenshotError(f"Screenshot failed: unsupported KWin image type {image_type}")
+    width = int(meta.get("width", 0))
+    height = int(meta.get("height", 0))
+    stride = int(meta.get("stride", 0))
+    format_value = int(meta.get("format", 0))
+    if width <= 0 or height <= 0 or stride <= 0:
+        raise ScreenshotError("Screenshot failed: KWin returned invalid image metadata")
+    qformat = QImage.Format(format_value)
+    qimage = QImage(data, width, height, stride, qformat).copy()
+    if qimage.isNull():
+        raise ScreenshotError("Screenshot failed: KWin returned an invalid image")
+    return qimage_to_pil_image(qimage)
+
+
+def qimage_to_pil_image(qimage: QImage) -> Image.Image:
+    rgba = qimage.convertToFormat(QImage.Format.Format_RGBA8888)
+    width = rgba.width()
+    height = rgba.height()
+    stride = rgba.bytesPerLine()
+    raw = bytes(rgba.bits()[: rgba.sizeInBytes()])
+    row_bytes = width * 4
+    if stride != row_bytes:
+        raw = b"".join(
+            raw[offset : offset + row_bytes]
+            for offset in range(0, stride * height, stride)
+        )
+    else:
+        raw = raw[: row_bytes * height]
+    return Image.frombytes("RGBA", (width, height), raw)
+
+
+def _read_fd_exact(fd: int, byte_count: int, timeout_seconds: float) -> bytes:
+    deadline = time.monotonic() + timeout_seconds
+    chunks = bytearray()
+    while len(chunks) < byte_count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ScreenshotError("Screenshot timed out")
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            raise ScreenshotError("Screenshot timed out")
+        chunk = os.read(fd, byte_count - len(chunks))
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    if len(chunks) < byte_count:
+        raise ScreenshotError("Screenshot failed: KWin returned incomplete image data")
+    return bytes(chunks)
+
+
+def _metadata_dict(value) -> dict[str, object]:
+    value = _unwrap_dbus_value(value) or {}
+    return {
+        str(_unwrap_dbus_value(key)): _unwrap_dbus_value(item)
+        for key, item in dict(value).items()
+    }
+
+
+def _raise_kwin_reply_error(reply) -> None:
+    name = _dbus_error_name(reply)
+    text = _dbus_error_text(reply)
+    if name == KWIN_CANCELLED or "cancelled" in text.lower():
+        raise ScreenshotCancelled()
+    if name == KWIN_NOT_AUTHORIZED or "authorized" in text.lower():
+        raise BackendUnavailable(
+            "KWin ScreenShot2 is not authorized. Launch Mouser from its installed "
+            "desktop entry or use the portal/Spectacle fallback."
+        )
+    raise ScreenshotError(f"Screenshot failed: {text}")
 
 
 def portal_options_for_action(action_id: str, token: str) -> dict:
@@ -512,6 +984,15 @@ def _is_dbus_error(reply) -> bool:
         except Exception:
             return False
     return False
+
+
+def _dbus_error_name(reply) -> str:
+    method = getattr(reply, "errorName", None)
+    if callable(method):
+        value = method()
+        if value:
+            return str(value)
+    return ""
 
 
 def _dbus_error_text(reply) -> str:
