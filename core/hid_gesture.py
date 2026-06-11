@@ -1,5 +1,5 @@
 """
-hid_gesture.py — Detect Logitech HID++ gesture controls and device features.
+hid_gesture.py -- Detect Logitech HID++ gesture controls and device features.
 
 Many Logitech mice expose their gesture button and DPI/battery controls only
 through the HID++ vendor channel instead of standard OS mouse events. This
@@ -11,12 +11,15 @@ Requires:  pip install hidapi
 Falls back gracefully if the package or device are unavailable.
 """
 
+import atexit
 import os
 import stat
 import sys
 import queue
 import threading
 import time
+import weakref
+from dataclasses import replace as _dataclass_replace
 
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
@@ -60,6 +63,162 @@ if HIDAPI_OK:
 
 
 _LOG_ONCE_KEYS = set()
+_ATEXIT_LISTENERS = weakref.WeakSet()
+_ATEXIT_REGISTERED = False
+_ATEXIT_LOCK = threading.Lock()
+
+
+# Last-known-good (transport, PID, dev_idx, ...) cache for sub-second
+# warm-start device detection. Schema is additive: unknown keys ignored.
+
+_CACHE_SCHEMA_VERSION = 1
+_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
+
+
+def _cache_dir() -> str:
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/Mouser")
+    elif sys.platform.startswith("linux"):
+        base = os.environ.get(
+            "XDG_CONFIG_HOME",
+            os.path.expanduser("~/.config"),
+        )
+        base = os.path.join(base, "Mouser")
+    else:
+        base = os.path.join(
+            os.environ.get("APPDATA", os.path.expanduser("~")),
+            "Mouser",
+        )
+    return base
+
+
+def _cache_path() -> str:
+    return os.path.join(_cache_dir(), "last_device.json")
+
+
+def _load_last_device_cache() -> dict | None:
+    """Read the last-known-good device cache. Returns None on missing,
+    malformed, expired, or version-mismatched cache (all treated as
+    cache-miss). Never raises."""
+    path = _cache_path()
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if int(payload.get("version", 0)) != _CACHE_SCHEMA_VERSION:
+        return None
+    saved_at = float(payload.get("saved_at", 0) or 0)
+    if saved_at and (time.time() - saved_at) > _CACHE_TTL_SECONDS:
+        return None
+    candidate = payload.get("candidate")
+    device = payload.get("device")
+    if not isinstance(candidate, dict) or not isinstance(device, dict):
+        return None
+    return payload
+
+
+def _save_last_device_cache(*, candidate: dict, device: dict) -> None:
+    """Atomically persist the last-known-good device tuple. Failures are
+    logged but never raised -- caching is a pure speedup."""
+    path = _cache_path()
+    try:
+        import json, tempfile
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        payload = {
+            "version": _CACHE_SCHEMA_VERSION,
+            "saved_at": time.time(),
+            "candidate": candidate,
+            "device": device,
+        }
+        fd, tmp = tempfile.mkstemp(
+            prefix=".last_device.", suffix=".tmp",
+            dir=os.path.dirname(path),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, sort_keys=True)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, path)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+    except Exception as exc:
+        print(f"[HidGesture] Could not save device cache: {exc}")
+
+
+def _candidate_signature(info) -> dict:
+    """Persistent identity fields for cache matching. Path is a hint
+    only -- USB ports and IOKit paths can shift between sessions."""
+    pid = int(info.get("product_id", 0) or 0)
+    return {
+        "pid": pid,
+        "usage_page": int(info.get("usage_page", 0) or 0),
+        "usage": int(info.get("usage", 0) or 0),
+        "transport": info.get("transport") or "",
+        "source": info.get("source", "unknown"),
+        "path": _device_path_display(info.get("path")) or "",
+    }
+
+
+def _candidate_match_score(info, cached_candidate) -> int:
+    """Ranking score for a candidate against the cached identity tuple.
+    0 = no match, 1 = PID+usage match, 2 = +same source backend,
+    3 = +same OS path. Higher score sorts first in the connect order."""
+    sig = _candidate_signature(info)
+    if sig["pid"] != int(cached_candidate.get("pid", 0) or 0):
+        return 0
+    if sig["usage_page"] != int(cached_candidate.get("usage_page", 0) or 0):
+        return 0
+    if sig["usage"] != int(cached_candidate.get("usage", 0) or 0):
+        return 0
+    score = 1
+    cached_source = cached_candidate.get("source") or ""
+    if cached_source and sig["source"] == cached_source:
+        score += 1
+    cached_path = cached_candidate.get("path") or ""
+    if cached_path and sig["path"] == cached_path:
+        score += 1
+    return score
+
+
+def _candidate_matches_cache(info, cached_candidate) -> bool:
+    return _candidate_match_score(info, cached_candidate) > 0
+
+
+def _atexit_stop_listeners():
+    """Best-effort undivert before interpreter exit so a Mouser crash or
+    SIGTERM does not leave the device stuck in HID++ divert mode.
+
+    Failures are logged but otherwise tolerated -- atexit runs during
+    interpreter teardown when the HID stack may already be partially gone,
+    so we never propagate. We do *not* silently swallow: a stuck divert is a
+    user-visible bug that the next session needs to diagnose.
+    """
+    for listener in list(_ATEXIT_LISTENERS):
+        try:
+            listener.stop()
+        except Exception as exc:  # noqa: BLE001 - atexit must never propagate
+            print(f"[HidGesture] atexit stop failed for {listener!r}: {exc}")
+
+
+def _register_atexit_listener(listener):
+    global _ATEXIT_REGISTERED
+    with _ATEXIT_LOCK:
+        _ATEXIT_LISTENERS.add(listener)
+        if not _ATEXIT_REGISTERED:
+            atexit.register(_atexit_stop_listeners)
+            _ATEXIT_REGISTERED = True
 
 
 def _log_once(key, message):
@@ -609,14 +768,30 @@ FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
 FEAT_SMART_SHIFT          = 0x2110  # Smart Shift basic
 FEAT_SMART_SHIFT_ENHANCED = 0x2111  # Smart Shift Enhanced (MX Master 3/3S, MX Master 4)
-FEAT_HIRES_WHEEL          = 0x2120
-FEAT_HIRES_WHEEL_ENHANCED = 0x2121
+FEAT_HIRES_WHEEL          = 0x2120  # Hi-Res Wheel (basic / older devices)
+FEAT_HIRES_WHEEL_ENHANCED = 0x2121  # Hi-Res Wheel Enhanced (MX Master 3/3S/4 -- divert + hi-res deltas)
 FEAT_LOWRES_WHEEL         = 0x2130
-FEAT_THUMB_WHEEL          = 0x2150
+FEAT_THUMB_WHEEL          = 0x2150  # Thumbwheel (horizontal thumbwheel divert)
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
+
+# REPROG_V4 ``setCidReporting`` control flags (fn 3 byte 2). The
+# protocol packs four bits we ever toggle from this module:
+#   bit 0 (0x01) = temporary divert    -- volatile, cleared on disconnect.
+#   bit 1 (0x02) = persistent divert   -- survives sleep/wake.
+#   bit 4 (0x10) = temporary rawXY     -- forward raw cursor deltas instead
+#                                         of the synthesized button click.
+#   bit 5 (0x20) = persistent rawXY    -- survives sleep/wake.
+# We always set both the volatile and persistent bits so the firmware
+# replays our divert across power-saving wake events without needing a
+# re-driver round trip. The constants below name the four combinations
+# this module emits so call sites no longer read like bare magic bytes.
+_DIVERT_BUTTON_ONLY = 0x03  # 0x01 | 0x02       -- divert as button click
+_DIVERT_RAW_XY      = 0x33  # 0x01 | 0x02 | 0x10 | 0x20 -- divert + rawXY
+_UNDIVERT_BUTTON    = 0x02  # 0x02 only         -- revert button-only divert
+_UNDIVERT_RAW_XY    = 0x22  # 0x02 | 0x20       -- revert rawXY divert
 
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
 
@@ -637,6 +812,9 @@ KNOWN_CID_NAMES = {
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
     0x00FD: "DPI Switch",
+    # MX Master 4 Sense Panel; divertable rawXY-capable control
+    # used as the primary gesture source on the big pad.
+    0x01A0: "Sense Panel",
 }
 
 KEY_FLAG_BITS = (
@@ -704,22 +882,75 @@ def _format_cid(cid):
     return f"0x{cid:04X} ({name})" if name else f"0x{cid:04X}"
 
 
+def _coerce_int_cid(value) -> int | None:
+    """Normalize a CID value (``int``, ``"0x01A0"`` hex string, ``None``) to
+    ``int | None``. Fail-closed: malformed inputs resolve to ``None`` so the
+    caller never falls into divert paths with garbage values.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _control_present(controls, cid: int) -> bool:
+    """True when ``cid`` appears in the live REPROG_V4 ``controls`` dump.
+
+    Centralizes the catalog-vs-runtime gating invariant: we never attempt to
+    divert (or otherwise act on) a CID the firmware does not advertise on the
+    current connection.
+    """
+    if not controls:
+        return False
+    for control in controls:
+        if not isinstance(control, dict):
+            continue
+        if _coerce_int_cid(control.get("cid")) == cid:
+            return True
+    return False
+
+
 # ── Listener class ────────────────────────────────────────────────
 
 class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_wheel=None, on_thumbwheel=None,
+                 on_thumb_button_down=None, on_thumb_button_up=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        # Accepted for divert+inject-era callers; native-invert never
+        # sees wheelMovement / thumbwheelEvent notifications.
+        self._on_wheel = on_wheel
+        self._on_thumbwheel = on_thumbwheel
+        # Optional callbacks for devices with a dedicated thumb_button CID
+        # (currently MX Master 4's small HID++ button). Wired after the
+        # gesture divert succeeds, only when `LogiDeviceSpec.thumb_button_cid`
+        # is set AND it is NOT the active gesture CID.
+        self._on_thumb_button_down = on_thumb_button_down
+        self._on_thumb_button_up = on_thumb_button_up
+        # Static extras (mode_shift, dpi_switch). Action ring extras are
+        # added DYNAMICALLY at connect time via `_install_thumb_button_extra`
+        # because the choice depends on which CID `_divert` settled on.
+        self._static_extra_diverts = dict(extra_diverts or {})
         self._extra_diverts = {
             cid: {**info, "held": False}
-            for cid, info in (extra_diverts or {}).items()
+            for cid, info in self._static_extra_diverts.items()
         }
+        self._thumb_button_cid: int | None = None
+        # Per-CID divert acknowledgment: a CID lives in ``_extra_diverts`` from
+        # the moment it is installed, but it only joins this set after the
+        # firmware acknowledges the ``setCidReporting`` call. ``thumb_button_via_hid``
+        # reads off this set so callers never suppress the OS-level BTN_TASK
+        # fallback while the device is still emitting it.
+        self._extra_divert_acks: set[int] = set()
         self._dev       = None          # hid.device()
         self._thread    = None
         self._running   = False
@@ -733,6 +964,11 @@ class HidGestureListener:
         self._held      = False
         self._connected = False         # True while HID++ device is open
         self._rawxy_enabled = False
+        # CIDs requiring button-only divert (0x03) instead of the default
+        # rawXY-enabled divert (0x33); currently the device's thumb_button
+        # CID so it stays usable on the fallback path without freezing
+        # the cursor.
+        self._button_only_cids: set[int] = set()
         self._pending_dpi = None        # set by set_dpi(), applied in loop
         self._dpi_result  = None        # True/False after apply
         self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
@@ -750,6 +986,21 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        # 0x2121 Hi-Res Wheel + 0x2150 Thumbwheel native-invert state.
+        # Lock ordering: outer `_wheel_divert_call_lock` serializes
+        # cross-thread callers, inner `_wheel_divert_lock` protects the
+        # pending/result slot. The event signals listener-loop completion.
+        self._hires_wheel_idx = None
+        self._hires_wheel_multiplier = None
+        self._thumbwheel_idx = None
+        self._thumbwheel_multiplier = None
+        self._wheel_divert_target = (False, False)
+        self._wheel_divert_state = False
+        self._pending_wheel_divert = None
+        self._wheel_divert_event = threading.Event()
+        self._wheel_divert_lock = threading.Lock()
+        self._wheel_divert_call_lock = threading.Lock()
+        self._wheel_divert_result = None
 
     # ── public API ────────────────────────────────────────────────
 
@@ -771,12 +1022,29 @@ class HidGestureListener:
                     "Logitech HID++ devices may not enumerate"
                 )
         self._running = True
+        _register_atexit_listener(self)
         self._thread = threading.Thread(
             target=self._main_loop, daemon=True, name="HidGesture")
         self._thread.start()
         return True
 
     def stop(self):
+        # Best-effort revert to native non-inverted before tearing down, so a
+        # graceful exit leaves the device in firmware default state. We log
+        # failures rather than swallow them: a failed revert means the next
+        # session will see an unexpected divert state and the user needs the
+        # breadcrumb to debug it. We do not propagate -- ``stop`` must always
+        # complete the rest of teardown (close device, join thread).
+        if self._dev is not None and self._wheel_divert_state:
+            try:
+                self._set_native_wheel_invert_vertical(False)
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(f"[HidGesture] stop: vertical invert revert failed: {exc}")
+            try:
+                self._set_native_wheel_invert_horizontal(False)
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(f"[HidGesture] stop: horizontal invert revert failed: {exc}")
+            self._wheel_divert_state = False
         self._running = False
         d = self._dev
         if d:
@@ -860,6 +1128,16 @@ class HidGestureListener:
             features[f"BATTERY ({feat_name})"] = f"index 0x{self._battery_idx:02X}"
         for feature_id, index in sorted(self._wheel_feature_indexes.items()):
             features[f"WHEEL (0x{feature_id:04X})"] = f"index 0x{index:02X}"
+        if self._hires_wheel_idx is not None:
+            features["HIRES_WHEEL_ENHANCED (0x2121) [divert]"] = (
+                f"index 0x{self._hires_wheel_idx:02X} "
+                f"mul={self._hires_wheel_multiplier}"
+            )
+        if self._thumbwheel_idx is not None:
+            features["THUMB_WHEEL (0x2150) [divert]"] = (
+                f"index 0x{self._thumbwheel_idx:02X} "
+                f"divertedRes={self._thumbwheel_multiplier}"
+            )
 
         controls = []
         for c in self._last_controls:
@@ -1063,11 +1341,19 @@ class HidGestureListener:
 
     # ── feature helpers ───────────────────────────────────────────
 
-    def _find_feature(self, feature_id):
-        """Use IRoot (feature 0x0000) to discover a feature index."""
+    def _find_feature(self, feature_id, timeout_ms=2000):
+        """Use IRoot (feature 0x0000) to discover a feature index.
+
+        `timeout_ms` controls how long to wait for the IRoot response. The
+        default of 2000 ms is the safe value for active sessions; during
+        the REPROG_V4 discovery probe in `_try_connect` we use a much
+        tighter timeout (≈400 ms) because a live HID++ device responds in
+        <50 ms and waiting longer just stalls us across non-matching
+        receiver slots and candidate interfaces.
+        """
         hi = (feature_id >> 8) & 0xFF
         lo = feature_id & 0xFF
-        resp = self._request(0x00, 0, [hi, lo, 0x00])
+        resp = self._request(0x00, 0, [hi, lo, 0x00], timeout_ms=timeout_ms)
         if resp:
             _, _, _, _, p = resp
             if p and p[0] != 0:
@@ -1224,64 +1510,188 @@ class HidGestureListener:
         return ordered or list(preferred)
 
     def _divert(self):
-        """Divert the selected gesture control and enable raw XY when supported."""
+        """Divert the selected gesture control. RawXY is requested for any
+        CID not flagged as button-only in `_button_only_cids`.
+
+        Why per-CID? On MX Master 4 the sense panel (0x01A0) is the
+        primary gesture CID and benefits from rawXY (the firmware then
+        delivers swipe motion over the vendor channel and pins the cursor
+        on its own). The small button (0x00C3) is the thumb_button CID and
+        gets diverted button-only as an extra elsewhere -- but if 0x01A0
+        divert is rejected we fall back to 0x00C3 as the gesture CID, and
+        then we want it button-only so the cursor doesn't freeze every
+        time the user clicks the small button. A single button-only flag
+        for the whole listener can't express that."""
         if self._feat_idx is None:
             return False
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
-            resp = self._set_cid_reporting(cid, 0x33)
-            if resp is not None:
-                self._rawxy_enabled = True
-                print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
-                return True
+            button_only = cid in self._button_only_cids
+            if not button_only:
+                resp = self._set_cid_reporting(cid, _DIVERT_RAW_XY)
+                if resp is not None:
+                    self._rawxy_enabled = True
+                    print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
+                    return True
             self._rawxy_enabled = False
-            resp = self._set_cid_reporting(cid, 0x03)
+            resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
             ok = resp is not None
-            print(f"[HidGesture] Divert {_format_cid(cid)}: "
+            mode = "button-only (catalog hint)" if button_only else "button-only fallback"
+            print(f"[HidGesture] Divert {_format_cid(cid)} ({mode}): "
                   f"{'OK' if ok else 'FAILED'}")
             if ok:
                 return True
         self._gesture_cid = DEFAULT_GESTURE_CID
         return False
 
+    def _install_thumb_button_extra(self, device_spec, controls):
+        """Wire ``device_spec.thumb_button_cid`` (when set) as a button-only
+        extra divert so its press/release fires ``_on_thumb_button_down/up``.
+
+        Must run between ``_divert()`` and ``_divert_extras()`` so the entry
+        lands in the same setCidReporting round. Gated against the live
+        REPROG_V4 ``controls`` list -- we never install an extra divert for a
+        CID the firmware has not advertised, otherwise ``setCidReporting``
+        hammers the device for a control that does not exist. Skipped when the
+        CID is already the active gesture CID (fallback path).
+        """
+        if (
+            self._thumb_button_cid is not None
+            and self._thumb_button_cid not in self._static_extra_diverts
+        ):
+            self._extra_diverts.pop(self._thumb_button_cid, None)
+        self._thumb_button_cid = None
+        cid = _coerce_int_cid(getattr(device_spec, "thumb_button_cid", None))
+        if cid is None:
+            return
+        if cid == self._gesture_cid:
+            print(
+                f"[HidGesture] Skip thumb_button extra {_format_cid(cid)} "
+                f"-- it's already the active gesture CID (fallback path)"
+            )
+            return
+        if not _control_present(controls, cid):
+            print(
+                f"[HidGesture] Skip thumb_button extra {_format_cid(cid)} "
+                f"-- firmware does not advertise this CID in REPROG_V4"
+            )
+            return
+        self._thumb_button_cid = cid
+        self._extra_diverts[cid] = {
+            "on_down": self._fire_thumb_button_down,
+            "on_up": self._fire_thumb_button_up,
+            "held": False,
+        }
+
+    def _fire_thumb_button_down(self):
+        cb = self._on_thumb_button_down
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:
+            print(f"[HidGesture] thumb_button down callback error: {exc}")
+
+    def _fire_thumb_button_up(self):
+        cb = self._on_thumb_button_up
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:
+            print(f"[HidGesture] thumb_button up callback error: {exc}")
+
+    @property
+    def thumb_button_via_hid(self) -> bool:
+        """True when the listener is delivering thumb_button events from a
+        HID++ extra divert (rather than the OS-level btn=6 fallback).
+
+        Reads off ``_extra_divert_acks``, not ``_thumb_button_cid``, so the
+        property only flips after ``setCidReporting`` is acknowledged. Without
+        this gate the hook layer would suppress the OS BTN_TASK path while the
+        device is still emitting it, eating the press entirely.
+        """
+        cid = self._thumb_button_cid
+        return cid is not None and cid in self._extra_divert_acks
+
     def _divert_extras(self):
-        """Divert additional CIDs (e.g. mode shift) without raw XY."""
+        """Divert additional CIDs (e.g. mode shift) without raw XY.
+
+        Tracks per-CID acknowledgment in ``_extra_divert_acks`` so callers
+        know which extras the firmware actually took. CIDs that fail the
+        setCidReporting call are removed from ``_extra_diverts`` so the loop
+        does not later route OS events through a divert handler the firmware
+        never installed.
+        """
         if self._feat_idx is None:
             return
-        for cid, info in self._extra_diverts.items():
-            resp = self._set_cid_reporting(cid, 0x03)
+        self._extra_divert_acks.clear()
+        failed: list[int] = []
+        for cid in list(self._extra_diverts.keys()):
+            resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
             ok = resp is not None
             print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
                   f"{'OK' if ok else 'FAILED'}")
+            if ok:
+                self._extra_divert_acks.add(cid)
+            else:
+                failed.append(cid)
+        for cid in failed:
+            if cid == self._thumb_button_cid:
+                self._thumb_button_cid = None
+            self._extra_diverts.pop(cid, None)
 
     def _undivert(self):
-        """Restore default button behaviour (best-effort)."""
+        """Restore default button behaviour (best-effort).
+
+        Failures during teardown are logged at debug level rather than
+        silently swallowed -- a stuck divert state is a user-visible bug
+        and the next session needs the breadcrumb to diagnose it. We
+        intentionally never raise here because callers (disconnect path,
+        atexit) must complete the rest of teardown regardless.
+        """
         if self._feat_idx is None or self._dev is None:
             return
-        # Undivert extra CIDs
         for cid in self._extra_diverts:
             hi = (cid >> 8) & 0xFF
             lo = cid & 0xFF
             try:
                 self._tx(LONG_ID, self._feat_idx, 3,
-                         [hi, lo, 0x02, 0x00, 0x00])
-            except Exception:
-                pass
-        # Undivert gesture CID
+                         [hi, lo, _UNDIVERT_BUTTON, 0x00, 0x00])
+            except Exception as exc:  # noqa: BLE001 - teardown must complete
+                print(
+                    f"[HidGesture] _undivert: extra {_format_cid(cid)} "
+                    f"revert failed: {exc}"
+                )
         hi = (self._gesture_cid >> 8) & 0xFF
         lo = self._gesture_cid & 0xFF
-        flags = 0x22 if self._rawxy_enabled else 0x02
+        flags = _UNDIVERT_RAW_XY if self._rawxy_enabled else _UNDIVERT_BUTTON
         try:
             self._tx(LONG_ID, self._feat_idx, 3,
                      [hi, lo, flags, 0x00, 0x00])
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(
+                f"[HidGesture] _undivert: gesture {_format_cid(self._gesture_cid)} "
+                f"revert failed: {exc}"
+            )
         self._rawxy_enabled = False
+        # Best-effort revert; mid-disconnect failures are harmless because
+        # firmware auto-reverts on power cycle anyway, but we still log so
+        # a stuck divert across a normal disconnect is observable.
+        try:
+            self._set_native_wheel_invert_vertical(False)
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(f"[HidGesture] _undivert: vertical invert revert failed: {exc}")
+        try:
+            self._set_native_wheel_invert_horizontal(False)
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(f"[HidGesture] _undivert: horizontal invert revert failed: {exc}")
+        self._wheel_divert_state = False
 
     # ── DPI control ───────────────────────────────────────────────
 
     def set_dpi(self, dpi_value):
-        """Queue a DPI change — will be applied on the listener thread.
+        """Queue a DPI change -- will be applied on the listener thread.
         Can be called from any thread.  Returns True on success."""
         dpi = clamp_dpi(dpi_value, self._connected_device_info)
         self._dpi_result = None
@@ -1300,7 +1710,7 @@ class HidGestureListener:
         if dpi is None:
             return
         if self._dpi_idx is None or self._dev is None:
-            print("[HidGesture] Cannot set DPI — not connected")
+            print("[HidGesture] Cannot set DPI -- not connected")
             self._dpi_result = False
             self._pending_dpi = None
             return
@@ -1320,7 +1730,7 @@ class HidGestureListener:
         self._pending_dpi = None
 
     def read_dpi(self):
-        """Queue a DPI read — will be applied on the listener thread.
+        """Queue a DPI read -- will be applied on the listener thread.
         Can be called from any thread.  Returns the DPI value or None."""
         self._dpi_result = None
         self._pending_dpi = "read"  # special sentinel
@@ -1364,6 +1774,20 @@ class HidGestureListener:
     def smart_shift_supported(self):
         return self._smart_shift_idx is not None
 
+    @property
+    def hires_wheel_supported(self):
+        return self._hires_wheel_idx is not None
+
+    @property
+    def thumbwheel_supported(self):
+        return self._thumbwheel_idx is not None
+
+    @property
+    def wheel_divert_active(self):
+        """True iff the device acknowledged the divert ON request on the
+        current connection. Mirrors the listener-thread internal state."""
+        return bool(self._wheel_divert_state)
+
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
         """Queue a Smart Shift settings change.
         mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
@@ -1393,7 +1817,7 @@ class HidGestureListener:
         if pending is None:
             return
         if self._smart_shift_idx is None or self._dev is None:
-            print("[HidGesture] Cannot set Smart Shift — not connected")
+            print("[HidGesture] Cannot set Smart Shift -- not connected")
             self._finish_pending_smart_shift(None if pending == "read" else False)
             return
         if pending == "read":
@@ -1486,7 +1910,7 @@ class HidGestureListener:
             mode_byte = p[0] if p else 0
             auto_disengage = p[1] if len(p) > 1 else 0
             print(f"[HidGesture] Smart Shift raw: mode=0x{mode_byte:02X} auto_disengage=0x{auto_disengage:02X}")
-            # Freespin mode means fixed free-spin — SmartShift auto-switching is always OFF.
+            # Freespin mode means fixed free-spin -- SmartShift auto-switching is always OFF.
             # The device preserves the auto_disengage byte in freespin state, so we must
             # not use it to infer enabled=True; only ratchet mode can have SmartShift active.
             # For ratchet: auto_disengage 1-50 → SmartShift active; 0 or ≥51 → disabled.
@@ -1503,6 +1927,161 @@ class HidGestureListener:
         else:
             print("[HidGesture] Smart Shift read FAILED")
             self._finish_pending_smart_shift(None)
+
+    # 0x2121 setWheelMode (fn 2) bitfield: bit0=target (0=HID, 1=divert),
+    # bit1=resolution (0=low, 1=hi-res), bit2=invert. Mouser keeps target
+    # and resolution at 0 and only drives bit2 -- hi-res emits fractional
+    # events per detent which renders as jumpy scroll on apps without
+    # trackpad-class smoothing.
+    _WHEEL_MODE_BIT_TARGET     = 0x01
+    _WHEEL_MODE_BIT_RESOLUTION = 0x02
+    _WHEEL_MODE_BIT_INVERT     = 0x04
+    # 0x2150 setThumbwheelReporting (fn 2): [reportingMode, invertDirection].
+    _THUMBWHEEL_SET_REPORTING_FN = 2
+
+    def _set_native_wheel_invert_vertical(self, invert: bool) -> bool:
+        """Read-modify-write the 0x2121 wheel mode to native low-res with
+        the invert bit reflecting `invert`. Listener-thread only. Returns
+        True when the device acknowledges the write, or when the feature
+        is absent AND no inversion was requested -- claiming success for
+        an invert the firmware cannot perform would make the engine
+        suppress the OS-layer fallback and lose the inversion entirely."""
+        if self._hires_wheel_idx is None:
+            return not invert
+        if self._dev is None:
+            return False
+        target_mode = self._WHEEL_MODE_BIT_INVERT if invert else 0x00
+        current_resp = self._request(self._hires_wheel_idx, 1, [])
+        if current_resp is not None:
+            _, _, _, _, params = current_resp
+            current_mode = int(params[0]) & 0xFF if params else None
+            if current_mode == target_mode:
+                return True
+        resp = self._request(self._hires_wheel_idx, 2, [target_mode])
+        return resp is not None
+
+    def _set_native_wheel_invert_horizontal(self, invert: bool) -> bool:
+        """Set firmware invert on the thumbwheel (0x2150 fn 2) without
+        diverting. Listener-thread only. Absent feature counts as success
+        only when no inversion was requested (see vertical twin)."""
+        if self._thumbwheel_idx is None:
+            return not invert
+        if self._dev is None:
+            return False
+        invert_byte = 0x01 if invert else 0x00
+        resp = self._request(
+            self._thumbwheel_idx,
+            self._THUMBWHEEL_SET_REPORTING_FN,
+            [0x00, invert_byte],
+        )
+        return resp is not None
+
+    def _apply_pending_native_wheel_invert(self) -> None:
+        """Drain the pending native-invert slot on the listener thread.
+        Mirrors the Smart-Shift pattern: on IOError the main loop's
+        cleanup calls ``_abort_pending_wheel_divert`` which wakes the
+        waiter, so callers never strand."""
+        with self._wheel_divert_lock:
+            target = self._pending_wheel_divert
+        if target is None:
+            return
+        invert_v, invert_h = target
+        no_features = (
+            self._hires_wheel_idx is None and self._thumbwheel_idx is None
+        )
+        if no_features:
+            ok_v = ok_h = False
+            success = False
+        else:
+            ok_v = self._set_native_wheel_invert_vertical(invert_v)
+            ok_h = self._set_native_wheel_invert_horizontal(invert_h)
+            success = bool(ok_v and ok_h)
+            if not success:
+                # The engine treats failure as "fall back to OS-layer
+                # inversion on BOTH axes", so any axis the firmware did
+                # apply must be reverted or scrolling double-inverts.
+                if ok_v and invert_v:
+                    self._set_native_wheel_invert_vertical(False)
+                if ok_h and invert_h:
+                    self._set_native_wheel_invert_horizontal(False)
+        self._wheel_divert_state = bool(success)
+        with self._wheel_divert_lock:
+            self._wheel_divert_result = success
+            self._pending_wheel_divert = None
+            self._wheel_divert_event.set()
+        if no_features:
+            print(
+                "[HidGesture] Wheel native invert skipped -- "
+                "neither 0x2121 nor 0x2150 available"
+            )
+        else:
+            print(
+                f"[HidGesture] Wheel native invert v={invert_v} h={invert_h} "
+                f"vertical={'OK' if ok_v else 'FAIL'} "
+                f"thumb={'OK' if ok_h else 'FAIL'}"
+            )
+
+    def _abort_pending_wheel_divert(self) -> None:
+        """Wake any waiter with result=False when the connection drops
+        mid-request, and clear stale post-success state so the next
+        request starts cleanly. Mirrors `_abort_pending_smart_shift`."""
+        with self._wheel_divert_lock:
+            had_waiter = self._pending_wheel_divert is not None
+            self._wheel_divert_result = False if had_waiter else None
+            self._pending_wheel_divert = None
+            if had_waiter:
+                self._wheel_divert_event.set()
+
+    def set_wheel_divert_active_flags(self, vertical: bool, thumb: bool) -> None:
+        """Update the published ConnectedDeviceInfo so external readers
+        see which axes are currently inverted at the firmware level.
+        ConnectedDeviceInfo is frozen, so this swaps the reference via
+        ``dataclasses.replace`` for thread safety."""
+        info = self._connected_device_info
+        if info is None:
+            return
+        try:
+            self._connected_device_info = _dataclass_replace(
+                info,
+                hires_wheel_active=bool(vertical),
+                thumbwheel_active=bool(thumb),
+            )
+        except Exception as exc:
+            print(f"[HidGesture] set_wheel_divert_active_flags error: {exc}")
+
+    def request_wheel_native_invert(
+        self,
+        invert_vertical: bool,
+        invert_horizontal: bool,
+        timeout_s: float = 3.0,
+    ) -> bool:
+        """Cross-thread API. Ask the device to flip the wheel sign at
+        the firmware level (no divert). Blocks until the listener
+        applies the write or ``timeout_s`` elapses. ``_wheel_divert_target``
+        is cached so reconnect replays the same intent.
+
+        The reconnect-replay cache (``_wheel_divert_target``) is mutated
+        *inside* ``_wheel_divert_call_lock`` so two concurrent callers cannot
+        interleave updates: whichever caller wins the lock is the one whose
+        intent persists across reconnect.
+        """
+        target = (bool(invert_vertical), bool(invert_horizontal))
+        with self._wheel_divert_call_lock:
+            self._wheel_divert_target = target
+            with self._wheel_divert_lock:
+                self._wheel_divert_result = None
+                self._pending_wheel_divert = target
+                self._wheel_divert_event.clear()
+            if not self._wheel_divert_event.wait(timeout_s):
+                with self._wheel_divert_lock:
+                    if self._pending_wheel_divert is not None:
+                        self._wheel_divert_result = False
+                        self._pending_wheel_divert = None
+                        self._wheel_divert_event.set()
+                print("[HidGesture] Wheel native-invert request timed out")
+                return False
+            with self._wheel_divert_lock:
+                return bool(self._wheel_divert_result)
 
     def read_battery(self):
         """Queue a battery read and wait for the listener thread result."""
@@ -1559,6 +2138,14 @@ class HidGestureListener:
     @staticmethod
     def _decode_s16(hi, lo):
         value = (hi << 8) | lo
+        if value & 0x8000:
+            value -= 0x10000
+        return value
+
+    @staticmethod
+    def _decode_s16_be(hi, lo):
+        """Big-endian signed-16 decode for 0x2121 / 0x2150 notifications."""
+        value = ((hi & 0xFF) << 8) | (lo & 0xFF)
         if value & 0x8000:
             value -= 0x10000
         return value
@@ -1671,21 +2258,50 @@ class HidGestureListener:
     # ── connect / main loop ───────────────────────────────────────
 
     def _try_connect(self):
-        """Open the vendor HID collection, discover features, divert."""
+        """Open the vendor HID collection, discover features, divert.
+
+        Warm path: a cached ``last_device.json`` biases candidate and
+        dev_idx ordering so the previously-working interface is probed
+        first with a tight 400 ms REPROG_V4 timeout. Cold path falls
+        back to the default direct-then-receiver scan with the same
+        per-slot timeout. On divert success the working tuple is
+        persisted so the next launch hits the warm path."""
         infos = self._vendor_hid_infos()
         if not infos:
             return False
 
-        # Try direct devices (Bluetooth) before USB receivers, which
-        # require scanning multiple slots with slow timeouts.
-        def _direct_device_first(info):
+        cached = _load_last_device_cache()
+        cached_candidate = (
+            cached.get("candidate") if isinstance(cached, dict) else None
+        )
+        cached_device = (
+            cached.get("device") if isinstance(cached, dict) else None
+        )
+
+        def _default_priority(info):
             name = (info.get("product_string") or "").lower()
             return (1 if "receiver" in name else 0, name)
 
-        infos.sort(key=_direct_device_first)
+        # Negate the score so higher match (cached interface) sorts first.
+        def _priority(info):
+            score = (
+                _candidate_match_score(info, cached_candidate)
+                if cached_candidate is not None else 0
+            )
+            return (-score,) + _default_priority(info)
+
+        infos.sort(key=_priority)
 
         print(f"[HidGesture] Backend preference: {_BACKEND_PREFERENCE}")
         print(f"[HidGesture] Candidate HID interfaces: {len(infos)}")
+        if cached_candidate:
+            print(
+                f"[HidGesture] Cached last-known device: "
+                f"PID=0x{int(cached_candidate.get('pid', 0)):04X} "
+                f"devIdx=0x{int((cached_device or {}).get('dev_idx', 0)):02X} "
+                f"name='{(cached_device or {}).get('name', '?')}' "
+                f"(warm-path probe will run first)"
+            )
         for info in infos:
             pid = int(info.get("product_id", 0) or 0)
             up = int(info.get("usage_page", 0) or 0)
@@ -1704,6 +2320,8 @@ class HidGestureListener:
             usage = info.get("usage", 0)
             product = info.get("product_string")
             source = info.get("source", "unknown")
+            # Snapshot before inner branches rebind `info` to HID++ responses.
+            candidate_signature = _candidate_signature(info)
             device_spec = resolve_device(product_id=pid, product_name=product)
             self._feat_idx = None
             self._dpi_idx = None
@@ -1715,7 +2333,18 @@ class HidGestureListener:
             self._gesture_candidates = list(
                 getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
             )
+            # thumb_button CID must be diverted button-only (no rawXY) so
+            # firmware doesn't suppress OS cursor motion while it's held.
+            self._button_only_cids = set()
+            ar_cid = getattr(device_spec, "thumb_button_cid", None)
+            if ar_cid is not None:
+                self._button_only_cids.add(int(ar_cid))
             self._rawxy_enabled = False
+            self._hires_wheel_idx = None
+            self._hires_wheel_multiplier = None
+            self._thumbwheel_idx = None
+            self._thumbwheel_multiplier = None
+            self._wheel_divert_state = False
             opened_transport = None
             opened_up = int(up or 0)
             opened_usage = int(usage or 0)
@@ -1782,12 +2411,31 @@ class HidGestureListener:
             if self._dev is None:
                 continue
 
-            # Try Bluetooth direct (0xFF) first, then Bolt receiver slots
+            # Cached dev_idx first, then Bluetooth direct (0xFF), then
+            # receiver slots 1..6. 400 ms per-slot discovery timeout --
+            # a live HID++ device replies in <50 ms.
+            default_idx_order = (BT_DEV_IDX, 1, 2, 3, 4, 5, 6)
+            cached_dev_idx = None
+            if (
+                cached_candidate is not None
+                and cached_device is not None
+                and _candidate_matches_cache(info, cached_candidate)
+            ):
+                try:
+                    cached_dev_idx = int(cached_device.get("dev_idx"))
+                except (TypeError, ValueError):
+                    cached_dev_idx = None
+            if cached_dev_idx is not None:
+                idx_order = (cached_dev_idx,) + tuple(
+                    i for i in default_idx_order if i != cached_dev_idx
+                )
+            else:
+                idx_order = default_idx_order
             reprog_found = False
             hidpp_name = None
-            for idx in (0xFF, 1, 2, 3, 4, 5, 6):
+            for idx in idx_order:
                 self._dev_idx = idx
-                fi = self._find_feature(FEAT_REPROG_V4)
+                fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=400)
                 if fi is not None:
                     reprog_found = True
                     self._feat_idx = fi
@@ -1805,6 +2453,12 @@ class HidGestureListener:
                             getattr(device_spec, "gesture_cids", ())
                             or DEFAULT_GESTURE_CIDS
                         )
+                        # Re-evaluate hints when HID++ name resolves a more
+                        # specific spec than the receiver PID alone.
+                        self._button_only_cids = set()
+                        ar_cid = getattr(device_spec, "thumb_button_cid", None)
+                        if ar_cid is not None:
+                            self._button_only_cids.add(int(ar_cid))
                     controls = self._discover_reprog_controls()
                     self._last_controls = controls
                     self._gesture_candidates = self._choose_gesture_candidates(
@@ -1818,7 +2472,7 @@ class HidGestureListener:
                     if dpi_fi:
                         self._dpi_idx = dpi_fi
                         print(f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}")
-                    # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
+                    # Prefer 0x2111 (Enhanced) -- used by MX Master 3/3S/4 and Logi Options+.
                     # Fall back to 0x2110 (basic) for older devices.
                     ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
                     if ss_fi:
@@ -1855,7 +2509,40 @@ class HidGestureListener:
                             self._battery_idx = batt_fi
                             self._battery_feature_id = FEAT_BATTERY_STATUS
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
+                    hw_fi = self._find_feature(FEAT_HIRES_WHEEL_ENHANCED)
+                    if hw_fi:
+                        self._hires_wheel_idx = hw_fi
+                        cap = self._request(hw_fi, 0, [])
+                        if cap:
+                            _, _, _, _, p = cap
+                            mul = p[0] if p else None
+                            self._hires_wheel_multiplier = (
+                                int(mul) if mul not in (None, 0) else None
+                            )
+                        print(
+                            f"[HidGesture] Found HIRES_WHEEL_ENHANCED @0x{hw_fi:02X} "
+                            f"mul={self._hires_wheel_multiplier}"
+                        )
+                    tw_fi = self._find_feature(FEAT_THUMB_WHEEL)
+                    if tw_fi:
+                        self._thumbwheel_idx = tw_fi
+                        info = self._request(tw_fi, 0, [])
+                        if info:
+                            _, _, _, _, p = info
+                            if len(p) >= 4:
+                                self._thumbwheel_multiplier = (
+                                    (p[2] << 8) | p[3]
+                                ) or None
+                        print(
+                            f"[HidGesture] Found THUMB_WHEEL @0x{tw_fi:02X} "
+                            f"divertedRes={self._thumbwheel_multiplier}"
+                        )
                     if self._divert():
+                        # Install BEFORE _divert_extras so it lands in the
+                        # same setCidReporting round. Pass the live REPROG_V4
+                        # controls so the helper can refuse to divert CIDs the
+                        # firmware does not advertise.
+                        self._install_thumb_button_extra(device_spec, controls)
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
                             actual_transport = "Bluetooth"
@@ -1881,9 +2568,39 @@ class HidGestureListener:
                                 "hid_module": _HID_MODULE_NAME or "",
                                 "device_path": opened_path,
                             },
+                            has_hires_wheel=bool(self._hires_wheel_idx is not None),
+                            has_thumbwheel=bool(self._thumbwheel_idx is not None),
+                            hires_wheel_active=False,
+                            thumbwheel_active=False,
+                            thumb_button_via_hid=self.thumb_button_via_hid,
                         )
+                        # Replay the last desired native-invert state on
+                        # reconnect; listener loop drains this next iter.
+                        if (
+                            any(self._wheel_divert_target)
+                            and (
+                                self._hires_wheel_idx is not None
+                                or self._thumbwheel_idx is not None
+                            )
+                        ):
+                            with self._wheel_divert_lock:
+                                self._wheel_divert_result = None
+                                self._pending_wheel_divert = self._wheel_divert_target
+                                self._wheel_divert_event.clear()
+                        try:
+                            _save_last_device_cache(
+                                candidate=candidate_signature,
+                                device={
+                                    "name": hidpp_name or product,
+                                    "dev_idx": int(idx),
+                                    "transport": actual_transport,
+                                    "feat_idx_reprog": int(fi),
+                                },
+                            )
+                        except Exception as exc:
+                            print(f"[HidGesture] Cache write skipped: {exc}")
                         return True
-                    continue     # divert failed — try next receiver slot
+                    continue     # divert failed -- try next receiver slot
             if not reprog_found:
                 print(
                     "[HidGesture] Opened candidate but REPROG_V4 was not found "
@@ -1892,7 +2609,7 @@ class HidGestureListener:
                     f"transport={opened_transport or '-'} source={source}"
                 )
 
-            # Couldn't use this interface — close and try next
+            # Couldn't use this interface -- close and try next
             try:
                 self._dev.close()
             except Exception:
@@ -1937,8 +2654,8 @@ class HidGestureListener:
                     # full reconnect so button diverts are re-applied.
                     if self._consecutive_request_timeouts >= _CONSECUTIVE_TIMEOUT_RECONNECT:
                         print(f"[HidGesture] {self._consecutive_request_timeouts} consecutive "
-                              f"request timeouts — forcing reconnect")
-                        raise IOError("consecutive request timeouts — device likely asleep")
+                              f"request timeouts -- forcing reconnect")
+                        raise IOError("consecutive request timeouts -- device likely asleep")
                     # Apply any queued DPI command
                     if self._pending_dpi is not None:
                         if self._pending_dpi == "read":
@@ -1947,6 +2664,8 @@ class HidGestureListener:
                             self._apply_pending_dpi()
                     if self._pending_smart_shift is not None:
                         self._apply_pending_smart_shift()
+                    if self._pending_wheel_divert is not None:
+                        self._apply_pending_native_wheel_invert()
                     if self._pending_battery is not None:
                         self._apply_pending_read_battery()
                     raw = self._rx(1000)
@@ -1980,6 +2699,12 @@ class HidGestureListener:
             self._pending_dpi = None
             self._dpi_result = None
             self._abort_pending_smart_shift()
+            self._abort_pending_wheel_divert()
+            self._hires_wheel_idx = None
+            self._hires_wheel_multiplier = None
+            self._thumbwheel_idx = None
+            self._thumbwheel_multiplier = None
+            self._wheel_divert_state = False
             self._last_logged_battery = None
             self._consecutive_request_timeouts = 0
             if self._held:

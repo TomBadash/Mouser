@@ -13,6 +13,7 @@ except Exception:
 from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
 
 
+
 class BaseMouseHook:
     def __init__(self):
         self._callbacks = {}
@@ -44,6 +45,10 @@ class BaseMouseHook:
         self._gesture_input_source = None
         self._connected_device = None
         self._dispatch_queue = None
+        # True when the device is inverting at the firmware level
+        # (HID++ 0x2121 / 0x2150); the OS-layer path must skip its own
+        # flip to avoid cancelling out. Engine flips after request acks.
+        self.wheel_native_invert_active = False
 
     def _init_dispatch_queue(self, maxsize=0):
         """Initialize dispatch queue storage for subclasses with event threads."""
@@ -123,6 +128,82 @@ class BaseMouseHook:
             connected_device=self._connected_device,
         )
 
+    # MX Master 4's Sense Panel exposes itself as CID 0x01A0
+    # (raw-XY divertable) AND as OS btn=6 / BTN_TASK.
+    SENSE_PANEL_CID = 0x01A0
+
+    def _should_intercept_events(self) -> bool:
+        """True only when the platform hook should block, remap, or dispatch
+        OS-level mouse events to the engine.
+
+        Mouser exists to remap a Logitech mouse's buttons. The global event
+        taps on macOS (CGEventTap) and Windows (WH_MOUSE_LL) see events
+        from every input device the OS knows about -- when no Logitech is
+        currently bound to this host (KVM switched to another machine,
+        the device is mid-reconnect after sleep, or the user simply has
+        not plugged one in) those hooks must stay completely out of the
+        way, otherwise xbutton clicks and scroll events from a trackpad
+        or generic USB mouse get swallowed and routed through Mouser's
+        remap pipeline.
+
+        Linux's evdev hook only attaches once a Logitech source device
+        has been resolved, so it is naturally gated -- but consult this
+        helper defensively before dispatching there as well so the
+        contract stays platform-uniform.
+        """
+        return self._connected_device is not None
+
+    def _apply_vscroll_invert_fallback(self) -> bool:
+        """True only when the OS-layer vertical-scroll inversion fallback
+        should fire on the current event.
+
+        The user's wheel-invert toggle is meant to flip *Logitech* scroll --
+        firmware-first on HID++-capable devices, OS-layer event-tap on the
+        rest. When no Logitech is currently connected we have no source-of-
+        truth that the event came from a device the toggle applies to, so the
+        fallback must stand down rather than invert every trackpad / generic
+        USB mouse scroll the OS forwards through us. The "no Logitech bound"
+        gate is delegated to :meth:`_should_intercept_events` so this fallback
+        and the platform hooks' top-level early-return share one source of
+        truth.
+        """
+        if not self.invert_vscroll:
+            return False
+        if self.wheel_native_invert_active:
+            return False
+        return self._should_intercept_events()
+
+    def _apply_hscroll_invert_fallback(self) -> bool:
+        """Horizontal twin of :meth:`_apply_vscroll_invert_fallback`."""
+        if not self.invert_hscroll:
+            return False
+        if self.wheel_native_invert_active:
+            return False
+        return self._should_intercept_events()
+
+    @property
+    def _thumb_button_via_hid(self) -> bool:
+        """True when thumb_button presses arrive over the HID++ vendor
+        channel (via the thumb_button extra divert); platform hooks
+        swallow any leaked btn=6 / BTN_TASK instead of double-dispatching."""
+        device = self._connected_device
+        return bool(device is not None and getattr(
+            device, "thumb_button_via_hid", False
+        ))
+
+    @property
+    def _gesture_via_sense_panel(self) -> bool:
+        """True only on the OS-level fallback path: catalog declares
+        ``gesture_via_sense_panel=True`` AND the listener diverted
+        something other than 0x01A0 as the gesture CID."""
+        device = self._connected_device
+        if device is None or not getattr(
+            device, "gesture_via_sense_panel", False
+        ):
+            return False
+        active = getattr(device, "active_gesture_cid", None)
+        return active != self.SENSE_PANEL_CID
+
     def dump_device_info(self):
         hg = getattr(self, "_hid_gesture", None)
         if hg and hasattr(hg, "dump_device_info"):
@@ -138,8 +219,11 @@ class BaseMouseHook:
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(
+                    f"[MouseHook] connection_change_cb raised on "
+                    f"{state.lower()}: {exc!r}"
+                )
 
     def set_debug_callback(self, callback):
         self._debug_callback = callback
@@ -154,22 +238,24 @@ class BaseMouseHook:
         if self.debug_mode and self._debug_callback:
             try:
                 self._debug_callback(message)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                # ``_emit_debug`` is itself the diagnostic channel, so the
+                # failure goes straight to print() rather than recursing.
+                print(f"[MouseHook] debug_callback raised: {exc!r}")
 
     def _emit_status(self, message):
         if self._status_callback:
             try:
                 self._status_callback(message)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(f"[MouseHook] status_callback raised: {exc!r}")
 
     def _emit_gesture_event(self, event):
         if self.debug_mode and self._gesture_callback:
             try:
                 self._gesture_callback(event)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - callback boundary
+                print(f"[MouseHook] gesture_callback raised: {exc!r}")
 
     def _dispatch(self, event):
         callbacks = self._callbacks.get(event.event_type, [])
@@ -273,11 +359,35 @@ class BaseMouseHook:
             on_connect=self._on_hid_connect,
             on_disconnect=self._on_hid_disconnect,
             extra_diverts=self._build_extra_diverts(),
+            on_thumb_button_down=self._on_hid_thumb_button_down,
+            on_thumb_button_up=self._on_hid_thumb_button_up,
         )
         self._hid_gesture = listener
         if not listener.start():
             self._hid_gesture = None
         return self._hid_gesture
+
+    def _on_hid_thumb_button_down(self):
+        """Dispatch THUMB_BUTTON_DOWN from a HID++ extra divert."""
+        self._emit_debug("HID thumb_button button down")
+        try:
+            from core.mouse_hook_types import MouseEvent
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_DOWN))
+        except Exception as exc:
+            print(f"[MouseHook] thumb_button down dispatch error: {exc}")
+
+    def _on_hid_thumb_button_up(self):
+        self._emit_debug("HID thumb_button button up")
+        try:
+            from core.mouse_hook_types import MouseEvent
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_UP))
+        except Exception as exc:
+            print(f"[MouseHook] thumb_button up dispatch error: {exc}")
+
+    def configure_wheel_multipliers(self, vertical: int, horizontal: int) -> None:
+        """No-op kept for divert+inject-era callers; native invert never
+        injects scroll so multipliers are unused."""
+        del vertical, horizontal
 
     def _stop_hid_listener(self):
         if self._hid_gesture:

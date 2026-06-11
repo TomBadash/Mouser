@@ -1,5 +1,5 @@
 """
-Configuration manager — loads/saves button mappings to a JSON file.
+Configuration manager -- loads/saves button mappings to a JSON file.
 Supports per-application profiles (for future use).
 """
 
@@ -29,6 +29,7 @@ BUTTON_NAMES = {
     "gesture":       "Gesture button",
     "xbutton1":      "Back button",
     "xbutton2":      "Forward button",
+    "thumb_button":   "Thumb button",
     "hscroll_left":  "Horizontal scroll left",
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
@@ -50,6 +51,53 @@ PROFILE_BUTTON_NAMES = {
     "gesture_down":  "Gesture swipe down",
 }
 
+# Sealed set of legal values for the ``settings.wheel_divert`` kill-switch.
+# Treat this like a stringly-named enum: every engine read goes through
+# :func:`coerce_wheel_divert_setting` so typos in the user's config file
+# never silently flip into one of the live branches.
+WHEEL_DIVERT_AUTO = "auto"
+WHEEL_DIVERT_OFF = "off"
+WHEEL_DIVERT_VALID_VALUES: frozenset[str] = frozenset(
+    (WHEEL_DIVERT_AUTO, WHEEL_DIVERT_OFF)
+)
+WHEEL_DIVERT_DEFAULT = WHEEL_DIVERT_AUTO
+
+_WHEEL_DIVERT_WARNED_VALUES: set[str] = set()
+
+
+def coerce_wheel_divert_setting(value: object) -> str:
+    """Normalize an arbitrary value into the sealed ``wheel_divert`` set.
+
+    Unknown values resolve to :data:`WHEEL_DIVERT_DEFAULT` and log a one-shot
+    warning per distinct typo so the user gets a single, actionable nudge
+    instead of a per-event flood. Type-narrows to ``str`` so call sites can
+    compare against the named constants without `is None` or `isinstance`
+    guards.
+    """
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in WHEEL_DIVERT_VALID_VALUES:
+            return normalized
+        key = normalized or "<empty>"
+        if key not in _WHEEL_DIVERT_WARNED_VALUES:
+            _WHEEL_DIVERT_WARNED_VALUES.add(key)
+            print(
+                f"[Config] Unknown settings.wheel_divert={value!r}; "
+                f"falling back to {WHEEL_DIVERT_DEFAULT!r}. "
+                f"Valid values: {sorted(WHEEL_DIVERT_VALID_VALUES)}."
+            )
+        return WHEEL_DIVERT_DEFAULT
+    if value is not None:
+        marker = type(value).__name__
+        if marker not in _WHEEL_DIVERT_WARNED_VALUES:
+            _WHEEL_DIVERT_WARNED_VALUES.add(marker)
+            print(
+                f"[Config] settings.wheel_divert is not a string "
+                f"(got {type(value).__name__}); falling back to "
+                f"{WHEEL_DIVERT_DEFAULT!r}."
+            )
+    return WHEEL_DIVERT_DEFAULT
+
 # Maps config button keys to the MouseEvent types they correspond to
 BUTTON_TO_EVENTS = {
     "middle":        ("middle_down", "middle_up"),
@@ -60,6 +108,7 @@ BUTTON_TO_EVENTS = {
     "gesture_down":  ("gesture_swipe_down",),
     "xbutton1":      ("xbutton1_down", "xbutton1_up"),
     "xbutton2":      ("xbutton2_down", "xbutton2_up"),
+    "thumb_button":   ("thumb_button_down", "thumb_button_up"),
     "hscroll_left":  ("hscroll_left",),
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
@@ -67,7 +116,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 11,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -82,6 +131,7 @@ DEFAULT_CONFIG = {
                 "gesture_down": "none",
                 "xbutton1": "alt_tab",
                 "xbutton2": "alt_tab",
+                "thumb_button": "none",
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
@@ -110,6 +160,11 @@ DEFAULT_CONFIG = {
         "screenshot_directory": "",
         "check_for_updates": True,
         "update_check_state": {},
+        # HID++ wheel divert kill-switch:
+        #   "auto" → enable on capable devices (MX Master family).
+        #   "off"  → never divert; force OS-layer inversion fallback.
+        # Sealed set; ``coerce_wheel_divert_setting`` normalizes user typos.
+        "wheel_divert": WHEEL_DIVERT_DEFAULT,
     },
 }
 
@@ -330,6 +385,24 @@ def _migrate(cfg):
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
 
+    if version < 10:
+        # v10: HID++ wheel divert kill-switch. Default "auto" enables divert
+        # on capable devices (MX Master family). Existing installs keep
+        # working unchanged when the device exposes 0x2121 / 0x2150.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("wheel_divert", WHEEL_DIVERT_DEFAULT)
+        cfg["version"] = 10
+
+    if version < 11:
+        # v11: MX Master 4 Thumb button (the small button on the front face,
+        # CID 0x00c3 in HID++). Existing profiles get "thumb_button": "none"
+        # so users opt in by mapping it in the UI. Devices without this
+        # button simply ignore the entry.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            mappings.setdefault("thumb_button", "none")
+        cfg["version"] = 11
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -339,6 +412,9 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"]["wheel_divert"] = coerce_wheel_divert_setting(
+        cfg["settings"].get("wheel_divert", WHEEL_DIVERT_DEFAULT)
+    )
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():
