@@ -58,8 +58,12 @@ _t2 = _time.perf_counter()
 # Ensure PySide6 QML plugins are found
 import PySide6
 _pyside_dir = os.path.dirname(PySide6.__file__)
-os.environ.setdefault("QML2_IMPORT_PATH", os.path.join(_pyside_dir, "qml"))
-os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
+_qml_dir = os.path.join(_pyside_dir, "qml")
+_plugin_dir = os.path.join(_pyside_dir, "plugins")
+os.environ.setdefault("QML2_IMPORT_PATH", _qml_dir)
+os.environ.setdefault("QT_PLUGIN_PATH", _plugin_dir)
+QCoreApplication.addLibraryPath(_plugin_dir)
+QCoreApplication.addLibraryPath(_qml_dir)
 
 _t3 = _time.perf_counter()
 from core.config import load_config, save_config
@@ -1056,6 +1060,12 @@ def main():
 
     # ── QML Engine ─────────────────────────────────────────────
     qml_engine = QQmlApplicationEngine()
+
+    def _log_qml_warnings(warnings):
+        for warning in warnings:
+            print(f"[QML] {warning.toString()}")
+
+    qml_engine.warnings.connect(_log_qml_warnings)
     qml_engine.addImageProvider("appicons", AppIconProvider(ROOT))
     qml_engine.addImageProvider("systemicons", SystemIconProvider())
     qml_engine.rootContext().setContextProperty("backend", backend)
