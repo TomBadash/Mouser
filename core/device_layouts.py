@@ -225,6 +225,7 @@ _FAMILY_FALLBACKS = {
     "mx_master_3": "mx_master",
     "mx_master_2s": "mx_master",
     "mx_anywhere_2s": "mx_anywhere",
+    "mx_anywhere_2": "mx_anywhere",
     "mx_anywhere_3s": "mx_anywhere",
     "mx_anywhere_3": "mx_anywhere",
 }
