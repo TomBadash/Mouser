@@ -530,12 +530,17 @@ class LinuxScreenshotControllerTests(unittest.TestCase):
     def test_file_delivery_is_mouser_owned(self):
         statuses = []
         target = Path("/tmp/mouser-owned.png")
-        controller = LinuxScreenshotController(backend=None, status_callback=statuses.append)
+        controller = LinuxScreenshotController(
+            backend=None,
+            status_callback=statuses.append,
+            path_factory=lambda: target,
+        )
+        image = Image.new("RGBA", (2, 2))
 
         with patch("ui.linux_screenshot.save_image_to_file", return_value=target) as save_image:
-            controller._finish_worker(SCREENSHOT_FULL_FILE, Image.new("RGBA", (2, 2)), "")
+            controller._finish_worker(SCREENSHOT_FULL_FILE, image, "")
 
-        save_image.assert_called_once()
+        save_image.assert_called_once_with(image, target)
         self.assertEqual(statuses, [f"Screenshot saved to {target}"])
 
     def test_clipboard_delivery_is_mouser_owned(self):

@@ -616,6 +616,7 @@ class LinuxScreenshotController(QObject):
         self,
         backend=_DEFAULT_BACKEND,
         status_callback: Callable[[str], None] | None = None,
+        path_factory: Callable[[], Path] | None = None,
         thread_factory: Callable[..., threading.Thread] | None = None,
         region_overlay_factory=RegionSelectionOverlay,
         logical_bounds_factory: Callable[[], IntRect] | None = None,
@@ -624,6 +625,7 @@ class LinuxScreenshotController(QObject):
         super().__init__(parent)
         self._backends = _coerce_backends(backend)
         self._status_callback = status_callback
+        self._path_factory = path_factory
         self._thread_factory = thread_factory or threading.Thread
         self._region_overlay_factory = region_overlay_factory
         self._logical_bounds_factory = logical_bounds_factory or _system_logical_bounds
@@ -772,7 +774,8 @@ class LinuxScreenshotController(QObject):
                 copy_image_to_clipboard(image)
                 self._emit_status("Screenshot copied to clipboard")
             elif action_id in SCREENSHOT_FILE_ACTIONS:
-                path = save_image_to_file(image)
+                target = self._path_factory() if self._path_factory is not None else None
+                path = save_image_to_file(image, target)
                 self._emit_status(f"Screenshot saved to {path}")
         except Exception as exc:
             self._emit_status(f"Screenshot failed: {exc}")

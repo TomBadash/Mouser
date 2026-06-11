@@ -1021,6 +1021,7 @@ def main():
 
         screenshot_controller = WindowsScreenshotController(
             status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
             parent=app,
         )
         app._mouser_screenshot_controller = screenshot_controller
@@ -1031,6 +1032,23 @@ def main():
 
         screenshot_controller = LinuxScreenshotController(
             status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
+            parent=app,
+        )
+        app._mouser_screenshot_controller = screenshot_controller
+        set_screenshot_action_handler(screenshot_controller.request_action)
+    elif sys.platform == "darwin":
+        from core.key_simulator import (
+            execute_screenshot_shortcut,
+            set_screenshot_action_handler,
+        )
+        from ui.macos_screenshot import MacScreenshotController
+
+        screenshot_controller = MacScreenshotController(
+            status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
+            has_custom_directory=backend.has_custom_screenshot_directory,
+            fallback_action=execute_screenshot_shortcut,
             parent=app,
         )
         app._mouser_screenshot_controller = screenshot_controller

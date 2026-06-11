@@ -6,10 +6,12 @@ from ui.windows_screenshot import (
     IntRect,
     MonitorMap,
     VirtualCapture,
+    WindowsScreenshotController,
     build_monitor_maps,
     capture_virtual_desktop,
     crop_logical_region,
 )
+from ui.screenshot_common import SCREENSHOT_FULL_FILE
 
 
 class WindowsScreenshotGeometryTests(unittest.TestCase):
@@ -61,6 +63,23 @@ class WindowsScreenshotGeometryTests(unittest.TestCase):
         self.assertEqual(capture.image.size, (200, 50))
         self.assertEqual(capture.image.getpixel((25, 10)), (255, 0, 0))
         self.assertEqual(capture.image.getpixel((175, 10)), (0, 0, 255))
+
+    def test_file_delivery_uses_injected_path_factory(self):
+        statuses = []
+        target = "/tmp/custom-windows-shot.png"
+        controller = WindowsScreenshotController(
+            status_callback=statuses.append,
+            path_factory=lambda: target,
+        )
+
+        from unittest.mock import patch
+
+        with patch("ui.windows_screenshot.save_image_to_file", return_value=target) as save_image:
+            image = Image.new("RGBA", (2, 2))
+            controller._deliver_image(image, SCREENSHOT_FULL_FILE)
+
+        save_image.assert_called_once_with(image, target)
+        self.assertEqual(statuses, [f"Screenshot saved to {target}"])
 
 
 if __name__ == "__main__":

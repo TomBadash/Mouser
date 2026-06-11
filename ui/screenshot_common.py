@@ -73,19 +73,32 @@ def screenshot_file_path(
     directory: Path | None = None,
     now: datetime | None = None,
 ) -> Path:
-    directory = directory or screenshots_dir()
+    return screenshot_file_paths(1, directory=directory, now=now)[0]
+
+
+def screenshot_file_paths(
+    count: int,
+    directory: Path | None = None,
+    now: datetime | None = None,
+) -> list[Path]:
+    if count <= 0:
+        raise ValueError("screenshot file count must be positive")
+    directory = Path(directory) if directory is not None else screenshots_dir()
+    directory.mkdir(parents=True, exist_ok=True)
     stamp = (now or datetime.now()).strftime("%Y-%m-%d %H%M%S")
-    base = directory / f"Screenshot {stamp}.png"
-    if not base.exists():
-        return base
-    for idx in range(2, 1000):
-        candidate = directory / f"Screenshot {stamp} ({idx}).png"
+    paths: list[Path] = []
+    for idx in range(1, 1000):
+        name = f"Screenshot {stamp}.png" if idx == 1 else f"Screenshot {stamp} ({idx}).png"
+        candidate = directory / name
         if not candidate.exists():
-            return candidate
+            paths.append(candidate)
+            if len(paths) == count:
+                return paths
     raise RuntimeError("could not allocate screenshot filename")
 
 
 def save_image_to_file(image: Image.Image, path: Path | None = None) -> Path:
-    target = path or screenshot_file_path()
+    target = Path(path) if path is not None else screenshot_file_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
     image.save(target, format="PNG")
     return target

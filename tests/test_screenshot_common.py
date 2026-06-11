@@ -9,6 +9,7 @@ from ui.screenshot_common import (
     copy_image_to_clipboard,
     pil_image_to_qimage,
     screenshot_file_path,
+    screenshot_file_paths,
     screenshots_dir,
 )
 
@@ -24,6 +25,33 @@ class ScreenshotOutputTests(unittest.TestCase):
             path = screenshot_file_path(directory=directory, now=now)
 
             self.assertEqual(path.name, "Screenshot 2026-06-10 140923 (3).png")
+
+    def test_screenshot_file_path_creates_custom_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "custom" / "shots"
+            now = datetime(2026, 6, 10, 14, 9, 23)
+
+            path = screenshot_file_path(directory=directory, now=now)
+
+            self.assertTrue(directory.is_dir())
+            self.assertEqual(path.parent, directory)
+
+    def test_screenshot_file_paths_reserves_multiple_unique_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            now = datetime(2026, 6, 10, 14, 9, 23)
+            (directory / "Screenshot 2026-06-10 140923.png").touch()
+
+            paths = screenshot_file_paths(3, directory=directory, now=now)
+
+            self.assertEqual(
+                [path.name for path in paths],
+                [
+                    "Screenshot 2026-06-10 140923 (2).png",
+                    "Screenshot 2026-06-10 140923 (3).png",
+                    "Screenshot 2026-06-10 140923 (4).png",
+                ],
+            )
 
     def test_screenshots_dir_falls_back_when_primary_path_is_not_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

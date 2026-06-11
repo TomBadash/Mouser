@@ -923,6 +923,159 @@ Item {
                 height: backend.supportsStartAtLogin ? 16 : 0
             }
 
+            // ── Screenshots ───────────────────────────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: screenshotContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: screenshotContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.screenshots"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["scroll.screenshots_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 58
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 12
+                            }
+                            spacing: 10
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: s["scroll.screenshots_save_to"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 12
+                                        bold: true
+                                    }
+                                    color: scrollPage.theme.textDim
+                                }
+
+                                Text {
+                                    text: backend.hasCustomScreenshotDirectory
+                                          ? backend.screenshotDirectoryLabel
+                                          : s["scroll.screenshots_system_default"]
+                                    width: parent.width
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+
+                            Rectangle {
+                                id: chooseScreenshotButton
+                                Layout.preferredWidth: Math.max(88, chooseScreenshotText.implicitWidth + 24)
+                                Layout.preferredHeight: 34
+                                radius: 8
+                                color: chooseScreenshotMouse.containsMouse
+                                       ? scrollPage.theme.bgCardHover
+                                       : scrollPage.theme.bgCard
+                                border.width: 1
+                                border.color: scrollPage.theme.border
+
+                                Text {
+                                    id: chooseScreenshotText
+                                    anchors.centerIn: parent
+                                    text: s["scroll.screenshots_choose"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 12
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                MouseArea {
+                                    id: chooseScreenshotMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: backend.chooseScreenshotDirectory()
+                                }
+                            }
+
+                            Rectangle {
+                                id: resetScreenshotButton
+                                Layout.preferredWidth: Math.max(102, resetScreenshotText.implicitWidth + 24)
+                                Layout.preferredHeight: 34
+                                radius: 8
+                                opacity: backend.hasCustomScreenshotDirectory ? 1.0 : 0.45
+                                color: resetScreenshotMouse.containsMouse && backend.hasCustomScreenshotDirectory
+                                       ? scrollPage.theme.bgCardHover
+                                       : scrollPage.theme.bgCard
+                                border.width: 1
+                                border.color: scrollPage.theme.border
+
+                                Text {
+                                    id: resetScreenshotText
+                                    anchors.centerIn: parent
+                                    text: s["scroll.screenshots_default"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 12
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                MouseArea {
+                                    id: resetScreenshotMouse
+                                    anchors.fill: parent
+                                    enabled: backend.hasCustomScreenshotDirectory
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: backend.resetScreenshotDirectory()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── Scroll Direction ──────────────────────────────────
             Rectangle {
                 width: parent.width - 72

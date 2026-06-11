@@ -841,6 +841,109 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertIs(engine.status_callback.__self__, backend)
         self.assertIs(engine.status_callback.__func__, Backend._onEngineStatusMessage)
 
+    def test_screenshot_directory_defaults_to_system_behavior(self):
+        backend = self._make_backend()
+
+        self.assertEqual(backend.screenshotDirectory, "")
+        self.assertEqual(backend.screenshotDirectoryLabel, "")
+        self.assertFalse(backend.hasCustomScreenshotDirectory)
+
+    def test_next_screenshot_file_path_uses_custom_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            cfg["settings"]["screenshot_directory"] = tmp
+            with (
+                patch("ui.backend.load_config", return_value=cfg),
+                patch("ui.backend.save_config"),
+                patch("ui.backend.supports_login_startup", return_value=False),
+            ):
+                backend = Backend(engine=None)
+
+            path = backend.next_screenshot_file_path()
+
+        self.assertEqual(path.parent, Path(tmp))
+        self.assertTrue(path.name.startswith("Screenshot "))
+        self.assertEqual(path.suffix, ".png")
+
+    def test_next_screenshot_file_paths_reserves_multiple_custom_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            cfg["settings"]["screenshot_directory"] = tmp
+            with (
+                patch("ui.backend.load_config", return_value=cfg),
+                patch("ui.backend.save_config"),
+                patch("ui.backend.supports_login_startup", return_value=False),
+            ):
+                backend = Backend(engine=None)
+
+            paths = backend.next_screenshot_file_paths(2)
+
+        self.assertEqual([path.parent for path in paths], [Path(tmp), Path(tmp)])
+        self.assertEqual(len({path.name for path in paths}), 2)
+
+    def test_choose_screenshot_directory_persists_valid_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            with (
+                patch("ui.backend.load_config", return_value=cfg),
+                patch("ui.backend.save_config") as save_mock,
+                patch("ui.backend.supports_login_startup", return_value=False),
+                patch(
+                    "PySide6.QtWidgets.QFileDialog.getExistingDirectory",
+                    return_value=tmp,
+                ),
+            ):
+                backend = Backend(engine=None)
+                statuses = []
+                backend.statusMessage.connect(statuses.append)
+                backend.chooseScreenshotDirectory()
+
+        self.assertEqual(backend.screenshotDirectory, str(Path(tmp)))
+        self.assertTrue(backend.hasCustomScreenshotDirectory)
+        save_mock.assert_called_once()
+        self.assertEqual(statuses, ["Saved"])
+
+    def test_choose_screenshot_directory_ignores_invalid_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "not-a-folder"
+            file_path.write_text("x", encoding="utf-8")
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            with (
+                patch("ui.backend.load_config", return_value=cfg),
+                patch("ui.backend.save_config") as save_mock,
+                patch("ui.backend.supports_login_startup", return_value=False),
+                patch(
+                    "PySide6.QtWidgets.QFileDialog.getExistingDirectory",
+                    return_value=str(file_path),
+                ),
+            ):
+                backend = Backend(engine=None)
+                statuses = []
+                backend.statusMessage.connect(statuses.append)
+                backend.chooseScreenshotDirectory()
+
+        self.assertEqual(backend.screenshotDirectory, "")
+        save_mock.assert_not_called()
+        self.assertEqual(statuses, ["Choose a valid screenshot folder"])
+
+    def test_reset_screenshot_directory_clears_custom_folder(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["screenshot_directory"] = "/tmp/screens"
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config") as save_mock,
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=None)
+            statuses = []
+            backend.statusMessage.connect(statuses.append)
+            backend.resetScreenshotDirectory()
+
+        self.assertEqual(backend.screenshotDirectory, "")
+        self.assertFalse(backend.hasCustomScreenshotDirectory)
+        save_mock.assert_called_once()
+        self.assertEqual(statuses, ["Saved"])
+
     def test_replay_failure_status_becomes_backend_status_message(self):
         app = _ensure_qapp()
         engine = _FakeEngine()

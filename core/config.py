@@ -107,6 +107,7 @@ DEFAULT_CONFIG = {
         "device_layout_overrides": {},
         "language": "en",
         "ignore_trackpad": True,
+        "screenshot_directory": "",
         "check_for_updates": True,
         "update_check_state": {},
     },
@@ -335,6 +336,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("device_layout_overrides", {})
     cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("ignore_trackpad", True)
+    cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
 

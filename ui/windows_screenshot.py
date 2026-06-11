@@ -169,9 +169,15 @@ def crop_logical_region(capture: VirtualCapture, logical_rect: IntRect) -> Image
 class WindowsScreenshotController(QObject):
     _requestAction = Signal(str)
 
-    def __init__(self, status_callback: Callable[[str], None] | None = None, parent=None):
+    def __init__(
+        self,
+        status_callback: Callable[[str], None] | None = None,
+        path_factory: Callable[[], object] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._status_callback = status_callback
+        self._path_factory = path_factory
         self._overlay: RegionSelectionOverlay | None = None
         self._pending_capture: VirtualCapture | None = None
         self._pending_action = ""
@@ -240,7 +246,8 @@ class WindowsScreenshotController(QObject):
                 copy_image_to_clipboard(image)
                 self._emit_status("Screenshot copied to clipboard")
             else:
-                path = save_image_to_file(image)
+                target = self._path_factory() if self._path_factory is not None else None
+                path = save_image_to_file(image, target)
                 self._emit_status(f"Screenshot saved to {path}")
         except Exception as exc:
             self._emit_status(f"Screenshot failed: {exc}")

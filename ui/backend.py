@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.error
 import webbrowser
+from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QMetaObject, QObject, Property, QTimer, Signal, Slot, Qt, QUrl
 
@@ -70,6 +71,7 @@ from core.update_installer import (
     write_windows_update_plan,
 )
 from core.version import APP_VERSION
+from ui.screenshot_common import screenshot_file_path, screenshot_file_paths, screenshots_dir
 
 
 def _action_label(action_id):
@@ -190,6 +192,15 @@ def _open_url(url: str) -> bool:
 def _update_install_enabled() -> bool:
     value = os.environ.get("MOUSER_ENABLE_UPDATE_INSTALL", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_directory_path(path: str) -> str:
+    expanded = os.path.expanduser((path or "").strip())
+    if not expanded:
+        return ""
+    if sys.platform == "linux":
+        return os.path.realpath(expanded)
+    return os.path.normpath(expanded)
 
 
 class Backend(QObject):
@@ -532,6 +543,18 @@ class Backend(QObject):
     def checkForUpdates(self):
         return bool(self._cfg.get("settings", {}).get("check_for_updates", True))
 
+    @Property(str, notify=settingsChanged)
+    def screenshotDirectory(self):
+        return self._configured_screenshot_directory()
+
+    @Property(str, notify=settingsChanged)
+    def screenshotDirectoryLabel(self):
+        return self._configured_screenshot_directory()
+
+    @Property(bool, notify=settingsChanged)
+    def hasCustomScreenshotDirectory(self):
+        return self.has_custom_screenshot_directory()
+
     @Property(bool, constant=True)
     def isWindows(self):
         return sys.platform.startswith("win")
@@ -783,6 +806,25 @@ class Backend(QObject):
         if catalog_id:
             return catalog_id
         return entry.get("path") or fallback_spec
+
+    def _configured_screenshot_directory(self) -> str:
+        settings = self._cfg.setdefault("settings", {})
+        return _normalize_directory_path(settings.get("screenshot_directory", ""))
+
+    def has_custom_screenshot_directory(self) -> bool:
+        return bool(self._configured_screenshot_directory())
+
+    def next_screenshot_file_path(self) -> Path:
+        custom_directory = self._configured_screenshot_directory()
+        if custom_directory:
+            return screenshot_file_path(directory=Path(custom_directory))
+        return screenshot_file_path()
+
+    def next_screenshot_file_paths(self, count: int) -> list[Path]:
+        custom_directory = self._configured_screenshot_directory()
+        if custom_directory:
+            return screenshot_file_paths(count, directory=Path(custom_directory))
+        return screenshot_file_paths(count)
 
     def _configureUpdateChecks(self):
         if self.checkForUpdates:
@@ -1111,6 +1153,40 @@ class Backend(QObject):
         save_config(self._cfg)
         self.settingsChanged.emit()
         self._configureUpdateChecks()
+        self.statusMessage.emit("Saved")
+
+    @Slot()
+    def chooseScreenshotDirectory(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        current = self._configured_screenshot_directory() or str(screenshots_dir())
+        selected = QFileDialog.getExistingDirectory(
+            None,
+            "Choose Screenshot Folder",
+            current,
+        )
+        normalized = _normalize_directory_path(selected)
+        if not normalized:
+            return
+        if not os.path.isdir(normalized):
+            self.statusMessage.emit("Choose a valid screenshot folder")
+            return
+        settings = self._cfg.setdefault("settings", {})
+        if settings.get("screenshot_directory", "") == normalized:
+            return
+        settings["screenshot_directory"] = normalized
+        save_config(self._cfg)
+        self.settingsChanged.emit()
+        self.statusMessage.emit("Saved")
+
+    @Slot()
+    def resetScreenshotDirectory(self):
+        settings = self._cfg.setdefault("settings", {})
+        if not settings.get("screenshot_directory", ""):
+            return
+        settings["screenshot_directory"] = ""
+        save_config(self._cfg)
+        self.settingsChanged.emit()
         self.statusMessage.emit("Saved")
 
     @Slot()

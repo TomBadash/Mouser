@@ -68,12 +68,27 @@ def request_screenshot_action(action_id):
         return False
     if _screenshot_action_handler is None:
         print(f"[KeySimulator] screenshot action unavailable: {action_id}")
-        return True
+        return False
     try:
         _screenshot_action_handler(action_id)
     except Exception as exc:
         print(f"[KeySimulator] screenshot action handler failed: {exc}")
         import traceback; traceback.print_exc()
+    return True
+
+
+def execute_screenshot_shortcut(action_id):
+    """Run the platform shortcut for a screenshot action when one exists."""
+    if not is_screenshot_action(action_id):
+        return False
+    action = globals().get("ACTIONS", {}).get(action_id)
+    keys = action.get("keys") if action else None
+    if not keys:
+        return False
+    sender = globals().get("send_key_combo")
+    if sender is None:
+        return False
+    sender(keys)
     return True
 
 
@@ -1279,6 +1294,8 @@ elif sys.platform == "darwin":
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
+            return
+        if request_screenshot_action(action_id):
             return
         action = ACTIONS.get(action_id)
         if not action:
