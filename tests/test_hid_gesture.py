@@ -2,11 +2,30 @@ import importlib
 import os
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core import hid_gesture
+
+
+_save_device_cache_patch = None
+
+
+def setUpModule():
+    """Stop _try_connect's success path from writing a real device_cache.json
+    into the developer's config dir while the suite runs."""
+    global _save_device_cache_patch
+    _save_device_cache_patch = patch.object(
+        hid_gesture.config, "save_device_cache"
+    )
+    _save_device_cache_patch.start()
+
+
+def tearDownModule():
+    if _save_device_cache_patch is not None:
+        _save_device_cache_patch.stop()
 
 
 class HidModuleImportTests(unittest.TestCase):
@@ -126,6 +145,51 @@ class GestureCandidateSelectionTests(unittest.TestCase):
         )
 
 
+class DevIndexScanOrderTests(unittest.TestCase):
+    def test_receiver_pid_probes_numbered_slots_before_bluetooth(self):
+        listener = hid_gesture.HidGestureListener()
+
+        order = listener._dev_index_scan_order(
+            product_id=hid_gesture.BOLT_RECEIVER_PID
+        )
+
+        self.assertEqual(order, [1, 2, 3, 4, 5, 6, hid_gesture.BT_DEV_IDX])
+
+    def test_receiver_detected_by_product_name(self):
+        listener = hid_gesture.HidGestureListener()
+
+        order = listener._dev_index_scan_order(
+            product_id=0x0000, product_name="USB Receiver"
+        )
+
+        self.assertEqual(order[0], 1)
+        self.assertEqual(order[-1], hid_gesture.BT_DEV_IDX)
+
+    def test_direct_device_probes_bluetooth_first(self):
+        listener = hid_gesture.HidGestureListener()
+
+        order = listener._dev_index_scan_order(
+            product_id=0xB034, product_name="MX Master 4"
+        )
+
+        self.assertEqual(order[0], hid_gesture.BT_DEV_IDX)
+        self.assertEqual(order[1:], [1, 2, 3, 4, 5, 6])
+
+    def test_last_good_index_is_probed_first(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._last_good_dev_idx = 3
+
+        order = listener._dev_index_scan_order(
+            product_id=hid_gesture.BOLT_RECEIVER_PID
+        )
+
+        self.assertEqual(order[0], 3)
+        # Every slot is still present — the cache only reorders the scan.
+        self.assertEqual(
+            sorted(order), sorted([1, 2, 3, 4, 5, 6, hid_gesture.BT_DEV_IDX])
+        )
+
+
 class DeviceInfoDumpTests(unittest.TestCase):
     def test_dump_device_info_includes_runtime_capability_inventory(self):
         listener = hid_gesture.HidGestureListener()
@@ -202,7 +266,7 @@ class HidEnumerationFallbackTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -364,7 +428,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         listener, info = self._make_listener()
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -417,7 +481,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         }
         fake_devs = [_FakeHidDevice(), _FakeHidDevice()]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -512,7 +576,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         divert_call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -578,7 +642,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -623,7 +687,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -670,7 +734,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -717,7 +781,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1
@@ -759,7 +823,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, **_kwargs):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1
@@ -804,6 +868,193 @@ class HidReconnectInvariantTests(unittest.TestCase):
         self.assertFalse(listener._extra_diverts[0x00C4]["held"])
         gesture_up.assert_called_once_with()
         extra_up.assert_called_once_with()
+
+
+class HidDeviceCacheTests(unittest.TestCase):
+    """Persistent device cache and the discovery short-circuits in
+    _try_connect that keep boot and reconnects fast."""
+
+    @staticmethod
+    def _receiver_info(**overrides):
+        info = {
+            "product_id": 0xC548,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "USB Receiver",
+            "path": b"/dev/hidraw-test",
+        }
+        info.update(overrides)
+        return info
+
+    def test_unresponsive_reprog_slot_is_skipped(self):
+        """A slot that advertises REPROG_V4 but will not answer the
+        control-count query is abandoned, and the scan moves on."""
+        listener = hid_gesture.HidGestureListener()
+        info = self._receiver_info()
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, **_kwargs):
+            return 0x09 if feature_id == hid_gesture.FEAT_REPROG_V4 else None
+
+        # devIdx 1 answers the root probe but is dead; devIdx 2 is real.
+        controls_by_slot = [None, []]
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(
+                listener,
+                "_discover_reprog_controls",
+                side_effect=lambda: controls_by_slot.pop(0),
+            ),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        # Connected on devIdx 2 — the dead devIdx 1 was skipped.
+        self.assertEqual(listener._dev_idx, 2)
+
+    def test_cached_device_is_probed_before_other_candidates(self):
+        """A cached identity is moved to the front of the candidate list."""
+        listener = hid_gesture.HidGestureListener()
+        listener._device_cache = {
+            "product_id": 0xC548,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "dev_idx": 2,
+        }
+        infos = [
+            self._receiver_info(product_id=0xC541),   # other receiver
+            self._receiver_info(product_id=0xC548),   # cached device
+        ]
+        fake_dev = _FakeHidDevice()
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=infos),
+            patch.object(listener, "_find_feature", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            listener._try_connect()
+
+        # _try_connect reorders infos in place — the cached PID now leads.
+        self.assertEqual(infos[0]["product_id"], 0xC548)
+
+    def test_dead_non_receiver_pid_is_probed_once_not_per_interface(self):
+        """A webcam (non-receiver) exposing several vendor collections is
+        ruled out once, then its remaining interfaces are skipped."""
+        listener = hid_gesture.HidGestureListener()
+        infos = [
+            {
+                "product_id": 0x0944,
+                "usage_page": 0xFF00,
+                "usage": usage,
+                "source": "hidapi-enumerate",
+                "product_string": "MX Brio",
+                "path": b"/dev/hidraw-webcam",
+            }
+            for usage in (0x0001, 0x0002, 0x0003)
+        ]
+        open_count = [0]
+
+        def make_dev():
+            open_count[0] += 1
+            return _FakeHidDevice()
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=infos),
+            patch.object(listener, "_find_feature", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=make_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertFalse(listener._try_connect())
+
+        # Opened once — the 2nd and 3rd MX Brio interfaces were skipped.
+        self.assertEqual(open_count[0], 1)
+
+    def test_discovery_request_timeout_is_capped_short(self):
+        """Before a session is live, _request caps the wait at the short
+        discovery timeout no matter how long the caller asked for."""
+        listener = hid_gesture.HidGestureListener()
+        self.assertFalse(listener._connected)
+
+        with (
+            patch.object(hid_gesture, "DISCOVERY_PROBE_TIMEOUT_MS", 50),
+            patch.object(listener, "_tx"),
+            patch.object(listener, "_rx", return_value=None),
+        ):
+            started = time.monotonic()
+            self.assertIsNone(
+                listener._request(0x0E, 0, [], timeout_ms=10_000)
+            )
+            elapsed_ms = (time.monotonic() - started) * 1000
+
+        # Capped near 50 ms — nowhere near the 10 s the caller requested.
+        self.assertLess(elapsed_ms, 1000)
+
+    def test_successful_connect_persists_device_identity(self):
+        """A successful connection writes the device identity to the cache."""
+        listener = hid_gesture.HidGestureListener()
+        info = self._receiver_info()
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, **_kwargs):
+            return 0x09 if feature_id == hid_gesture.FEAT_REPROG_V4 else None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch.object(hid_gesture.config, "save_device_cache") as save_mock,
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        save_mock.assert_called_once()
+        identity = save_mock.call_args[0][0]
+        self.assertEqual(identity["product_id"], 0xC548)
+        self.assertEqual(identity["source"], "hidapi-enumerate")
+        self.assertEqual(identity["dev_idx"], 1)
 
 
 if __name__ == "__main__":

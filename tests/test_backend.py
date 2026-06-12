@@ -7,8 +7,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.config import DEFAULT_CONFIG
+from core.config import DEFAULT_CONFIG, GESTURE_SENSITIVITY_PX
 from core.updater import UpdateCheckState
+from core import log_setup
 
 try:
     from PySide6.QtCore import QCoreApplication, Qt, QUrl
@@ -1374,6 +1375,91 @@ class BackendLoginStartupTests(unittest.TestCase):
 
         apply_mock.assert_not_called()
         self.assertFalse(backend.startMinimized)
+
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendAppLogTests(unittest.TestCase):
+    """The Application Log view — captured console output mirrored to QML."""
+
+    def tearDown(self):
+        # Backend.__init__ subscribes to log_setup; drop the test's listeners.
+        log_setup._log_listeners.clear()
+
+    def _make_backend(self):
+        with (
+            patch("ui.backend.load_config",
+                  return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=None)
+
+    def test_init_subscribes_to_log_capture(self):
+        before = len(log_setup._log_listeners)
+        self._make_backend()
+        self.assertEqual(len(log_setup._log_listeners), before + 1)
+
+    def test_handle_app_log_message_appends_to_app_log(self):
+        backend = self._make_backend()
+        backend.clearAppLog()
+        backend._handleAppLogMessage("[HidGesture] Connected in 1200 ms")
+        self.assertIn("[HidGesture] Connected in 1200 ms", backend.appLog)
+
+    def test_clear_app_log_empties_the_view(self):
+        backend = self._make_backend()
+        backend._handleAppLogMessage("[Engine] Scroll mode changed")
+        self.assertNotEqual(backend.appLog, "")
+        backend.clearAppLog()
+        self.assertEqual(backend.appLog, "")
+
+    def test_app_log_is_bounded(self):
+        backend = self._make_backend()
+        backend.clearAppLog()
+        for i in range(1100):
+            backend._handleAppLogMessage(f"[Test] line {i}")
+        self.assertLessEqual(len(backend.appLog.split("\n")), 1000)
+
+
+@unittest.skipIf(Backend is None, "PySide6 not available")
+class BackendGestureSensitivityTests(unittest.TestCase):
+    """The discrete swipe-sensitivity selector that replaced the px slider."""
+
+    def _make_backend(self, threshold=None):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        if threshold is not None:
+            cfg["settings"]["gesture_threshold"] = threshold
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=None)
+
+    def test_default_config_lands_on_the_leaning_sensitive_preset(self):
+        backend = self._make_backend()
+        self.assertEqual(backend.gestureSensitivityIndex, 1)
+
+    def test_index_snaps_to_nearest_preset_for_off_grid_threshold(self):
+        # 51 px is nearer the 56 px preset (index 4) than the 44 px one.
+        backend = self._make_backend(threshold=51)
+        self.assertEqual(backend.gestureSensitivityIndex, 4)
+
+    def test_set_sensitivity_stores_the_preset_pixel_value(self):
+        backend = self._make_backend()
+        backend.setGestureSensitivity(0)
+        self.assertEqual(
+            backend._cfg["settings"]["gesture_threshold"],
+            GESTURE_SENSITIVITY_PX[0],
+        )
+        self.assertEqual(backend.gestureSensitivityIndex, 0)
+
+    def test_set_sensitivity_clamps_out_of_range_index(self):
+        backend = self._make_backend()
+        backend.setGestureSensitivity(99)
+        self.assertEqual(
+            backend._cfg["settings"]["gesture_threshold"],
+            GESTURE_SENSITIVITY_PX[-1],
+        )
 
 
 if __name__ == "__main__":

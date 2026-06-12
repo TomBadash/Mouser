@@ -24,9 +24,9 @@ class MouseHookLike(Protocol):
         self,
         enabled: bool = False,
         threshold: int = 50,
-        deadzone: int = 40,
-        timeout_ms: int = 3000,
-        cooldown_ms: int = 500,
+        commit_window_ms: int = 400,
+        settle_ms: int = 90,
+        cross_ratio: float = 0.5,
     ) -> None: ...
     def set_connection_change_callback(self, cb: Callable[[bool], None]) -> None: ...
     def set_debug_callback(self, callback: Callable[[str], None]) -> None: ...

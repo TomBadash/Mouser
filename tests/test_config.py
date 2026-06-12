@@ -43,15 +43,15 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
         self.assertEqual(migrated["settings"]["dpi"], 1000)
-        self.assertEqual(migrated["settings"]["gesture_threshold"], 50)
-        self.assertEqual(migrated["settings"]["gesture_deadzone"], 40)
-        self.assertEqual(migrated["settings"]["gesture_timeout_ms"], 3000)
-        self.assertEqual(migrated["settings"]["gesture_cooldown_ms"], 500)
+        self.assertEqual(migrated["settings"]["gesture_threshold"], 25)
+        self.assertEqual(migrated["settings"]["gesture_commit_window_ms"], 400)
+        self.assertEqual(migrated["settings"]["gesture_settle_ms"], 90)
+        self.assertEqual(migrated["settings"]["gesture_cross_ratio"], 0.5)
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
@@ -89,7 +89,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -132,10 +132,10 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 9)
+        self.assertEqual(loaded["version"], 10)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
-        self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
+        self.assertEqual(loaded["settings"]["gesture_threshold"], 25)
         self.assertEqual(loaded["settings"]["appearance_mode"], "system")
         self.assertFalse(loaded["settings"]["debug_mode"])
         self.assertEqual(loaded["settings"]["device_layout_overrides"], {})
@@ -160,7 +160,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
@@ -553,6 +553,50 @@ class AppCatalogTests(unittest.TestCase):
         self.assertEqual(resolved["label"], "Firefox")
         self.assertEqual(resolved["path"], "/opt/firefox/firefox")
         self.assertIn("/usr/lib64/firefox/firefox", resolved["aliases"])
+
+
+class DeviceCacheTests(unittest.TestCase):
+    """config.load_device_cache / save_device_cache — the last-good HID++
+    device identity persisted so reconnects skip the slow device scan."""
+
+    @contextmanager
+    def _temp_cache(self):
+        """Patch the config dir + cache path onto a throwaway directory."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_file = os.path.join(temp_dir, "device_cache.json")
+            with (
+                patch.object(config, "CONFIG_DIR", temp_dir),
+                patch.object(config, "DEVICE_CACHE_FILE", cache_file),
+            ):
+                yield cache_file
+
+    def test_load_returns_none_when_no_cache_file_exists(self):
+        with self._temp_cache():
+            self.assertIsNone(config.load_device_cache())
+
+    def test_save_then_load_round_trips_the_identity(self):
+        identity = {
+            "product_id": 0xC548,
+            "usage_page": 0xFF00,
+            "usage": 1,
+            "source": "hidapi-enumerate",
+            "dev_idx": 2,
+        }
+        with self._temp_cache():
+            config.save_device_cache(identity)
+            self.assertEqual(config.load_device_cache(), identity)
+
+    def test_load_returns_none_on_corrupt_cache_file(self):
+        with self._temp_cache() as cache_file:
+            with open(cache_file, "w", encoding="utf-8") as fh:
+                fh.write("{not valid json")
+            self.assertIsNone(config.load_device_cache())
+
+    def test_load_returns_none_when_cache_is_not_a_dict(self):
+        with self._temp_cache() as cache_file:
+            with open(cache_file, "w", encoding="utf-8") as fh:
+                json.dump([1, 2, 3], fh)
+            self.assertIsNone(config.load_device_cache())
 
 
 if __name__ == "__main__":

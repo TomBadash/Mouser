@@ -497,6 +497,11 @@ if sys.platform == "win32":
             "keys": [VK_LWIN, VK_TAB],
             "category": "Navigation",
         },
+        "screenshot": {
+            "label": "Screenshot (Win+Shift+S)",
+            "keys": [VK_LWIN, VK_SHIFT, VK_S],
+            "category": "Navigation",
+        },
         "space_left": {
             "label": "Previous Desktop",
             "keys": [VK_CONTROL, VK_LWIN, VK_LEFT],
@@ -1127,6 +1132,11 @@ elif sys.platform == "darwin":
         "launchpad": {
             "label": "Launchpad",
             "keys": _MAC_ACTION_FALLBACKS["launchpad"],
+            "category": "Navigation",
+        },
+        "screenshot": {
+            "label": "Screenshot (Cmd+Shift+4)",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_4],
             "category": "Navigation",
         },
         "volume_up": {

@@ -24,6 +24,7 @@ from core.logi_devices import (
     clamp_dpi,
     resolve_device,
 )
+from core import config
 
 _HID_MODULE_NAME = None
 try:
@@ -518,11 +519,18 @@ if _MAC_NATIVE_OK:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         return b""
-                    slice_seconds = min(remaining, 0.05)
+                    # Run CoreFoundation in long slices.  CFRunLoopRunInMode
+                    # releases the GIL while it blocks, so one long slice keeps
+                    # this HID thread waiting in C rather than thrashing back
+                    # into Python every 50 ms.  Device reads then stay
+                    # responsive even while the Qt UI thread is busy holding
+                    # the GIL — the old fine-grained slicing is the main
+                    # reason detection stalled while the window was open.
+                    slice_seconds = min(remaining, 1.0)
                 else:
                     slice_seconds = 0.05
 
-                _cf.CFRunLoopRunInMode(
+                result = _cf.CFRunLoopRunInMode(
                     _K_CF_RUN_LOOP_DEFAULT_MODE,
                     slice_seconds,
                     True,
@@ -530,9 +538,13 @@ if _MAC_NATIVE_OK:
                 try:
                     return self._report_queue.get_nowait()
                 except queue.Empty:
-                    if deadline is not None:
-                        continue
+                    pass
+                if deadline is None:
                     return b""
+                # kCFRunLoopRunFinished (1): the mode had no sources left to
+                # service.  Yield briefly so we don't busy-spin to the deadline.
+                if result == 1:
+                    time.sleep(0.01)
 
 # ── Constants ─────────────────────────────────────────────────────
 LOGI_VID       = 0x046D
@@ -604,6 +616,20 @@ BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
 # Known Logi Bolt receiver PID.
 # Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
 BOLT_RECEIVER_PID = 0xC548
+# Logitech wireless receivers (Bolt / Unifying / Nano / Lightspeed).  A mouse
+# paired through one of these answers HID++ on a numbered device index (1-6) —
+# never on the direct-Bluetooth index 0xFF.  Probing 0xFF first on a receiver
+# just burns a full request timeout before the real slot is even tried.
+RECEIVER_PIDS = frozenset({
+    0xC548,                              # Logi Bolt
+    0xC52B, 0xC52F, 0xC532, 0xC534,      # Unifying
+    0xC517, 0xC518, 0xC51A, 0xC51B,      # Nano / older receivers
+    0xC53A, 0xC53D, 0xC53F, 0xC541,      # Lightspeed / newer receivers
+})
+# A present HID++ device answers an IRoot feature probe in well under 100 ms.
+# Discovery probes use this short timeout so a wrong device-index slot is ruled
+# out fast instead of stalling the whole connection attempt for 2 s per slot.
+DISCOVERY_PROBE_TIMEOUT_MS = 600
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
@@ -728,6 +754,8 @@ class HidGestureListener:
         self._battery_idx = None
         self._battery_feature_id = None
         self._dev_idx   = BT_DEV_IDX
+        self._last_good_dev_idx = None  # device index that last answered REPROG_V4
+        self._device_cache = None       # last-good device identity; loaded in start()
         self._gesture_cid = DEFAULT_GESTURE_CID
         self._gesture_candidates = list(DEFAULT_GESTURE_CIDS)
         self._held      = False
@@ -770,6 +798,12 @@ class HidGestureListener:
                     "[HidGesture] Linux hidraw module is unavailable; Bluetooth "
                     "Logitech HID++ devices may not enumerate"
                 )
+        # Load the persisted last-good device so the first _try_connect can go
+        # straight to it. Done here rather than in __init__ so constructing a
+        # listener (e.g. in a unit test) never touches disk.
+        self._device_cache = config.load_device_cache()
+        if self._device_cache and self._last_good_dev_idx is None:
+            self._last_good_dev_idx = self._device_cache.get("dev_idx")
         self._running = True
         self._thread = threading.Thread(
             target=self._main_loop, daemon=True, name="HidGesture")
@@ -977,8 +1011,32 @@ class HidGestureListener:
             and _MAC_NATIVE_OK
             and _BACKEND_PREFERENCE in ("auto", "iokit")
         ):
+            vendor_pids = set()
+            boot_only_receiver_pids = set()
             for info in _MacNativeHidDevice.enumerate_infos():
+                up = int(info.get("usage_page", 0) or 0)
+                pid = int(info.get("product_id", 0) or 0)
+                # HID++ always lives on a vendor usage page (>=0xFF00).
+                # Standard pages (Generic Desktop, Consumer, Digitizer) are
+                # boot collections that cannot carry HID++ and only waste
+                # probe time. Keep usage_page 0 — some BLE devices omit it.
+                if 0 < up < 0xFF00:
+                    if pid in RECEIVER_PIDS:
+                        boot_only_receiver_pids.add(pid)
+                    continue
+                vendor_pids.add(pid)
                 add_info(info)
+            # A receiver that shows up with only boot collections has had its
+            # HID++ interface claimed by something else — almost always other
+            # Logitech software (G HUB / Options+) running in the background.
+            for pid in sorted(boot_only_receiver_pids - vendor_pids):
+                _log_once(
+                    f"receiver-no-vendor-{pid:04X}",
+                    f"[HidGesture] Receiver PID=0x{pid:04X} is present but "
+                    "exposes no HID++ interface — it is most likely claimed "
+                    "by other Logitech software (G HUB / Options+). Quit that "
+                    "software so Mouser can use this receiver.",
+                )
 
         return out
 
@@ -1010,6 +1068,12 @@ class HidGestureListener:
     def _request(self, feat, func, params, timeout_ms=2000):
         """Send a long HID++ request, wait for matching response."""
         req_params = list(params)
+        # Until a live session exists (self._connected), every request is part
+        # of device discovery — cap the wait short so a wrong or asleep slot is
+        # ruled out fast instead of stalling 2 s. Operational requests after
+        # connect keep the full timeout so a sleeping device still gets woken.
+        if not self._connected:
+            timeout_ms = min(timeout_ms, DISCOVERY_PROBE_TIMEOUT_MS)
         try:
             self._tx(LONG_ID, feat, func, req_params)
         except Exception as exc:
@@ -1023,8 +1087,9 @@ class HidGestureListener:
             return None
         deadline = time.time() + timeout_ms / 1000
         while time.time() < deadline:
+            remaining_ms = max(1, int((deadline - time.time()) * 1000))
             try:
-                raw = self._rx(min(500, timeout_ms))
+                raw = self._rx(min(500, remaining_ms))
             except Exception as exc:
                 print(f"[HidGesture] request rx failed feat=0x{feat:02X} func=0x{func:X} "
                       f"params=[{_hex_bytes(req_params)}]: {exc}")
@@ -1063,11 +1128,11 @@ class HidGestureListener:
 
     # ── feature helpers ───────────────────────────────────────────
 
-    def _find_feature(self, feature_id):
+    def _find_feature(self, feature_id, timeout_ms=2000):
         """Use IRoot (feature 0x0000) to discover a feature index."""
         hi = (feature_id >> 8) & 0xFF
         lo = feature_id & 0xFF
-        resp = self._request(0x00, 0, [hi, lo, 0x00])
+        resp = self._request(0x00, 0, [hi, lo, 0x00], timeout_ms=timeout_ms)
         if resp:
             _, _, _, _, p = resp
             if p and p[0] != 0:
@@ -1118,13 +1183,19 @@ class HidGestureListener:
         return self._request(self._feat_idx, 3, [hi, lo, flags, 0x00, 0x00])
 
     def _discover_reprog_controls(self):
+        """Read the REPROG_V4 control table.
+
+        Returns the list of controls, or None when the device did not answer
+        the control-count query — a slot that advertised REPROG_V4 on the root
+        probe but is not a reachable device (a stale or asleep pairing).
+        """
         controls = []
         if self._feat_idx is None:
             return controls
         resp = self._request(self._feat_idx, 0, [])
         if not resp:
             print("[HidGesture] Failed to read REPROG_V4 control count")
-            return controls
+            return None
         _, _, _, _, params = resp
         _MAX_REPROG_CONTROLS = 32
         count = params[0] if params else 0
@@ -1670,9 +1741,64 @@ class HidGestureListener:
 
     # ── connect / main loop ───────────────────────────────────────
 
+    def _is_receiver(self, product_id=None, product_name=None):
+        """True when this interface belongs to a Logitech wireless receiver."""
+        name = (product_name or "").lower()
+        return (
+            int(product_id or 0) in RECEIVER_PIDS
+            or "receiver" in name
+            or "bolt" in name
+        )
+
+    def _dev_index_scan_order(self, product_id=None, product_name=None):
+        """Order the HID++ device-index slots to probe for this candidate.
+
+        A mouse paired through a wireless receiver answers on a numbered slot
+        (1-6); a direct-Bluetooth mouse answers on 0xFF.  Probing the likely
+        slots first — and the last index that worked before anything else —
+        avoids spending a discovery timeout on indices that cannot match.
+        Every slot still stays in the list as a fallback in case the receiver
+        guess is wrong, so this only reorders, never narrows, the scan.
+        """
+        receiver_slots = [1, 2, 3, 4, 5, 6]
+        if self._is_receiver(product_id, product_name):
+            order = receiver_slots + [BT_DEV_IDX]
+        else:
+            order = [BT_DEV_IDX] + receiver_slots
+        last_good = self._last_good_dev_idx
+        if last_good is not None and last_good in order:
+            order.remove(last_good)
+            order.insert(0, last_good)
+        return order
+
+    def _save_device_cache(self, product_id, usage_page, usage, source):
+        """Remember the just-connected device so the next launch and every
+        reconnect can re-open it directly instead of scanning every Logitech
+        HID candidate. Written only when the identity actually changed."""
+        identity = {
+            "product_id": int(product_id or 0),
+            "usage_page": int(usage_page or 0),
+            "usage": int(usage or 0),
+            "source": source or "",
+            "dev_idx": int(self._dev_idx),
+        }
+        if identity == self._device_cache:
+            return
+        self._device_cache = identity
+        try:
+            config.save_device_cache(identity)
+            print("[HidGesture] Cached device for fast reconnect: "
+                  f"PID=0x{identity['product_id']:04X} "
+                  f"devIdx=0x{identity['dev_idx']:02X}")
+        except Exception as exc:
+            print(f"[HidGesture] Could not write device cache: {exc}")
+
     def _try_connect(self):
         """Open the vendor HID collection, discover features, divert."""
+        enum_t0 = time.monotonic()
         infos = self._vendor_hid_infos()
+        print(f"[HidGesture] Enumerated {len(infos)} candidate interface(s) "
+              f"in {(time.monotonic() - enum_t0) * 1000:.0f} ms")
         if not infos:
             return False
 
@@ -1683,6 +1809,25 @@ class HidGestureListener:
             return (1 if "receiver" in name else 0, name)
 
         infos.sort(key=_direct_device_first)
+
+        # Re-open the device that connected last time before scanning anything
+        # else. On a warm boot or a wake-from-sleep reconnect this collapses a
+        # multi-receiver scan into a single open; if the device is no longer
+        # present the loop just falls through to the full scan below.
+        cached = self._device_cache
+        if cached:
+            for i, info in enumerate(infos):
+                if (
+                    int(info.get("product_id", 0) or 0) == cached.get("product_id")
+                    and int(info.get("usage_page", 0) or 0) == cached.get("usage_page")
+                    and int(info.get("usage", 0) or 0) == cached.get("usage")
+                    and (info.get("source") or "") == cached.get("source")
+                ):
+                    infos.insert(0, infos.pop(i))
+                    print("[HidGesture] Probing cached device first: "
+                          f"PID=0x{int(cached.get('product_id', 0)):04X} "
+                          f"devIdx=0x{int(cached.get('dev_idx', 0)):02X}")
+                    break
 
         print(f"[HidGesture] Backend preference: {_BACKEND_PREFERENCE}")
         print(f"[HidGesture] Candidate HID interfaces: {len(infos)}")
@@ -1698,8 +1843,15 @@ class HidGestureListener:
                   f"usage=0x{usage:04X} transport={transport or '-'} "
                   f"source={source} product={product} path={path or '-'}")
 
+        # Once a non-receiver interface is ruled out as a HID++ device, skip
+        # every other interface of that same physical device — e.g. an MX Brio
+        # webcam exposes six vendor collections that would otherwise each be
+        # opened and probed in turn.
+        dead_pids = set()
         for info in infos:
             pid = info.get("product_id", 0)
+            if pid in dead_pids:
+                continue
             up = info.get("usage_page", 0)
             usage = info.get("usage", 0)
             product = info.get("product_string")
@@ -1741,6 +1893,7 @@ class HidGestureListener:
                 open_attempts.append(("hidapi", info))
 
             for transport, open_info in open_attempts:
+                open_t0 = time.monotonic()
                 try:
                     if transport.startswith("iokit"):
                         d = _MacNativeHidDevice(
@@ -1771,7 +1924,8 @@ class HidGestureListener:
                     opened_up = int(open_info.get("usage_page", up) or 0)
                     opened_usage = int(open_info.get("usage", usage) or 0)
                     opened_path = _device_path_display(open_info.get("path"))
-                    print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport}")
+                    print(f"[HidGesture] Opened PID=0x{pid:04X} via {transport} "
+                          f"({(time.monotonic() - open_t0) * 1000:.0f} ms)")
                     break
                 except Exception as exc:
                     print(f"[HidGesture] Can't open PID=0x{pid:04X} "
@@ -1782,17 +1936,39 @@ class HidGestureListener:
             if self._dev is None:
                 continue
 
-            # Try Bluetooth direct (0xFF) first, then Bolt receiver slots
+            # Probe HID++ device-index slots in the order most likely to hit
+            # for this candidate, with a short per-slot timeout so wrong slots
+            # are ruled out quickly instead of stalling for 2 s each.
             reprog_found = False
             hidpp_name = None
-            for idx in (0xFF, 1, 2, 3, 4, 5, 6):
+            is_receiver = self._is_receiver(pid, product)
+            probe_misses = 0
+            for idx in self._dev_index_scan_order(pid, product):
                 self._dev_idx = idx
-                fi = self._find_feature(FEAT_REPROG_V4)
+                probe_t0 = time.monotonic()
+                fi = self._find_feature(
+                    FEAT_REPROG_V4, timeout_ms=DISCOVERY_PROBE_TIMEOUT_MS
+                )
+                probe_ms = (time.monotonic() - probe_t0) * 1000
+                if fi is None:
+                    probe_misses += 1
+                    print(f"[HidGesture] devIdx 0x{idx:02X}: no REPROG_V4 "
+                          f"({probe_ms:.0f} ms)")
+                    # A non-receiver interface that answers neither direct
+                    # Bluetooth (0xFF) nor the first slot is not a device we
+                    # can drive — stop wasting ~0.6 s per remaining slot.
+                    if not is_receiver and probe_misses >= 2:
+                        print(f"[HidGesture] PID=0x{pid:04X} not a usable "
+                              "HID++ device — skipping remaining slots")
+                        dead_pids.add(pid)
+                        break
+                    continue
                 if fi is not None:
                     reprog_found = True
                     self._feat_idx = fi
+                    self._last_good_dev_idx = idx
                     print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
-                          f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
+                          f"PID=0x{pid:04X} devIdx=0x{idx:02X} ({probe_ms:.0f} ms)")
                     # Query actual device name via HID++ (resolves
                     # USB receivers that report a generic PID/name).
                     hidpp_name = self._query_device_name()
@@ -1806,6 +1982,15 @@ class HidGestureListener:
                             or DEFAULT_GESTURE_CIDS
                         )
                     controls = self._discover_reprog_controls()
+                    if controls is None:
+                        # REPROG_V4 answered the root probe but this slot will
+                        # not answer real feature reads — a stale or asleep
+                        # pairing on the receiver. Skip it now instead of
+                        # burning a discovery timeout on every DPI / SmartShift
+                        # / wheel / battery / divert probe that would follow.
+                        print(f"[HidGesture] devIdx 0x{idx:02X}: REPROG_V4 "
+                              "present but unresponsive — skipping slot")
+                        continue
                     self._last_controls = controls
                     self._gesture_candidates = self._choose_gesture_candidates(
                         controls,
@@ -1882,6 +2067,7 @@ class HidGestureListener:
                                 "device_path": opened_path,
                             },
                         )
+                        self._save_device_cache(pid, up, usage, source)
                         return True
                     continue     # divert failed — try next receiver slot
             if not reprog_found:
@@ -1905,16 +2091,21 @@ class HidGestureListener:
         """Outer loop: connect → listen → reconnect on error/disconnect."""
         retry_logged = False
         while self._running:
+            attempt_t0 = time.monotonic()
             if not self._try_connect():
                 if not retry_logged:
-                    print("[HidGesture] No compatible device; retrying in 5 s…")
+                    print("[HidGesture] No compatible device; retrying every 2 s…")
                     retry_logged = True
-                for _ in range(50):
+                print("[HidGesture] Connection attempt failed after "
+                      f"{(time.monotonic() - attempt_t0) * 1000:.0f} ms")
+                for _ in range(20):
                     if not self._running:
                         return
                     time.sleep(0.1)
                 continue
             retry_logged = False
+            print("[HidGesture] Connected in "
+                  f"{(time.monotonic() - attempt_t0) * 1000:.0f} ms")
 
             self._connected = True
             if self._on_connect:

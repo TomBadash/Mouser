@@ -281,13 +281,11 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
         engine.start.assert_called_once()
 
     def test_accessibility_check_exception_fails_closed(self):
-        locale_mgr = SimpleNamespace(tr=lambda key: key)
-
         with (
             patch.object(main_qml.sys, "platform", "darwin"),
             patch.object(main_qml, "is_process_trusted", side_effect=RuntimeError("boom")),
         ):
-            self.assertFalse(main_qml._check_accessibility(locale_mgr))
+            self.assertFalse(main_qml._check_accessibility())
 
     def test_tray_minimized_notice_is_scheduled_with_module_qtimer(self):
         tray = MagicMock()
@@ -306,6 +304,119 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
             main_qml.QSystemTrayIcon.MessageIcon.Information,
             5000,
         )
+
+
+@unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
+class AccessibilityGrantRecoveryTests(unittest.TestCase):
+    """The watcher that revives Mouser once the user grants the
+    Accessibility permission -- instead of leaving it idle until a
+    manual quit-and-reopen."""
+
+    def test_check_reports_grant_state_on_macos(self):
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml, "is_process_trusted", return_value=True),
+        ):
+            self.assertTrue(main_qml._check_accessibility())
+
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml, "is_process_trusted", return_value=False),
+        ):
+            self.assertFalse(main_qml._check_accessibility())
+
+    def test_relaunch_releases_lock_and_execs_source_argv(self):
+        single_server = MagicMock()
+
+        with (
+            patch.object(main_qml.sys, "executable", "/usr/bin/python3"),
+            patch.object(main_qml.sys, "argv", ["main_qml.py", "--show-window"]),
+            patch.object(main_qml.sys, "frozen", False, create=True),
+            patch.object(main_qml.os, "execv") as execv,
+        ):
+            main_qml._relaunch_app(single_server)
+
+        single_server.close.assert_called_once_with()
+        execv.assert_called_once_with(
+            "/usr/bin/python3",
+            ["/usr/bin/python3", "main_qml.py", "--show-window"],
+        )
+
+    def test_relaunch_drops_argv0_for_frozen_build(self):
+        binary = "/Applications/Mouser.app/Contents/MacOS/Mouser"
+
+        with (
+            patch.object(main_qml.sys, "executable", binary),
+            patch.object(main_qml.sys, "argv", [binary, "--start-hidden"]),
+            patch.object(main_qml.sys, "frozen", True, create=True),
+            patch.object(main_qml.os, "execv") as execv,
+        ):
+            main_qml._relaunch_app(None)
+
+        execv.assert_called_once_with(binary, [binary, "--start-hidden"])
+
+    def test_relaunch_survives_failed_execv(self):
+        with (
+            patch.object(main_qml.sys, "executable", "/usr/bin/python3"),
+            patch.object(main_qml.sys, "argv", ["main_qml.py"]),
+            patch.object(main_qml.sys, "frozen", False, create=True),
+            patch.object(main_qml.os, "execv", side_effect=OSError("denied")),
+        ):
+            main_qml._relaunch_app(None)  # must not raise
+
+    def test_grant_poll_relaunches_once_permission_lands(self):
+        timer = MagicMock()
+        single_server = MagicMock()
+
+        with (
+            patch.object(main_qml, "is_process_trusted", return_value=True),
+            patch.object(main_qml, "_relaunch_app") as relaunch,
+        ):
+            triggered = main_qml._accessibility_grant_poll(timer, single_server)
+
+        self.assertTrue(triggered)
+        timer.stop.assert_called_once_with()
+        relaunch.assert_called_once_with(single_server)
+
+    def test_grant_poll_keeps_waiting_without_permission(self):
+        timer = MagicMock()
+
+        with (
+            patch.object(main_qml, "is_process_trusted", return_value=False),
+            patch.object(main_qml, "_relaunch_app") as relaunch,
+        ):
+            triggered = main_qml._accessibility_grant_poll(timer, MagicMock())
+
+        self.assertFalse(triggered)
+        timer.stop.assert_not_called()
+        relaunch.assert_not_called()
+
+    def test_grant_poll_survives_check_exception(self):
+        timer = MagicMock()
+
+        with (
+            patch.object(
+                main_qml, "is_process_trusted", side_effect=RuntimeError("boom")
+            ),
+            patch.object(main_qml, "_relaunch_app") as relaunch,
+        ):
+            triggered = main_qml._accessibility_grant_poll(timer, MagicMock())
+
+        self.assertFalse(triggered)
+        timer.stop.assert_not_called()
+        relaunch.assert_not_called()
+
+    def test_watch_accessibility_grant_starts_polling_timer(self):
+        fake_timer = MagicMock()
+
+        with patch.object(main_qml, "QTimer", return_value=fake_timer):
+            returned = main_qml._watch_accessibility_grant(MagicMock(), MagicMock())
+
+        self.assertIs(returned, fake_timer)
+        fake_timer.setInterval.assert_called_once_with(
+            main_qml._ACCESSIBILITY_POLL_INTERVAL_MS
+        )
+        fake_timer.start.assert_called_once_with()
 
 
 if __name__ == "__main__":

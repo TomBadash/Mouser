@@ -64,7 +64,12 @@ _TRANSLATIONS = {
         "mouse.swipe_right": "Swipe right",
         "mouse.swipe_up": "Swipe up",
         "mouse.swipe_down": "Swipe down",
-        "mouse.threshold": "Threshold",
+        "mouse.sensitivity": "Sensitivity",
+        "mouse.sensitivity_highest": "Highest",
+        "mouse.sensitivity_high": "High",
+        "mouse.sensitivity_medium": "Medium",
+        "mouse.sensitivity_low": "Low",
+        "mouse.sensitivity_lowest": "Lowest",
 
         # Mouse page — debug panel
         "mouse.debug_events": "Debug Events",
@@ -217,10 +222,11 @@ _TRANSLATIONS = {
         "accessibility.text": (
             "Mouser needs Accessibility permission to intercept "
             "mouse button events.\n\n"
-            "macOS should have opened the System Settings prompt.\n"
-            "Please grant permission, then restart Mouser."
+            "Grant it in System Settings and Mouser starts automatically "
+            "once the permission is enabled -- no need to quit and reopen."
         ),
         "accessibility.info": "System Settings -> Privacy & Security -> Accessibility",
+        "accessibility.open_settings": "Open System Settings",
 
         # About dialog
         "about.title": "About Mouser",
@@ -288,7 +294,12 @@ _TRANSLATIONS = {
         "mouse.swipe_right": "\u5411\u53f3\u6ed1\u52a8",
         "mouse.swipe_up": "\u5411\u4e0a\u6ed1\u52a8",
         "mouse.swipe_down": "\u5411\u4e0b\u6ed1\u52a8",
-        "mouse.threshold": "\u9608\u5024",
+        "mouse.sensitivity": "\u7075\u654f\u5ea6",
+        "mouse.sensitivity_highest": "\u6700\u9ad8",
+        "mouse.sensitivity_high": "\u9ad8",
+        "mouse.sensitivity_medium": "\u4e2d",
+        "mouse.sensitivity_low": "\u4f4e",
+        "mouse.sensitivity_lowest": "\u6700\u4f4e",
 
         "mouse.debug_events": "\u8c03\u8bd5\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u68c0\u6d4b\u5230\u7684\u6309\u952e\u3001\u624b\u52bf\u548c\u6620\u5c04\u52a8\u4f5c",
@@ -433,10 +444,10 @@ _TRANSLATIONS = {
         "accessibility.title": "\u9700\u8981\u8f85\u52a9\u529f\u80fd\u6743\u9650",
         "accessibility.text": (
             "Mouser \u9700\u8981\u8f85\u52a9\u529f\u80fd\u6743\u9650\u4ee5\u62e6\u622a\u9f20\u6807\u6309\u952e\u4e8b\u4ef6\u3002\n\n"
-            "macOS \u5e94\u5df2\u6253\u5f00\u7cfb\u7edf\u8bbe\u7f6e\u63d0\u793a\u3002\n"
-            "\u8bf7\u6388\u4e88\u6743\u9650\uff0c\u7136\u540e\u91cd\u65b0\u542f\u52a8 Mouser\u3002"
+            "\u5728\u7cfb\u7edf\u8bbe\u7f6e\u4e2d\u6388\u4e88\u6743\u9650\u540e\uff0cMouser \u5c06\u81ea\u52a8\u542f\u52a8\uff0c\u65e0\u9700\u9000\u51fa\u91cd\u5f00\u3002"
         ),
         "accessibility.info": "\u7cfb\u7edf\u8bbe\u7f6e -> \u9690\u79c1\u4e0e\u5b89\u5168\u6027 -> \u8f85\u52a9\u529f\u80fd",
+        "accessibility.open_settings": "\u6253\u5f00\u7cfb\u7edf\u8bbe\u7f6e",
 
         "about.title": "\u5173\u4e8e Mouser",
         "about.subtitle": "\u7528\u4e8e\u652f\u6301\u548c\u8c03\u8bd5\u7684\u8fd0\u884c\u65f6\u4e0e\u6784\u5efa\u4fe1\u606f\u3002",
@@ -502,7 +513,12 @@ _TRANSLATIONS = {
         "mouse.swipe_right": "\u5411\u53f3\u6ed1\u52d5",
         "mouse.swipe_up": "\u5411\u4e0a\u6ed1\u52d5",
         "mouse.swipe_down": "\u5411\u4e0b\u6ed1\u52d5",
-        "mouse.threshold": "\u95be\u5024",
+        "mouse.sensitivity": "\u9748\u654f\u5ea6",
+        "mouse.sensitivity_highest": "\u6700\u9ad8",
+        "mouse.sensitivity_high": "\u9ad8",
+        "mouse.sensitivity_medium": "\u4e2d",
+        "mouse.sensitivity_low": "\u4f4e",
+        "mouse.sensitivity_lowest": "\u6700\u4f4e",
 
         "mouse.debug_events": "\u9664\u932f\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u5075\u6e2c\u5230\u7684\u6309\u9375\u3001\u624b\u52e2\u548c\u5c0d\u6620\u52d5\u4f5c",
@@ -647,10 +663,10 @@ _TRANSLATIONS = {
         "accessibility.title": "\u9700\u8981\u8f14\u52a9\u4f7f\u7528\u6b0a\u9650",
         "accessibility.text": (
             "Mouser \u9700\u8981\u8f14\u52a9\u4f7f\u7528\u6b0a\u9650\u4ee5\u6514\u622a\u6ed1\u9f20\u6309\u9375\u4e8b\u4ef6\u3002\n\n"
-            "macOS \u61c9\u5df2\u958b\u555f\u7cfb\u7d71\u8a2d\u5b9a\u63d0\u793a\u3002\n"
-            "\u8acb\u6388\u4e88\u6b0a\u9650\uff0c\u7136\u5f8c\u91cd\u65b0\u555f\u52d5 Mouser\u3002"
+            "\u5728\u7cfb\u7d71\u8a2d\u5b9a\u4e2d\u6388\u4e88\u6b0a\u9650\u5f8c\uff0cMouser \u5c07\u81ea\u52d5\u555f\u52d5\uff0c\u7121\u9700\u7d50\u675f\u91cd\u958b\u3002"
         ),
         "accessibility.info": "\u7cfb\u7d71\u8a2d\u5b9a -> \u96b1\u79c1\u6b0a\u8207\u5b89\u5168\u6027 -> \u8f14\u52a9\u4f7f\u7528",
+        "accessibility.open_settings": "\u958b\u555f\u7cfb\u7d71\u8a2d\u5b9a",
 
         "about.title": "\u95dc\u65bc Mouser",
         "about.subtitle": "\u63d0\u4f9b\u652f\u63f4\u8207\u9664\u932f\u7528\u7684\u57f7\u884c\u6642\u8207\u5efa\u7f6e\u8cc7\u8a0a\u3002",

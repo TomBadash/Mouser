@@ -43,7 +43,7 @@ class MacOSBuildScriptTests(unittest.TestCase):
         self._write_manager("asdf")
         self._write_python(self.bin_dir / "python3", "path-python3")
         self._write_python(self.bin_dir / "python", "path-python")
-        for tool in ("dirname", "pwd", "mkdir", "find", "awk", "touch"):
+        for tool in ("dirname", "pwd", "mkdir", "find", "awk", "touch", "df"):
             resolved = shutil.which(tool)
             if resolved:
                 os.symlink(resolved, self.tool_dir / tool)
