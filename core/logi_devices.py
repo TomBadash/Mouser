@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import re
 from typing import Iterable
 
-from core.logi_device_catalog import LOGI_DEVICE_SPECS
+from core.logi_device_catalog import LOGI_DEVICE_SPECS, MX_MASTER_4_BUTTONS
 
 
 DEFAULT_GESTURE_CIDS = (0x00C3, 0x00D7)
@@ -119,6 +119,16 @@ class LogiDeviceSpec:
     supported_buttons: tuple[str, ...] = DEFAULT_BUTTON_LAYOUT
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
+    # Catalog hints; runtime HID++ discovery overrides these via ConnectedDeviceInfo.
+    has_hires_wheel: bool = False
+    has_thumbwheel: bool = False
+    # True when the device exposes a haptic Sense Panel that should drive
+    # gestures (MX Master 4 family). Enables an OS-level btn=6 / BTN_TASK
+    # fallback path when HID++ divert of the panel is unavailable.
+    gesture_via_sense_panel: bool = False
+    # Optional second thumb-area control to divert as a button-only extra
+    # (no rawXY) alongside the active gesture CID.
+    thumb_button_cid: int | None = None
 
     def matches(self, product_id=None, product_name=None) -> bool:
         if product_id is not None and int(product_id) in self.product_ids:
@@ -367,6 +377,19 @@ class ConnectedDeviceInfo:
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
     capability_inventory: DeviceCapabilityInventory = DeviceCapabilityInventory()
+    # has_* mirrors HID++ feature presence; *_active reflects whether the
+    # listener currently holds the firmware-invert lease. Engine and mouse
+    # hooks read these directly instead of re-walking the inventory.
+    has_hires_wheel: bool = False
+    has_thumbwheel: bool = False
+    hires_wheel_active: bool = False
+    thumbwheel_active: bool = False
+    gesture_via_sense_panel: bool = False
+    thumb_button_cid: int | None = None
+    # CID the listener actually diverted as the gesture role; None until divert succeeds.
+    active_gesture_cid: int | None = None
+    # True when thumb_button events arrive over HID++ rather than via the OS button path.
+    thumb_button_via_hid: bool = False
 
 
 # Seeded from Mouser's own device catalog first, then extended with broader
@@ -419,9 +442,32 @@ def iter_known_devices() -> Iterable[LogiDeviceSpec]:
 
 
 def clamp_dpi(value, device=None) -> int:
+    """Clamp ``value`` into the device's DPI range, defaulting to the safe
+    floor on malformed input.
+
+    ``value`` may arrive from a JSON config file, a QML binding, or a HID
+    report -- so the raw ``int(value)`` cast that was here before could
+    raise on a stringified hex value, on ``None``, or on a partial HID
+    read. Crashing the engine's DPI path because the user edited
+    ``config.json`` by hand is the wrong failure mode; we coerce
+    defensively and return the device minimum so the cursor never freezes.
+    """
     dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
     dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
-    dpi = int(value)
+    if isinstance(value, bool):
+        # ``bool`` is a subclass of ``int`` -- reject it explicitly so a
+        # leaked truthy flag never silently resolves to 0 or 1 DPI.
+        return dpi_min
+    if isinstance(value, str):
+        try:
+            dpi = int(value, 0)
+        except (TypeError, ValueError):
+            return dpi_min
+    else:
+        try:
+            dpi = int(value)
+        except (TypeError, ValueError):
+            return dpi_min
     return max(dpi_min, min(dpi_max, dpi))
 
 
@@ -432,16 +478,25 @@ def resolve_device(product_id=None, product_name=None) -> LogiDeviceSpec | None:
     return None
 
 
+def _coerce_cid(value) -> int | None:
+    """Normalize a CID value (int, ``"0x01A0"`` hex string, or ``None``) to ``int | None``.
+
+    Returns ``None`` for falsy / unparseable inputs so callers never have to
+    distinguish between "absent" and "malformed" -- the contract is
+    intentionally fail-closed.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _control_cid(control) -> int | None:
     if not isinstance(control, dict):
         return None
-    cid = control.get("cid")
-    if cid in (None, ""):
-        return None
-    try:
-        return int(cid, 0) if isinstance(cid, str) else int(cid)
-    except (TypeError, ValueError):
-        return None
+    return _coerce_cid(control.get("cid"))
 
 
 def _control_int(control, field) -> int | None:
@@ -763,6 +818,7 @@ def derive_supported_buttons_from_reprog_controls(
 # resolve buttons even when individual devices use per-device ui_layout keys.
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
+    "mx_master_4": MX_MASTER_4_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
@@ -779,6 +835,19 @@ def get_buttons_for_layout(ui_layout_key: str) -> tuple[str, ...] | None:
     return None
 
 
+def _resolve_capability(runtime: bool | None, catalog: bool) -> bool:
+    """Tristate capability resolver: ``None`` defers to catalog; non-None wins.
+
+    Callers signal "I haven't probed this yet" with ``None`` and "I probed and
+    here's what I saw" with ``True``/``False``. Without the tristate, a runtime
+    probe that returned ``False`` (definitive absence) would be silently
+    overridden by an optimistic catalog hint.
+    """
+    if runtime is None:
+        return bool(catalog)
+    return bool(runtime)
+
+
 def build_connected_device_info(
     *,
     product_id=None,
@@ -792,6 +861,11 @@ def build_connected_device_info(
     discovered_features=None,
     device_identity=None,
     diagnostics=None,
+    has_hires_wheel: bool | None = None,
+    has_thumbwheel: bool | None = None,
+    hires_wheel_active: bool = False,
+    thumbwheel_active: bool = False,
+    thumb_button_via_hid: bool = False,
 ) -> ConnectedDeviceInfo:
     spec = resolve_device(product_id=product_id, product_name=product_name)
     pid = int(product_id) if product_id not in (None, "") else None
@@ -802,17 +876,27 @@ def build_connected_device_info(
         "source": source,
         **dict(device_identity or {}),
     }
+    # Empty tuple is a legitimate "no gesture CIDs detected" signal from the
+    # runtime; only fall back to spec/defaults when the caller passes ``None``.
+    spec_gesture_cids = spec.gesture_cids if spec is not None else None
     inventory = build_device_capability_inventory(
         reprog_controls,
         device_identity=identity,
-        gesture_cids=gesture_cids or getattr(spec, "gesture_cids", None),
+        gesture_cids=spec_gesture_cids if gesture_cids is None else gesture_cids,
         active_gesture_cid=active_gesture_cid,
         gesture_rawxy_enabled=gesture_rawxy_enabled,
         discovered_features=discovered_features,
         diagnostics=diagnostics,
     )
+    spec_has_hires = bool(spec.has_hires_wheel) if spec is not None else False
+    spec_has_thumb = bool(spec.has_thumbwheel) if spec is not None else False
+    eff_has_hires = _resolve_capability(has_hires_wheel, spec_has_hires)
+    eff_has_thumb = _resolve_capability(has_thumbwheel, spec_has_thumb)
+    normalized_active_cid = _coerce_cid(active_gesture_cid)
     if spec:
-        resolved_gesture_cids = tuple(gesture_cids or spec.gesture_cids)
+        resolved_gesture_cids = (
+            tuple(gesture_cids) if gesture_cids is not None else tuple(spec.gesture_cids)
+        )
         return ConnectedDeviceInfo(
             key=spec.key,
             display_name=spec.display_name,
@@ -827,6 +911,14 @@ def build_connected_device_info(
             dpi_min=spec.dpi_min,
             dpi_max=spec.dpi_max,
             capability_inventory=inventory,
+            has_hires_wheel=eff_has_hires,
+            has_thumbwheel=eff_has_thumb,
+            hires_wheel_active=bool(hires_wheel_active),
+            thumbwheel_active=bool(thumbwheel_active),
+            gesture_via_sense_panel=bool(spec.gesture_via_sense_panel),
+            thumb_button_cid=spec.thumb_button_cid,
+            active_gesture_cid=normalized_active_cid,
+            thumb_button_via_hid=bool(thumb_button_via_hid),
         )
 
     # Fallback for unrecognized devices (e.g., USB Receiver PID 0xC52B which
@@ -836,6 +928,9 @@ def build_connected_device_info(
         f"Logitech PID 0x{pid:04X}" if pid is not None else "Logitech mouse"
     )
     key = _normalize_name(display_name).replace(" ", "_") or "logitech_mouse"
+    fallback_gesture_cids = (
+        tuple(gesture_cids) if gesture_cids is not None else tuple(DEFAULT_GESTURE_CIDS)
+    )
     return ConnectedDeviceInfo(
         key=key,
         display_name=display_name,
@@ -846,8 +941,14 @@ def build_connected_device_info(
         ui_layout="generic_mouse",
         image_asset="icons/mouse-simple.svg",
         supported_buttons=GENERIC_BUTTONS,
-        gesture_cids=tuple(gesture_cids or DEFAULT_GESTURE_CIDS),
+        gesture_cids=fallback_gesture_cids,
         capability_inventory=inventory,
+        has_hires_wheel=eff_has_hires,
+        has_thumbwheel=eff_has_thumb,
+        hires_wheel_active=bool(hires_wheel_active),
+        thumbwheel_active=bool(thumbwheel_active),
+        active_gesture_cid=normalized_active_cid,
+        thumb_button_via_hid=bool(thumb_button_via_hid),
     )
 
 
