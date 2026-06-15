@@ -18,6 +18,10 @@ class _FakeMouseHook:
         self._hid_gesture = None
         self.start_called = False
         self.stop_called = False
+        self.wheel_native_invert_active = False
+        # Back-compat alias mirrored on the real BaseMouseHook for callers
+        # from the divert+inject build of the test fixtures.
+        self.wheel_divert_active = False
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -33,6 +37,11 @@ class _FakeMouseHook:
 
     def configure_gestures(self, **kwargs):
         self._gesture_config = kwargs
+
+    def configure_wheel_multipliers(self, vertical, horizontal):
+        # Retained for shape compatibility; real BaseMouseHook accepts but
+        # no-ops the call in native-invert mode.
+        return None
 
     def block(self, event_type):
         pass

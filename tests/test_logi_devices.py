@@ -233,6 +233,31 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
 
+    def test_clamp_dpi_accepts_string_int(self):
+        """Hand-edited config files can persist DPI as a JSON string when
+        users copy values around. Coerce instead of throwing."""
+        self.assertEqual(clamp_dpi("1500", None), 1500)
+
+    def test_clamp_dpi_accepts_hex_string(self):
+        self.assertEqual(clamp_dpi("0x5DC", None), 1500)
+
+    def test_clamp_dpi_falls_back_to_min_on_garbage_string(self):
+        self.assertEqual(clamp_dpi("not-a-number", None), 200)
+
+    def test_clamp_dpi_falls_back_to_min_on_none(self):
+        self.assertEqual(clamp_dpi(None, None), 200)
+
+    def test_clamp_dpi_rejects_bool(self):
+        """``bool`` is a subclass of ``int`` -- without the explicit check
+        ``True``/``False`` would silently clamp to ``dpi_min``/``dpi_min``
+        because ``int(True) == 1`` and ``min(200, 1) == 1`` becomes 200 via
+        the floor, which masks the upstream bug."""
+        self.assertEqual(clamp_dpi(True, None), 200)
+        self.assertEqual(clamp_dpi(False, None), 200)
+
+    def test_clamp_dpi_accepts_float(self):
+        self.assertEqual(clamp_dpi(1500.7, None), 1500)
+
     def test_mx_anywhere_2s_supported_buttons_include_middle_and_hscroll(self):
         device = resolve_device(product_id=0xB01A)
 
@@ -584,12 +609,127 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
 
         self.assertIn("mode_shift", info.supported_buttons)
         self.assertIn("gesture_down", info.supported_buttons)
-        self.assertNotIn("action_ring", info.supported_buttons)
+        # `thumb_button` is the relocated Mouse Gesture Button (CID 0x00C3)
+        # exposed as a UI mapping target via MX_MASTER_4_BUTTONS. The Sense
+        # Panel (CID 0x01A0) drives gestures via rawXY and does not get a
+        # button entry of its own.
+        self.assertIn("thumb_button", info.supported_buttons)
         self.assertNotIn("haptic", info.supported_buttons)
         self.assertEqual(
             info.capability_inventory.to_dict()["known_unsupported_controls"],
             [{"cid": "0x01A0", "name": "haptic"}],
         )
+
+    def test_mx_master_4_spec_metadata_mirrored_onto_connected_info(self):
+        info = build_connected_device_info(product_id=0xB042)
+
+        self.assertEqual(info.key, "mx_master_4")
+        self.assertEqual(info.gesture_cids, (0x01A0, 0x00C3, 0x00D7))
+        self.assertEqual(info.thumb_button_cid, 0x00C3)
+        self.assertTrue(info.gesture_via_sense_panel)
+        self.assertTrue(info.has_hires_wheel)
+        self.assertTrue(info.has_thumbwheel)
+        self.assertFalse(info.hires_wheel_active)
+        self.assertFalse(info.thumbwheel_active)
+        self.assertFalse(info.thumb_button_via_hid)
+        self.assertIsNone(info.active_gesture_cid)
+
+    def test_active_gesture_cid_is_normalized_to_int(self):
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid=0x01A0,
+        )
+
+        self.assertEqual(info.active_gesture_cid, 0x01A0)
+        self.assertIsInstance(info.active_gesture_cid, int)
+
+    def test_active_gesture_cid_accepts_hex_string(self):
+        """Runtime callers occasionally hand back CIDs as hex strings; the
+        normalizer must coerce or downstream mouse hooks compare wrong types.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid="0x01A0",
+        )
+
+        self.assertEqual(info.active_gesture_cid, 0x01A0)
+        self.assertIsInstance(info.active_gesture_cid, int)
+
+    def test_active_gesture_cid_malformed_value_resolves_to_none(self):
+        """Garbage in, ``None`` out -- never a stale numeric coercion."""
+        info = build_connected_device_info(
+            product_id=0xB042,
+            active_gesture_cid="not-a-hex",
+        )
+
+        self.assertIsNone(info.active_gesture_cid)
+
+    def test_unknown_pid_falls_back_to_generic_layout(self):
+        """Unrecognized devices must never inherit MX-family controls or layouts."""
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            product_name="Mystery Mouse",
+        )
+
+        self.assertEqual(info.ui_layout, "generic_mouse")
+        self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
+        self.assertEqual(info.supported_buttons, GENERIC_BUTTONS)
+        self.assertNotIn("thumb_button", info.supported_buttons)
+        self.assertNotIn("hscroll_left", info.supported_buttons)
+        self.assertNotIn("mode_shift", info.supported_buttons)
+        self.assertFalse(info.gesture_via_sense_panel)
+        self.assertIsNone(info.thumb_button_cid)
+
+    def test_unknown_pid_defaults_capabilities_to_false(self):
+        info = build_connected_device_info(product_id=0xDEAD)
+
+        self.assertFalse(info.has_hires_wheel)
+        self.assertFalse(info.has_thumbwheel)
+
+    def test_explicit_runtime_false_overrides_catalog_true(self):
+        """The tristate capability resolver is the FANG-critical contract:
+        a runtime probe that definitively saw no HiResWheel must defeat a
+        catalog hint, otherwise the listener tries to divert a feature the
+        device does not advertise and the device returns hard errors.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            has_hires_wheel=False,
+            has_thumbwheel=False,
+        )
+
+        self.assertFalse(info.has_hires_wheel)
+        self.assertFalse(info.has_thumbwheel)
+
+    def test_explicit_runtime_true_on_uncatalogued_device(self):
+        """Devices the catalog does not know about can still be upgraded to
+        having a HiResWheel by a runtime probe."""
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            has_hires_wheel=True,
+        )
+
+        self.assertTrue(info.has_hires_wheel)
+        self.assertEqual(info.ui_layout, "generic_mouse")
+
+    def test_caller_supplied_empty_gesture_cids_is_respected(self):
+        """``gesture_cids=()`` is the runtime signal "I probed and saw none";
+        it must not silently fall back to ``spec.gesture_cids``.
+        """
+        info = build_connected_device_info(
+            product_id=0xB042,
+            gesture_cids=(),
+        )
+
+        self.assertEqual(info.gesture_cids, ())
+
+    def test_caller_supplied_empty_gesture_cids_on_unknown_device(self):
+        info = build_connected_device_info(
+            product_id=0xDEAD,
+            gesture_cids=(),
+        )
+
+        self.assertEqual(info.gesture_cids, ())
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ class _FakeEngine:
         self.debug_callback = None
         self.gesture_callback = None
         self.status_callback = None
+        self.wheel_divert_callback = None
         self.debug_enabled = None
         self.start_count = 0
         self.stop_count = 0
@@ -71,6 +72,9 @@ class _FakeEngine:
 
     def set_status_callback(self, cb):
         self.status_callback = cb
+
+    def set_wheel_divert_change_callback(self, cb):
+        self.wheel_divert_callback = cb
 
     def set_debug_enabled(self, enabled):
         self.debug_enabled = enabled
@@ -729,6 +733,111 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertNotIn("gesture", button_keys)
         self.assertNotIn("mode_shift", button_keys)
 
+    def test_mx_master_4_mappings_use_per_device_hotspot_labels(self):
+        device = SimpleNamespace(
+            key="mx_master_4",
+            display_name="MX Master 4",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_4",
+            supported_buttons=(
+                "middle", "gesture", "xbutton1", "xbutton2", "thumb_button",
+                "hscroll_left", "hscroll_right", "mode_shift",
+            ),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+
+        names_by_key = {button["key"]: button["name"] for button in backend.buttons}
+        self.assertEqual(names_by_key.get("gesture"), "Sense Panel")
+        self.assertEqual(names_by_key.get("thumb_button"), "Top thumb button")
+
+    def test_mappings_fall_back_to_button_names_when_layout_has_no_hotspot(self):
+        # mx_master_3s defines a hotspot for hscroll_left (the wheel marker)
+        # but none for hscroll_right, so the right-direction binding must
+        # surface the global BUTTON_NAMES entry instead of an empty label.
+        device = SimpleNamespace(
+            key="mx_master_3s",
+            display_name="MX Master 3S",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_3s",
+            supported_buttons=(
+                "middle", "gesture", "xbutton1", "xbutton2",
+                "hscroll_left", "hscroll_right",
+            ),
+        )
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=_FakeEngine(device_connected=True, connected_device=device))
+
+        names_by_key = {button["key"]: button["name"] for button in backend.buttons}
+        self.assertEqual(names_by_key.get("hscroll_right"), "Horizontal scroll right")
+        self.assertEqual(names_by_key.get("hscroll_left"), "Horizontal scroll left")
+
+    def test_button_label_falls_back_when_layout_has_no_hotspots_array(self):
+        """A layout without a ``hotspots`` array (e.g. generic mouse) must
+        still produce the global BUTTON_NAMES fallback for every key.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {"key": "generic_mouse"}
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_falls_back_when_layout_is_none(self):
+        """Defensive: a transient None layout (race with disconnect cleanup)
+        must not raise -- the mappings list rebuild has to survive the case.
+        """
+        backend = self._make_backend()
+        backend._device_layout = None
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_ignores_empty_string_label(self):
+        """A hotspot whose label is the empty string is data corruption, not
+        a deliberate "label is empty" signal. Fall back so the user always
+        sees a non-empty name in the mappings list.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [{"buttonKey": "middle", "label": ""}],
+        }
+        self.assertEqual(backend._button_label("middle", "Middle"), "Middle")
+
+    def test_button_label_ignores_non_dict_hotspots(self):
+        """Malformed catalog entries (a list slipping in instead of a dict)
+        must not raise AttributeError mid-rebuild.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [
+                None,
+                ["not", "a", "dict"],
+                {"buttonKey": "middle", "label": "Wheel click"},
+            ],
+        }
+        self.assertEqual(backend._button_label("middle", "Middle"), "Wheel click")
+
+    def test_button_label_returns_first_match_on_duplicates(self):
+        """If duplicate hotspots claim the same buttonKey (catalog bug), the
+        return value must be deterministic -- first wins.
+        """
+        backend = self._make_backend()
+        backend._device_layout = {
+            "hotspots": [
+                {"buttonKey": "middle", "label": "First"},
+                {"buttonKey": "middle", "label": "Second"},
+            ],
+        }
+        self.assertEqual(backend._button_label("middle", "Fallback"), "First")
+
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
         device = SimpleNamespace(
             key="mx_master_3",
@@ -1374,6 +1483,91 @@ class BackendLoginStartupTests(unittest.TestCase):
 
         apply_mock.assert_not_called()
         self.assertFalse(backend.startMinimized)
+
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendWheelDivertSignalTests(unittest.TestCase):
+    """Pin the contract that exposes HID++ wheel-divert state to QML.
+
+    The Scroll page's invert-scope badge derives its tristate ("device",
+    "mouser", "inactive") from ``backend.wheelDivertActive`` and
+    ``backend.mouseConnected``. If either side of that contract slips, the
+    badge silently misrepresents which inversion path the device is on --
+    which is the precise UX failure mode that the new platform-hook gate is
+    supposed to eliminate.
+    """
+
+    def _make_backend(self, engine=None):
+        loaded_config = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=loaded_config),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=engine)
+
+    def test_engine_callback_is_registered_when_available(self):
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+        self.assertIsNotNone(engine.wheel_divert_callback)
+
+    def test_default_state_is_inactive(self):
+        backend = self._make_backend(engine=_FakeEngine())
+        self.addCleanup(backend.deleteLater)
+        self.assertFalse(backend.wheelDivertActive)
+
+    def test_callback_flips_property_and_emits_signal(self):
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        events: list[bool] = []
+        backend.wheelDivertActiveChanged.connect(events.append)
+
+        engine.wheel_divert_callback(True)
+        QCoreApplication.processEvents()
+        self.assertTrue(backend.wheelDivertActive)
+        self.assertEqual(events, [True])
+
+        engine.wheel_divert_callback(False)
+        QCoreApplication.processEvents()
+        self.assertFalse(backend.wheelDivertActive)
+        self.assertEqual(events, [True, False])
+
+    def test_redundant_callback_does_not_emit_signal(self):
+        """No-op transitions must not churn the QML binding -- otherwise the
+        badge animation would re-trigger on every reconnect even when the
+        scope stayed the same.
+        """
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        events: list[bool] = []
+        backend.wheelDivertActiveChanged.connect(events.append)
+
+        engine.wheel_divert_callback(False)
+        engine.wheel_divert_callback(False)
+        QCoreApplication.processEvents()
+        self.assertEqual(events, [])
+
+    def test_truthy_non_bool_value_is_coerced(self):
+        """Engines that pass ``1`` / ``0`` instead of strict booleans must not
+        leak the raw int into the property. QML bindings type-narrow against
+        the ``Property(bool, ...)`` declaration, so the property accessor has
+        to coerce defensively.
+        """
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        engine.wheel_divert_callback(1)
+        QCoreApplication.processEvents()
+        self.assertIs(backend.wheelDivertActive, True)
 
 
 if __name__ == "__main__":

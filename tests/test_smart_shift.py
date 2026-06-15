@@ -12,7 +12,7 @@ from core.config import DEFAULT_CONFIG
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HidGestureListener — write path
+# HidGestureListener -- write path
 # ──────────────────────────────────────────────────────────────────────────────
 
 class SmartShiftWriteTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class SmartShiftWriteTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HidGestureListener — read path
+# HidGestureListener -- read path
 # ──────────────────────────────────────────────────────────────────────────────
 
 class SmartShiftReadTests(unittest.TestCase):
@@ -241,7 +241,7 @@ class SmartShiftPendingRequestAbortTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Engine — SmartShift config persistence and startup
+# Engine -- SmartShift config persistence and startup
 # ──────────────────────────────────────────────────────────────────────────────
 
 class _FakeMouseHook:
@@ -254,12 +254,16 @@ class _FakeMouseHook:
         self._hid_gesture = None
         self.divert_mode_shift = False
         self.start_called = False
+        self.wheel_native_invert_active = False
+        self.wheel_divert_active = False
 
     def set_debug_callback(self, cb): pass
     def set_gesture_callback(self, cb): pass
     def set_status_callback(self, cb): pass
     def set_connection_change_callback(self, cb): pass
     def configure_gestures(self, **kwargs): pass
+    def configure_wheel_multipliers(self, vertical, horizontal):
+        return None
     def block(self, event_type): pass
     def register(self, event_type, callback): pass
     def reset_bindings(self): pass
@@ -425,7 +429,7 @@ class EngineSmartShiftTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Backend — SmartShift properties, slots, and device read sync
+# Backend -- SmartShift properties, slots, and device read sync
 # ──────────────────────────────────────────────────────────────────────────────
 
 try:
@@ -500,7 +504,7 @@ class BackendSmartShiftTests(unittest.TestCase):
             # Simulate the two-step cross-thread call: stage state, then invoke handler
             backend._pending_smart_shift_state = {"mode": "freespin", "enabled": False, "threshold": 35}
             backend._handleSmartShiftRead()
-        # Hardware reads should NOT be persisted — user's explicit saves drive the file.
+        # Hardware reads should NOT be persisted -- user's explicit saves drive the file.
         save_mock.assert_not_called()
         self.assertEqual(backend._cfg["settings"]["smart_shift_mode"], "freespin")
         self.assertFalse(backend._cfg["settings"]["smart_shift_enabled"])
@@ -535,7 +539,7 @@ class BackendSmartShiftTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Engine — _toggle_smart_shift (physical button / mapped action)
+# Engine -- _toggle_smart_shift (physical button / mapped action)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class EngineToggleSmartShiftTests(unittest.TestCase):
@@ -622,7 +626,7 @@ class EngineToggleSmartShiftTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Engine — _switch_scroll_mode (ratchet ↔ freespin, disables SmartShift auto)
+# Engine -- _switch_scroll_mode (ratchet ↔ freespin, disables SmartShift auto)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class EngineSwitchScrollModeTests(unittest.TestCase):
@@ -689,7 +693,7 @@ class EngineSwitchScrollModeTests(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Config v7 migration — mode_shift "none" → "toggle_smart_shift"
+# Config v7 migration -- mode_shift "none" → "toggle_smart_shift"
 # (v7 runs as an intermediate step; v8 then upgrades toggle → switch)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -749,11 +753,11 @@ class ConfigV7MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v6_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 11)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Config v8 migration — mode_shift "toggle_smart_shift" → "switch_scroll_mode"
+# Config v8 migration -- mode_shift "toggle_smart_shift" → "switch_scroll_mode"
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ConfigV8MigrationTests(unittest.TestCase):
@@ -811,7 +815,7 @@ class ConfigV8MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v7_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 11)
 
 
 class HidForceReconnectTests(unittest.TestCase):

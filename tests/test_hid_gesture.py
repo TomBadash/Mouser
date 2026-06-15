@@ -202,7 +202,7 @@ class HidEnumerationFallbackTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -364,7 +364,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         listener, info = self._make_listener()
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -417,7 +417,7 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         }
         fake_devs = [_FakeHidDevice(), _FakeHidDevice()]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x10
             return None
@@ -512,7 +512,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         divert_call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -578,7 +578,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         }
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -623,7 +623,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -651,6 +651,384 @@ class HidBoltReceiverTests(unittest.TestCase):
         self.assertNotIn("gesture_up", listener.connected_device.supported_buttons)
         self.assertNotIn("mode_shift", listener.connected_device.supported_buttons)
 
+    def test_try_connect_marks_thumb_button_cid_button_only_for_mx_master_4(self):
+        """MX Master 4 must mark its thumb_button CID (the small HID++
+        button at 0x00C3) as button-only so the rawXY-enabled divert is
+        skipped if it ever ends up as the active gesture CID. Without
+        that the firmware suppresses OS mouse motion while the user
+        holds the button, freezing the cursor for nothing -- its rawXY
+        data is irrelevant when gestures are routed through the haptic
+        panel."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB042,  # MX Master 4
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 4",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, *, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(listener, "_install_thumb_button_extra"),
+            patch.object(listener, "_query_device_name", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertIn(
+            0x00C3, listener._button_only_cids,
+            "MX Master 4's small HID++ button (thumb_button_cid) must be "
+            "added to _button_only_cids so the rawXY divert is skipped -- "
+            "rawXY would freeze the cursor while held.",
+        )
+
+    def test_try_connect_leaves_button_only_cids_empty_for_mx_master_3s(self):
+        """Older MX Masters have no thumb_button_cid, so no CID needs to be
+        forced into button-only mode. The default rawXY-enabled divert on
+        the gesture CID is what drives directional swipes on those mice."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xB034,  # MX Master 3S
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 3S",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, *, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(listener, "_install_thumb_button_extra"),
+            patch.object(listener, "_query_device_name", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertEqual(listener._button_only_cids, set())
+
+    def test_divert_skips_rawxy_attempt_for_cids_in_button_only_set(self):
+        """`_divert` must request 0x03 (button-only) directly for any CID
+        flagged in `_button_only_cids`, rather than first trying 0x33
+        (rawXY-enabled) and falling back. This is the per-CID equivalent
+        of the old global button-only flag."""
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x09
+        listener._gesture_candidates = [0x00C3]
+        listener._button_only_cids = {0x00C3}
+
+        recorded = []
+
+        def fake_set_cid_reporting(cid, flags):
+            recorded.append((cid, flags))
+            return True
+
+        with (
+            patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._divert())
+
+        self.assertEqual(recorded, [(0x00C3, 0x03)])
+        self.assertFalse(listener._rawxy_enabled)
+
+    def test_divert_tries_rawxy_first_for_cids_not_in_button_only_set(self):
+        """Default behavior -- including for the new haptic CID 0x01A0 on
+        MX Master 4 -- is to request rawXY-enabled divert (0x33) so the
+        firmware delivers swipe motion over the vendor channel and pins
+        the cursor on its own."""
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x09
+        listener._gesture_candidates = [0x01A0]
+        listener._button_only_cids = {0x00C3}  # only small button is button-only
+
+        recorded = []
+
+        def fake_set_cid_reporting(cid, flags):
+            recorded.append((cid, flags))
+            return True
+
+        with (
+            patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._divert())
+
+        self.assertEqual(recorded, [(0x01A0, 0x33)])
+        self.assertTrue(listener._rawxy_enabled)
+
+    def test_install_thumb_button_extra_adds_cid_when_distinct_from_gesture(self):
+        """Happy path: 0x01A0 is the active gesture CID on MX Master 4,
+        so 0x00C3 (thumb_button_cid) is added as a button-only extra with
+        thumb_button callbacks wired in. ``thumb_button_via_hid`` stays
+        False until ``_divert_extras`` acknowledges the setCidReporting."""
+        on_down = Mock()
+        on_up = Mock()
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=on_down,
+            on_thumb_button_up=on_up,
+        )
+        listener._gesture_cid = 0x01A0
+        device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
+
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(device_spec, controls)
+
+        self.assertEqual(listener._thumb_button_cid, 0x00C3)
+        self.assertIn(0x00C3, listener._extra_diverts)
+        # No ack yet -- divert_extras has not run.
+        self.assertFalse(listener.thumb_button_via_hid)
+
+        listener._extra_divert_acks.add(0x00C3)
+        self.assertTrue(listener.thumb_button_via_hid)
+
+        # Trigger the wired callbacks via the extras dispatch path.
+        listener._extra_diverts[0x00C3]["on_down"]()
+        on_down.assert_called_once()
+        listener._extra_diverts[0x00C3]["on_up"]()
+        on_up.assert_called_once()
+
+    def test_install_thumb_button_extra_skipped_when_cid_absent_from_reprog(self):
+        """Catalog declares a thumb_button CID, but the firmware does not
+        advertise it on this connection. The helper must refuse to queue the
+        divert -- queueing would hammer setCidReporting with a CID the
+        firmware never exposed.
+        """
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=Mock(),
+            on_thumb_button_up=Mock(),
+        )
+        listener._gesture_cid = 0x01A0
+        device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x0052, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x01A0, "flags": 0x0130, "mapping_flags": 0x0011},
+        ]
+
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(device_spec, controls)
+
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertFalse(listener.thumb_button_via_hid)
+
+    def test_divert_extras_clears_acks_and_drops_failed_cids(self):
+        """When setCidReporting fails for a CID, the listener must drop it
+        from ``_extra_diverts`` so the OS-fallback path stays in charge of
+        that button. ``thumb_button_via_hid`` then resolves to False.
+        """
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x09
+        listener._thumb_button_cid = 0x00C3
+        listener._extra_diverts = {
+            0x00C4: {"on_down": Mock(), "on_up": Mock(), "held": False},
+            0x00C3: {"on_down": Mock(), "on_up": Mock(), "held": False},
+        }
+        responses = {0x00C4: True, 0x00C3: None}
+
+        def fake_set_cid_reporting(cid, flags):
+            return responses.get(cid)
+
+        with (
+            patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting),
+            patch("builtins.print"),
+        ):
+            listener._divert_extras()
+
+        self.assertEqual(listener._extra_divert_acks, {0x00C4})
+        self.assertIn(0x00C4, listener._extra_diverts)
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertFalse(listener.thumb_button_via_hid)
+
+    def test_install_thumb_button_extra_skipped_when_same_as_gesture_cid(self):
+        """Fallback path: 0x01A0 divert was rejected, so 0x00C3 became
+        the gesture CID. The thumb_button extra must NOT be added -- that
+        would re-divert the same CID and stomp on the gesture flags."""
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=Mock(),
+            on_thumb_button_up=Mock(),
+        )
+        listener._gesture_cid = 0x00C3
+        device_spec = SimpleNamespace(thumb_button_cid=0x00C3)
+        controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
+
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(device_spec, controls)
+
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertFalse(listener.thumb_button_via_hid)
+
+    def test_install_thumb_button_extra_no_op_when_cid_unset(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._gesture_cid = 0x00C3
+        device_spec = SimpleNamespace(thumb_button_cid=None)
+
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(device_spec, [])
+
+        self.assertIsNone(listener._thumb_button_cid)
+        self.assertEqual(listener._extra_diverts, {})
+        self.assertFalse(listener.thumb_button_via_hid)
+
+    def test_mx_master_4_full_connect_wires_haptic_gesture_and_thumb_button_extra(self):
+        """End-to-end happy path: when MX Master 4 connects and the
+        haptic CID 0x01A0 is divertable with rawXY, the listener picks
+        it as the active gesture CID and ALSO installs 0x00C3 as the
+        thumb_button extra. The resulting ConnectedDeviceInfo carries
+        both flags so platform mouse hooks can drop their OS-level
+        fallback paths and let HID++ own both buttons end-to-end."""
+        on_action_down = Mock()
+        on_action_up = Mock()
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=on_action_down,
+            on_thumb_button_up=on_action_up,
+        )
+        info = {
+            "product_id": 0xB042,  # MX Master 4
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "source": "hidapi-enumerate",
+            "product_string": "MX Master 4",
+            "path": b"/dev/hidraw-test",
+        }
+        # Simulate the device exposing both the haptic CID (0x01A0 with
+        # rawXY) and the small button (0x00C3, also rawXY-capable) plus
+        # back/forward.
+        controls = [
+            {"cid": 0x0053, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x0056, "flags": 0x0030, "mapping_flags": 0x0001},
+            {"cid": 0x00C3, "flags": 0x0130, "mapping_flags": 0x0011},
+            {"cid": 0x01A0, "flags": 0x0130, "mapping_flags": 0x0011},
+        ]
+        fake_dev = _FakeHidDevice()
+        cid_calls: list[tuple[int, int]] = []
+
+        def fake_set_cid_reporting(cid, flags):
+            cid_calls.append((cid, flags))
+            return True  # firmware accepts every divert
+
+        def fake_find_feature(feature_id, *, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=controls),
+            patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting),
+            patch.object(listener, "_query_device_name", return_value="MX Master 4"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        # Active gesture CID should be the sense panel.
+        self.assertEqual(listener._gesture_cid, 0x01A0)
+        # And it should have been diverted with rawXY (0x33), not 0x03.
+        self.assertIn(
+            (0x01A0, 0x33), cid_calls,
+            "haptic CID must be diverted with rawXY so swipe data flows "
+            f"over HID++; setCidReporting calls were {cid_calls}",
+        )
+        # Action ring extra installed for 0x00C3, button-only.
+        self.assertEqual(listener._thumb_button_cid, 0x00C3)
+        self.assertIn(0x00C3, listener._extra_diverts)
+        self.assertIn(
+            (0x00C3, 0x03), cid_calls,
+            "thumb_button CID must be diverted button-only (no rawXY) so "
+            "the firmware doesn't suppress cursor motion while the "
+            f"small button is held; setCidReporting calls were {cid_calls}",
+        )
+        # ConnectedDeviceInfo reflects the wiring.
+        self.assertEqual(
+            listener.connected_device.active_gesture_cid, 0x01A0
+        )
+        self.assertTrue(listener.connected_device.thumb_button_via_hid)
+
+    def test_install_thumb_button_extra_clears_stale_entry_on_reconnect(self):
+        """Reconnect to a different device whose spec has no thumb_button
+        CID -- the previously-installed entry must be removed so it doesn't
+        leak across devices."""
+        listener = hid_gesture.HidGestureListener(
+            on_thumb_button_down=Mock(),
+            on_thumb_button_up=Mock(),
+        )
+        listener._gesture_cid = 0x01A0
+        first_controls = [
+            {"cid": 0x00C3, "flags": 0x0030, "mapping_flags": 0x0001},
+        ]
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(
+                SimpleNamespace(thumb_button_cid=0x00C3),
+                first_controls,
+            )
+        self.assertIn(0x00C3, listener._extra_diverts)
+
+        listener._gesture_cid = 0x00C3  # different device
+        with patch("builtins.print"):
+            listener._install_thumb_button_extra(
+                SimpleNamespace(thumb_button_cid=None),
+                [],
+            )
+
+        self.assertNotIn(0x00C3, listener._extra_diverts)
+        self.assertIsNone(listener._thumb_button_cid)
+
     def test_try_connect_preserves_directional_gestures_after_rawxy_divert(self):
         listener = hid_gesture.HidGestureListener()
         info = {
@@ -670,7 +1048,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         ]
         fake_dev = _FakeHidDevice()
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id == hid_gesture.FEAT_REPROG_V4:
                 return 0x09
             return None
@@ -717,7 +1095,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1
@@ -759,7 +1137,7 @@ class HidBoltReceiverTests(unittest.TestCase):
         fake_dev = _FakeHidDevice()
         call_count = [0]
 
-        def fake_find_feature(feature_id):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
             if feature_id != hid_gesture.FEAT_REPROG_V4:
                 return None
             call_count[0] += 1
