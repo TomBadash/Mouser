@@ -46,6 +46,7 @@ class _FakeEngine:
         self.debug_callback = None
         self.gesture_callback = None
         self.status_callback = None
+        self.wheel_divert_callback = None
         self.debug_enabled = None
         self.start_count = 0
         self.stop_count = 0
@@ -71,6 +72,9 @@ class _FakeEngine:
 
     def set_status_callback(self, cb):
         self.status_callback = cb
+
+    def set_wheel_divert_change_callback(self, cb):
+        self.wheel_divert_callback = cb
 
     def set_debug_enabled(self, enabled):
         self.debug_enabled = enabled
@@ -1374,6 +1378,91 @@ class BackendLoginStartupTests(unittest.TestCase):
 
         apply_mock.assert_not_called()
         self.assertFalse(backend.startMinimized)
+
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendWheelDivertSignalTests(unittest.TestCase):
+    """Pin the contract that exposes HID++ wheel-divert state to QML.
+
+    The Scroll page's invert-scope badge derives its tristate ("device",
+    "mouser", "inactive") from ``backend.wheelDivertActive`` and
+    ``backend.mouseConnected``. If either side of that contract slips, the
+    badge silently misrepresents which inversion path the device is on --
+    which is the precise UX failure mode that the new platform-hook gate is
+    supposed to eliminate.
+    """
+
+    def _make_backend(self, engine=None):
+        loaded_config = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=loaded_config),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=engine)
+
+    def test_engine_callback_is_registered_when_available(self):
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+        self.assertIsNotNone(engine.wheel_divert_callback)
+
+    def test_default_state_is_inactive(self):
+        backend = self._make_backend(engine=_FakeEngine())
+        self.addCleanup(backend.deleteLater)
+        self.assertFalse(backend.wheelDivertActive)
+
+    def test_callback_flips_property_and_emits_signal(self):
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        events: list[bool] = []
+        backend.wheelDivertActiveChanged.connect(events.append)
+
+        engine.wheel_divert_callback(True)
+        QCoreApplication.processEvents()
+        self.assertTrue(backend.wheelDivertActive)
+        self.assertEqual(events, [True])
+
+        engine.wheel_divert_callback(False)
+        QCoreApplication.processEvents()
+        self.assertFalse(backend.wheelDivertActive)
+        self.assertEqual(events, [True, False])
+
+    def test_redundant_callback_does_not_emit_signal(self):
+        """No-op transitions must not churn the QML binding -- otherwise the
+        badge animation would re-trigger on every reconnect even when the
+        scope stayed the same.
+        """
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        events: list[bool] = []
+        backend.wheelDivertActiveChanged.connect(events.append)
+
+        engine.wheel_divert_callback(False)
+        engine.wheel_divert_callback(False)
+        QCoreApplication.processEvents()
+        self.assertEqual(events, [])
+
+    def test_truthy_non_bool_value_is_coerced(self):
+        """Engines that pass ``1`` / ``0`` instead of strict booleans must not
+        leak the raw int into the property. QML bindings type-narrow against
+        the ``Property(bool, ...)`` declaration, so the property accessor has
+        to coerce defensively.
+        """
+        _ensure_qapp()
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        self.addCleanup(backend.deleteLater)
+
+        engine.wheel_divert_callback(1)
+        QCoreApplication.processEvents()
+        self.assertIs(backend.wheelDivertActive, True)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 11)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -60,6 +60,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertTrue(migrated["settings"]["check_for_updates"])
         self.assertEqual(migrated["settings"]["update_check_state"], {})
         self.assertFalse(migrated["settings"]["start_at_login"])
+        self.assertEqual(migrated["settings"]["wheel_divert"], "auto")
         self.assertNotIn("start_with_windows", migrated["settings"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["gesture"], "none"
@@ -89,7 +90,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 11)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -102,6 +103,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertTrue(migrated["settings"]["check_for_updates"])
         self.assertEqual(migrated["settings"]["update_check_state"], {})
         self.assertFalse(migrated["settings"]["start_at_login"])
+        self.assertEqual(migrated["settings"]["wheel_divert"], "auto")
         self.assertNotIn("start_with_windows", migrated["settings"])
 
     def test_load_config_merges_missing_defaults_from_disk(self):
@@ -132,7 +134,8 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 9)
+        self.assertEqual(loaded["version"], 11)
+        self.assertEqual(loaded["settings"]["wheel_divert"], "auto")
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -150,6 +153,9 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
         )
+        self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["thumb_button"], "none"
+        )
 
     def test_migrate_renames_start_with_windows_to_start_at_login(self):
         legacy = {
@@ -160,11 +166,16 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 11)
         self.assertTrue(migrated["settings"]["start_at_login"])
+        self.assertEqual(migrated["settings"]["wheel_divert"], "auto")
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["thumb_button"],
+            "none",
         )
 
     def test_get_profile_for_app_matches_aliases(self):
@@ -240,6 +251,95 @@ class ConfigMigrationTests(unittest.TestCase):
                 config.get_profile_for_app(cfg, "/usr/lib64/firefox/firefox"),
                 "firefox",
             )
+
+
+class WheelDivertCoercionTests(unittest.TestCase):
+    """``coerce_wheel_divert_setting`` is the only validator standing between
+    the user's editable JSON and the engine's branchy live paths. Typos must
+    resolve to a known-safe value rather than silently flipping into a third
+    behavior the engine does not test."""
+
+    def setUp(self) -> None:
+        # The coercer warns once per distinct typo for the lifetime of the
+        # process. Reset between tests so warning-count assertions stay
+        # deterministic regardless of test ordering.
+        config._WHEEL_DIVERT_WARNED_VALUES.clear()
+
+    def test_accepts_canonical_auto(self) -> None:
+        self.assertEqual(config.coerce_wheel_divert_setting("auto"), "auto")
+
+    def test_accepts_canonical_off(self) -> None:
+        self.assertEqual(config.coerce_wheel_divert_setting("off"), "off")
+
+    def test_normalizes_case_and_whitespace(self) -> None:
+        self.assertEqual(config.coerce_wheel_divert_setting("  AUTO  "), "auto")
+        self.assertEqual(config.coerce_wheel_divert_setting("OFF"), "off")
+
+    def test_unknown_string_falls_back_to_auto(self) -> None:
+        with patch("builtins.print") as plog:
+            self.assertEqual(
+                config.coerce_wheel_divert_setting("enabled"),
+                config.WHEEL_DIVERT_DEFAULT,
+            )
+        plog.assert_called_once()
+
+    def test_unknown_string_warns_only_once_per_value(self) -> None:
+        with patch("builtins.print") as plog:
+            config.coerce_wheel_divert_setting("typo")
+            config.coerce_wheel_divert_setting("typo")
+            config.coerce_wheel_divert_setting("typo")
+        self.assertEqual(plog.call_count, 1)
+
+    def test_distinct_typos_each_warn_once(self) -> None:
+        with patch("builtins.print") as plog:
+            config.coerce_wheel_divert_setting("a")
+            config.coerce_wheel_divert_setting("b")
+            config.coerce_wheel_divert_setting("a")
+        self.assertEqual(plog.call_count, 2)
+
+    def test_none_resolves_silently_to_auto(self) -> None:
+        with patch("builtins.print") as plog:
+            self.assertEqual(
+                config.coerce_wheel_divert_setting(None),
+                config.WHEEL_DIVERT_DEFAULT,
+            )
+        plog.assert_not_called()
+
+    def test_non_string_warns_once_per_type(self) -> None:
+        with patch("builtins.print") as plog:
+            config.coerce_wheel_divert_setting(42)
+            config.coerce_wheel_divert_setting(43)
+        self.assertEqual(plog.call_count, 1)
+
+    def test_empty_string_resolves_to_auto(self) -> None:
+        with patch("builtins.print"):
+            self.assertEqual(
+                config.coerce_wheel_divert_setting(""),
+                config.WHEEL_DIVERT_DEFAULT,
+            )
+
+    def test_load_config_normalizes_case_on_disk(self) -> None:
+        """End-to-end: a canonical value persisted as uppercase / mixed case
+        must round-trip into the lowercase sealed value after ``load_config``.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.json"
+            cfg_path.write_text(
+                json.dumps({"version": 11, "settings": {"wheel_divert": "OFF"}})
+            )
+            with patch("core.config.CONFIG_FILE", str(cfg_path)):
+                loaded = config.load_config()
+        self.assertEqual(loaded["settings"]["wheel_divert"], "off")
+
+    def test_load_config_canonicalizes_unknown_typo_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.json"
+            cfg_path.write_text(
+                json.dumps({"version": 11, "settings": {"wheel_divert": "yes"}})
+            )
+            with patch("core.config.CONFIG_FILE", str(cfg_path)), patch("builtins.print"):
+                loaded = config.load_config()
+        self.assertEqual(loaded["settings"]["wheel_divert"], config.WHEEL_DIVERT_DEFAULT)
 
 
 class AppCatalogTests(unittest.TestCase):
