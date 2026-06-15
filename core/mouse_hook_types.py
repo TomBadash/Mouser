@@ -23,6 +23,10 @@ class MouseEvent:
     XBUTTON1_UP = "xbutton1_up"
     XBUTTON2_DOWN = "xbutton2_down"
     XBUTTON2_UP = "xbutton2_up"
+    # MX Master 4 Thumb button (small front-face button, HID++ CID 0x00c3).
+    # Distinct from the Sense Panel (CID 0x01a0), which is the gesture button.
+    THUMB_BUTTON_DOWN = "thumb_button_down"
+    THUMB_BUTTON_UP = "thumb_button_up"
     MIDDLE_DOWN = "middle_down"
     MIDDLE_UP = "middle_up"
     GESTURE_DOWN = "gesture_down"

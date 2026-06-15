@@ -27,6 +27,25 @@ MX_ANYWHERE_SMARTSHIFT_BUTTONS = (
     "mode_shift",
 )
 
+# MX Master 4 layout: the standard MX Master set plus a third thumb-area
+# button. The MX Master 4 relocates the legacy gesture button (CID 0x00C3)
+# next to back/forward and adds a haptic Sense Panel (CID 0x01A0); the
+# "thumb_button" key gives the relocated button its own UI mapping target.
+MX_MASTER_4_BUTTONS = (
+    "middle",
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+    "xbutton1",
+    "xbutton2",
+    "thumb_button",
+    "hscroll_left",
+    "hscroll_right",
+    "mode_shift",
+)
+
 
 def _hotspot(
     button_key: str,
@@ -88,6 +107,22 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_4",
         "image_asset": "logitech-mice/mx_master_4/mouse.png",
+        "supported_buttons": MX_MASTER_4_BUTTONS,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
+        # The Sense Panel (CID 0x01A0) and the relocated Mouse Gesture
+        # Button (0x00C3) are both divertable + rawXY-capable on the
+        # MX Master 4 firmware. List 0x01A0 first so the listener prefers
+        # the larger Sense Panel as the swipe surface; fall back to
+        # 0x00C3 then the virtual gesture control 0x00D7.
+        "gesture_cids": (0x01A0, 0x00C3, 0x00D7),
+        # Divert the relocated Mouse Gesture Button as a button-only extra
+        # alongside the active gesture CID. Skipped when the listener has
+        # to fall back to 0x00C3 as the gesture CID.
+        "thumb_button_cid": 0x00C3,
+        # Enables the OS-level btn=6 / BTN_TASK gesture swap as a fallback
+        # for clients that cannot divert the Sense Panel via HID++.
+        "gesture_via_sense_panel": True,
     },
     {
         "key": "mx_master_3s",
@@ -100,6 +135,8 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_3s",
         "image_asset": "logitech-mice/mx_master_3s/mouse.png",
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master_3",
@@ -113,6 +150,8 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_3",
         "image_asset": "logitech-mice/mx_master_3/mouse.png",
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master_2s",
@@ -125,6 +164,8 @@ LOGI_DEVICE_SPECS = (
         "ui_layout": "mx_master_2s",
         "image_asset": "logitech-mice/mx_master_2s/mouse.png",
         "dpi_max": 4000,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master",
@@ -137,6 +178,8 @@ LOGI_DEVICE_SPECS = (
         "ui_layout": "mx_master_classic",
         "image_asset": "logitech-mice/mx_master/mouse.png",
         "dpi_max": 4000,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_anywhere_3s",
@@ -219,14 +262,29 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-90,
             ),
             _hotspot(
+                # Sense Panel (CID 0x01A0) drives directional gestures via
+                # rawXY divert. Labeled by physical identity so remapping
+                # in the UI does not lie about where the press lands.
                 "gesture",
-                "Gesture button",
+                "Sense Panel",
                 "gesture",
-                0.386,
-                0.361,
+                0.18,
+                0.69,
+                label_side="left",
+                label_off_x=-240,
+                label_off_y=40,
+            ),
+            _hotspot(
+                # Relocated Mouse Gesture Button (CID 0x00C3) at the top of
+                # the side row, exposed as a single-press mapping target.
+                "thumb_button",
+                "Top thumb button",
+                "mapping",
+                0.392,
+                0.405,
                 label_side="left",
                 label_off_x=-260,
-                label_off_y=20,
+                label_off_y=-60,
             ),
             _hotspot(
                 "hscroll_left",

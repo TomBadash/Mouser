@@ -241,6 +241,12 @@ class MouseHook(BaseMouseHook):
         self._startup_ok = False
         self._prev_raw_buttons = {}
         self._last_rehook_time = 0
+        # Serializes gesture begin/end transitions across the LL hook
+        # thread (XBUTTON), the Raw Input window proc thread, and the HID
+        # listener thread. Held only around the `_gesture_active` /
+        # `_gesture_triggered` flips -- dispatch happens outside so an
+        # engine callback that re-enters the hook never deadlocks.
+        self._gesture_lock = threading.Lock()
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_worker_thread = None
 
@@ -427,7 +433,11 @@ class MouseHook(BaseMouseHook):
                 should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
-                if self.invert_vscroll:
+                # The OS-layer inversion path only runs when a Logitech is
+                # currently connected (the toggle is meant for Logitech
+                # scroll, not generic / trackball / virtual mouse events) and
+                # the firmware is not already inverting at the source.
+                if self._apply_vscroll_invert_fallback():
                     delta = hiword(mouse_data)
                     if delta != 0 and self._ri_hwnd:
                         self._pending_vscroll += -delta
@@ -451,7 +461,7 @@ class MouseHook(BaseMouseHook):
                     event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                     should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
 
-                if self.invert_hscroll:
+                if self._apply_hscroll_invert_fallback():
                     if delta != 0 and self._ri_hwnd and not should_block:
                         self._pending_hscroll += -delta
                         if self._hscroll_posted:
@@ -558,15 +568,20 @@ class MouseHook(BaseMouseHook):
         if extra_now == extra_prev:
             return
         if extra_now and not extra_prev:
-            if not self._gesture_active:
+            with self._gesture_lock:
+                if self._gesture_active:
+                    return
                 self._gesture_active = True
                 self._gesture_triggered = False
-                print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
-        elif not extra_now and extra_prev:
-            if self._gesture_active:
+            print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
+            return
+        if not extra_now and extra_prev:
+            with self._gesture_lock:
+                if not self._gesture_active:
+                    return
                 self._gesture_active = False
-                print("[MouseHook] Gesture UP")
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+            print("[MouseHook] Gesture UP")
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _setup_raw_input(self):
         instance = GetModuleHandleW(None)
@@ -595,7 +610,7 @@ class MouseHook(BaseMouseHook):
             None,
         )
         if not self._ri_hwnd:
-            print("[MouseHook] CreateWindowExW failed — gesture detection unavailable")
+            print("[MouseHook] CreateWindowExW failed -- gesture detection unavailable")
             return False
 
         ShowWindow(self._ri_hwnd, SW_HIDE)
@@ -683,7 +698,7 @@ class MouseHook(BaseMouseHook):
         if now - self._last_rehook_time < 2.0:
             return
         self._last_rehook_time = now
-        print("[MouseHook] Device change detected — refreshing hook")
+        print("[MouseHook] Device change detected -- refreshing hook")
         self._device_name_cache.clear()
         self._prev_raw_buttons.clear()
         self._reinstall_hook()
@@ -705,34 +720,42 @@ class MouseHook(BaseMouseHook):
             print("[MouseHook] Failed to reinstall hook!")
 
     def _on_hid_gesture_down(self):
-        if not self._gesture_active:
+        with self._gesture_lock:
+            if self._gesture_active:
+                return
             self._gesture_active = True
             self._gesture_triggered = False
-            self._emit_debug("HID gesture button down")
-            self._emit_gesture_event({"type": "button_down"})
-            if self._gesture_direction_enabled and not self._gesture_cooldown_active():
+            tracking = (
+                self._gesture_direction_enabled
+                and not self._gesture_cooldown_active()
+            )
+            if tracking:
                 self._start_gesture_tracking()
             else:
                 self._gesture_tracking = False
-                self._gesture_triggered = False
+        self._emit_debug("HID gesture button down")
+        self._emit_gesture_event({"type": "button_down"})
 
     def _on_hid_gesture_up(self):
-        if self._gesture_active:
+        should_click = False
+        with self._gesture_lock:
+            if not self._gesture_active:
+                return
             should_click = not self._gesture_triggered
             self._gesture_active = False
             self._finish_gesture_tracking()
             self._gesture_triggered = False
-            self._emit_debug(
-                f"HID gesture button up click_candidate={str(should_click).lower()}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "button_up",
-                    "click_candidate": should_click,
-                }
-            )
-            if should_click:
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+        self._emit_debug(
+            f"HID gesture button up click_candidate={str(should_click).lower()}"
+        )
+        self._emit_gesture_event(
+            {
+                "type": "button_up",
+                "click_candidate": should_click,
+            }
+        )
+        if should_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")

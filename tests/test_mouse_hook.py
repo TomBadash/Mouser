@@ -34,13 +34,19 @@ class _FakeEvdevDevice:
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_wheel=None, on_thumbwheel=None,
+                 on_thumb_button_down=None, on_thumb_button_up=None):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
+        self.on_wheel = on_wheel
+        self.on_thumbwheel = on_thumbwheel
+        self.on_thumb_button_down = on_thumb_button_down
+        self.on_thumb_button_up = on_thumb_button_up
         self.connected_device = None
         self.started = False
         self.stopped = False
@@ -882,6 +888,382 @@ class MacOSEventTapDisabledTests(unittest.TestCase):
         hook._event_tap_callback(None, 1, dummy, None)  # kCGEventLeftMouseDown
 
         self.mock_quartz.CGEventTapEnable.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSThumbButtonTests(unittest.TestCase):
+    """Verify the MX Master 4 Sense Panel (button 6 at the OS layer)
+    is dispatched as THUMB_BUTTON_DOWN/UP MouseEvents."""
+
+    _kCGEventOtherMouseDown = 25
+    _kCGEventOtherMouseUp = 26
+    _kCGMouseEventButtonNumber = 0x21
+    _kCGEventSourceUserData = 0x2A
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        self.mock_quartz.kCGEventOtherMouseUp = self._kCGEventOtherMouseUp
+        self.mock_quartz.kCGMouseEventButtonNumber = self._kCGMouseEventButtonNumber
+        self.mock_quartz.kCGEventSourceUserData = self._kCGEventSourceUserData
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _make_hook(self):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook._enqueue_dispatch_event = MagicMock(name="enqueue")
+        # Pin a stub ``_connected_device`` so this test class stays
+        # truthful (btn=6 / btn=3 only originate from a connected MX
+        # Master in production) and so it composes with the top-level
+        # ``_should_intercept_events`` early-return that lands in
+        # #185 (``fix(hooks): pass through OS mouse events when no
+        # Logitech is connected``). On this branch the gate is not yet
+        # consulted at the top of the CGEventTap callback, so this is a
+        # no-op against current master; it becomes load-bearing once
+        # #185 is integrated.
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_4",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
+        return hook
+
+    def _mock_field(self, button_number):
+        def _get(event, field):
+            if field == self._kCGMouseEventButtonNumber:
+                return button_number
+            if field == self._kCGEventSourceUserData:
+                return 0
+            return 0
+        return _get
+
+    def test_btn6_down_dispatches_thumb_button_down(self):
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None
+        )
+
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        self.assertTrue(
+            any(e.event_type == mouse_hook.MouseEvent.THUMB_BUTTON_DOWN for e in events),
+            f"expected THUMB_BUTTON_DOWN in {[e.event_type for e in events]}",
+        )
+
+    def test_btn6_up_dispatches_thumb_button_up(self):
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        hook._event_tap_callback(
+            None, self._kCGEventOtherMouseUp, cg_event, None
+        )
+
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        self.assertTrue(
+            any(e.event_type == mouse_hook.MouseEvent.THUMB_BUTTON_UP for e in events),
+            f"expected THUMB_BUTTON_UP in {[e.event_type for e in events]}",
+        )
+
+    def test_btn3_back_still_dispatches_xbutton1_not_thumb_button(self):
+        # Regression guard: don't accidentally route every OtherMouse event to
+        # the new ACTION_RING dispatch.
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(3)
+
+        hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None
+        )
+
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        types = [e.event_type for e in events]
+        self.assertIn(mouse_hook.MouseEvent.XBUTTON1_DOWN, types)
+        self.assertNotIn(mouse_hook.MouseEvent.THUMB_BUTTON_DOWN, types)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSMxMaster4SensePanelGestureTests(unittest.TestCase):
+    """MX Master 4 routes the Sense Panel (btn=6 / "Action Ring" overlay)
+    as the gesture source, with directional swipes driven from OS deltas
+    while held, and routes the small HID++ button (CID 0x00c3) as the
+    single-press Thumb button trigger."""
+
+    _kCGEventOtherMouseDown = 25
+    _kCGEventOtherMouseUp = 26
+    _kCGMouseEventButtonNumber = 0x21
+    _kCGEventSourceUserData = 0x2A
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        self.mock_quartz.kCGEventOtherMouseUp = self._kCGEventOtherMouseUp
+        self.mock_quartz.kCGMouseEventButtonNumber = self._kCGMouseEventButtonNumber
+        self.mock_quartz.kCGEventSourceUserData = self._kCGEventSourceUserData
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _make_hook(self):
+        """MX Master 4 in OS-level FALLBACK mode (HID++ haptic-panel
+        divert was rejected, so 0x01A0 is NOT the active gesture CID and
+        btn=6 still leaks through -- the swap takes over here)."""
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook._enqueue_dispatch_event = MagicMock(name="enqueue")
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_4",
+            gesture_via_sense_panel=True,
+            active_gesture_cid=0x00C3,  # fallback: small button is gesture
+            thumb_button_via_hid=False,
+        )
+        return hook
+
+    def _mock_field(self, button_number):
+        def _get(event, field):
+            if field == self._kCGMouseEventButtonNumber:
+                return button_number
+            if field == self._kCGEventSourceUserData:
+                return 0
+            return 0
+        return _get
+
+    def test_btn6_down_starts_gesture_capture_no_thumb_button(self):
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None
+        )
+
+        self.assertIsNone(result, "btn=6 down should be swallowed in haptic-panel mode")
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        types = [e.event_type for e in events]
+        self.assertNotIn(
+            mouse_hook.MouseEvent.THUMB_BUTTON_DOWN, types,
+            "MX4 must not dispatch thumb_button on btn=6 -- that role is "
+            "taken by the small HID++ button.",
+        )
+        self.assertTrue(hook._gesture_active, "gesture capture must activate")
+
+    def test_btn6_up_without_swipe_dispatches_gesture_click(self):
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        # Down then up with no rawxy / drag in between → click candidate.
+        hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None
+        )
+        # Patch _dispatch directly so we capture the click that fires from
+        # the listener-side dispatch path (skips _dispatch_queue).
+        hook._dispatch = MagicMock()
+        hook._event_tap_callback(
+            None, self._kCGEventOtherMouseUp, cg_event, None
+        )
+
+        dispatched_types = [
+            call_args.args[0].event_type
+            for call_args in hook._dispatch.call_args_list
+        ]
+        self.assertIn(
+            mouse_hook.MouseEvent.GESTURE_CLICK, dispatched_types,
+            f"expected GESTURE_CLICK in {dispatched_types}",
+        )
+        self.assertFalse(hook._gesture_active)
+
+    def test_hid_gesture_button_dispatches_thumb_button_not_gesture(self):
+        hook = self._make_hook()
+        hook._dispatch = MagicMock()
+
+        hook._on_hid_gesture_down()
+        hook._on_hid_gesture_up()
+
+        dispatched_types = [
+            call_args.args[0].event_type
+            for call_args in hook._dispatch.call_args_list
+        ]
+        self.assertIn(mouse_hook.MouseEvent.THUMB_BUTTON_DOWN, dispatched_types)
+        self.assertIn(mouse_hook.MouseEvent.THUMB_BUTTON_UP, dispatched_types)
+        self.assertNotIn(
+            mouse_hook.MouseEvent.GESTURE_CLICK, dispatched_types,
+            "small HID++ button must NOT fire gesture events on MX4",
+        )
+        self.assertFalse(hook._gesture_active)
+
+    def test_hid_rawxy_move_ignored_in_sense_panel_mode(self):
+        hook = self._make_hook()
+        # Manually activate haptic-panel gesture so accumulator could fire.
+        hook._gesture_direction_enabled = True
+        hook._begin_gesture_capture("Sense panel gesture")
+        before_x = hook._gesture_delta_x
+
+        hook._on_hid_gesture_move(-200, 0)
+
+        self.assertEqual(
+            hook._gesture_delta_x, before_x,
+            "rawXY from the small button must not contaminate a haptic-panel gesture",
+        )
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSMxMaster4HidPlusPlusGestureTests(unittest.TestCase):
+    """Happy path: the HID++ listener successfully diverted the haptic
+    CID (0x01A0) so the firmware delivers gesture press / release / rawXY
+    over the vendor channel, AND it diverted 0x00C3 as the thumb_button
+    extra. The macOS event tap must NOT do its own swap or dispatch in
+    this mode -- the HID listener owns both buttons end-to-end."""
+
+    _kCGEventOtherMouseDown = 25
+    _kCGEventOtherMouseUp = 26
+    _kCGMouseEventButtonNumber = 0x21
+    _kCGEventSourceUserData = 0x2A
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        self.mock_quartz.kCGEventOtherMouseUp = self._kCGEventOtherMouseUp
+        self.mock_quartz.kCGMouseEventButtonNumber = self._kCGMouseEventButtonNumber
+        self.mock_quartz.kCGEventSourceUserData = self._kCGEventSourceUserData
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _make_hook(self):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook._enqueue_dispatch_event = MagicMock(name="enqueue")
+        # MX Master 4 in HID++ success mode: 0x01A0 is the active gesture
+        # CID, and 0x00C3 was wired as the thumb_button extra.
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_4",
+            gesture_via_sense_panel=True,
+            active_gesture_cid=0x01A0,
+            thumb_button_via_hid=True,
+        )
+        return hook
+
+    def _mock_field(self, button_number):
+        def _get(event, field):
+            if field == self._kCGMouseEventButtonNumber:
+                return button_number
+            if field == self._kCGEventSourceUserData:
+                return 0
+            return 0
+        return _get
+
+    def test_btn6_down_swallowed_when_thumb_button_via_hid(self):
+        """If the firmware leaks btn=6 anyway (firmware quirk), the OS
+        path must NOT dispatch THUMB_BUTTON_DOWN -- the HID listener has
+        already done so via the 0x00C3 extra divert."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None
+        )
+
+        self.assertIsNone(result, "leaked btn=6 must be blocked, not passed through")
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        types = [e.event_type for e in events]
+        self.assertNotIn(
+            mouse_hook.MouseEvent.THUMB_BUTTON_DOWN, types,
+            "macOS hook must not dispatch thumb_button when the HID++ "
+            "listener is already delivering it",
+        )
+        self.assertFalse(
+            hook._gesture_active,
+            "btn=6 must not start an OS-level gesture when 0x01A0 is "
+            "the active HID++ gesture CID",
+        )
+
+    def test_btn6_up_swallowed_when_thumb_button_via_hid(self):
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = self._mock_field(6)
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventOtherMouseUp, cg_event, None
+        )
+
+        self.assertIsNone(result)
+        events = [
+            call_args.args[0]
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        types = [e.event_type for e in events]
+        self.assertNotIn(mouse_hook.MouseEvent.THUMB_BUTTON_UP, types)
+
+    def test_hid_gesture_button_drives_normal_gesture_path(self):
+        """When 0x01A0 is the active gesture CID, the HID gesture
+        callbacks come from the sense panel and must run the normal
+        gesture-capture flow (NOT the thumb_button swap that the fallback
+        mode uses)."""
+        hook = self._make_hook()
+
+        hook._on_hid_gesture_down()
+
+        self.assertTrue(
+            hook._gesture_active,
+            "HID gesture down on 0x01A0 must activate gesture capture",
+        )
+
+    def test_hid_rawxy_move_accumulates_for_swipe_in_success_mode(self):
+        """Critical: in success mode we WANT to accumulate HID++ rawXY
+        deltas (those are coming from 0x01A0 = the sense panel motion).
+        The fallback-only short-circuit in _on_hid_gesture_move must NOT
+        engage. A delta past the gesture threshold should fire a swipe
+        event end-to-end."""
+        hook = self._make_hook()
+        hook._gesture_direction_enabled = True
+        hook._begin_gesture_capture("HID gesture")
+        hook._gesture_input_source = "hid_rawxy"
+
+        # Default threshold is 50; -150 is comfortably past it as a left swipe.
+        hook._on_hid_gesture_move(-150, 0)
+
+        queued_types = [
+            call_args.args[0].event_type
+            for call_args in hook._enqueue_dispatch_event.call_args_list
+        ]
+        self.assertIn(
+            mouse_hook.MouseEvent.GESTURE_SWIPE_LEFT, queued_types,
+            f"expected GESTURE_SWIPE_LEFT in {queued_types} -- HID rawXY "
+            "from the haptic CID must drive swipe detection in success mode",
+        )
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")

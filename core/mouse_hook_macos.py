@@ -26,7 +26,7 @@ try:
 except ImportError:
     _QUARTZ_OK = False
     print(
-        "[MouseHook] pyobjc-framework-Quartz not installed — "
+        "[MouseHook] pyobjc-framework-Quartz not installed -- "
         "pip install pyobjc-framework-Quartz"
     )
 
@@ -42,8 +42,22 @@ def _autoreleased(fn):
 _BTN_MIDDLE = 2
 _BTN_BACK = 3
 _BTN_FORWARD = 4
-_SCROLL_INVERT_MARKER = 0x4D4F5553
+# MX Master 4 Sense Panel ("Action Ring" in Logi Options+) arrives as
+# btn=6 at the OS level (kCGEventOtherMouseDown). With HID++ divert
+# disabled, the gesture path falls back to the event-tap source, so
+# btn=6 drives _begin_gesture_capture / _end_gesture_capture below.
+_BTN_OS_EXTRA = 6
 _INJECTED_EVENT_MARKER = 0x4D4F5554
+# CGEvent integer-value-field id for kCGScrollWheelEventIsContinuous. Some
+# Quartz versions surface the symbolic constant (``Quartz.kCGScrollWheelEventIsContinuous``),
+# others do not -- we cache the integer here so the event-tap path does not
+# carry a naked magic number, and we still fall back to the symbol when the
+# binding is available so future SDK renumbering picks up automatically.
+_CG_SCROLL_FIELD_IS_CONTINUOUS = getattr(
+    Quartz if _QUARTZ_OK else object(),
+    "kCGScrollWheelEventIsContinuous",
+    88,
+)
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -66,8 +80,19 @@ class MouseHook(BaseMouseHook):
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_thread = None
         self._first_event_logged = False
+        # Serializes `_gesture_active` transitions across the CGEventTap
+        # main-thread callback (btn=6 fallback) and the HID++ listener
+        # background thread, so a leaked btn=6 racing a HID press cannot
+        # leave the flag inconsistent.
+        self._gesture_lock = threading.Lock()
 
-    def _negate_scroll_axis(self, cg_event, axis):
+    def _negate_scroll_axis(self, cg_event, axis: int) -> None:
+        """In-place flip of Delta/FixedPtDelta/PointDelta on ``axis``
+        (1 = vertical, 2 = horizontal). Modifying the original event
+        preserves unit type, phase, and source identity for downstream
+        consumers (VMs, remote desktops, games)."""
+        if axis not in (1, 2):
+            raise ValueError(f"axis must be 1 (vertical) or 2 (horizontal), got {axis!r}")
         for field_name in (
             f"kCGScrollWheelEventDeltaAxis{axis}",
             f"kCGScrollWheelEventFixedPtDeltaAxis{axis}",
@@ -79,58 +104,6 @@ class MouseHook(BaseMouseHook):
             value = Quartz.CGEventGetIntegerValueField(cg_event, field)
             if value:
                 Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
-
-    def _post_inverted_scroll_event(self, cg_event):
-        v_point = Quartz.CGEventGetIntegerValueField(
-            cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis1
-        )
-        h_point = Quartz.CGEventGetIntegerValueField(
-            cg_event, Quartz.kCGScrollWheelEventPointDeltaAxis2
-        )
-        if self.invert_vscroll:
-            v_point = -v_point
-        if self.invert_hscroll:
-            h_point = -h_point
-
-        inverted = Quartz.CGEventCreateScrollWheelEvent(
-            None,
-            Quartz.kCGScrollEventUnitPixel,
-            2,
-            v_point,
-            h_point,
-        )
-        if not inverted:
-            return False
-        Quartz.CGEventSetFlags(inverted, Quartz.CGEventGetFlags(cg_event))
-        Quartz.CGEventSetIntegerValueField(
-            inverted, Quartz.kCGEventSourceUserData, _SCROLL_INVERT_MARKER
-        )
-        for axis in (1, 2):
-            sign = -1 if (
-                (axis == 1 and self.invert_vscroll)
-                or (axis == 2 and self.invert_hscroll)
-            ) else 1
-            for field_name in (
-                f"kCGScrollWheelEventDeltaAxis{axis}",
-                f"kCGScrollWheelEventFixedPtDeltaAxis{axis}",
-                f"kCGScrollWheelEventPointDeltaAxis{axis}",
-            ):
-                field = getattr(Quartz, field_name, None)
-                if field is None:
-                    continue
-                value = Quartz.CGEventGetIntegerValueField(cg_event, field)
-                Quartz.CGEventSetIntegerValueField(inverted, field, sign * value)
-        for field_name in (
-            "kCGScrollWheelEventScrollPhase",
-            "kCGScrollWheelEventMomentumPhase",
-        ):
-            field = getattr(Quartz, field_name, None)
-            if field is None:
-                continue
-            value = Quartz.CGEventGetIntegerValueField(cg_event, field)
-            Quartz.CGEventSetIntegerValueField(inverted, field, value)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, inverted)
-        return True
 
     def _accumulate_gesture_delta(self, delta_x, delta_y, source):
         if not (self._gesture_direction_enabled and self._gesture_active):
@@ -256,6 +229,14 @@ class MouseHook(BaseMouseHook):
 
     @_autoreleased
     def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
+        # The CGEventTap continues to fire briefly after ``stop()`` sets
+        # ``_running = False`` -- macOS does not synchronously drain
+        # in-flight callbacks before disabling the tap. Drop the event
+        # untouched so we never enqueue into a torn-down dispatch worker,
+        # mutate shared state, or apply scroll inversion after the device
+        # connection has already been released.
+        if not self._running:
+            return cg_event
         try:
             if event_type in (
                 _kCGEventTapDisabledByTimeout,
@@ -281,8 +262,13 @@ class MouseHook(BaseMouseHook):
                     == _INJECTED_EVENT_MARKER
                 ):
                     return cg_event
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - Quartz boundary
+                # Surface failures so a borked Quartz binding cannot make
+                # the injected-event marker silently misfire on every
+                # event for the rest of the session.
+                self._emit_debug(
+                    f"CGEventGetIntegerValueField(kCGEventSourceUserData) failed: {exc!r}"
+                )
             mouse_event = None
             should_block = False
 
@@ -344,6 +330,20 @@ class MouseHook(BaseMouseHook):
                 elif btn == _BTN_FORWARD:
                     mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
                     should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                elif btn == _BTN_OS_EXTRA:
+                    if self._gesture_via_sense_panel:
+                        # Fallback path: 0x01a0 divert was rejected, so
+                        # btn=6 (Sense Panel) drives swipe detection via
+                        # the event_tap source. Swallow the click.
+                        self._begin_gesture_capture("Sense panel gesture")
+                        return None
+                    if self._thumb_button_via_hid:
+                        # The small Thumb button (CID 0x00c3) is being
+                        # diverted over HID++ on this device, so any btn=6
+                        # leaking through is the Sense Panel; suppress it.
+                        return None
+                    mouse_event = MouseEvent(MouseEvent.THUMB_BUTTON_DOWN)
+                    should_block = MouseEvent.THUMB_BUTTON_DOWN in self._blocked_events
 
             elif event_type == Quartz.kCGEventOtherMouseUp:
                 btn = Quartz.CGEventGetIntegerValueField(
@@ -363,19 +363,31 @@ class MouseHook(BaseMouseHook):
                 elif btn == _BTN_FORWARD:
                     mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
                     should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                elif btn == _BTN_OS_EXTRA:
+                    if self._gesture_via_sense_panel:
+                        self._end_gesture_capture("Sense panel gesture")
+                        return None
+                    if self._thumb_button_via_hid:
+                        return None
+                    mouse_event = MouseEvent(MouseEvent.THUMB_BUTTON_UP)
+                    should_block = MouseEvent.THUMB_BUTTON_UP in self._blocked_events
 
             elif event_type == Quartz.kCGEventScrollWheel:
+                # Allow Mouser's own injected scroll events through untouched.
                 if (
                     Quartz.CGEventGetIntegerValueField(
                         cg_event, Quartz.kCGEventSourceUserData
                     )
-                    == _SCROLL_INVERT_MARKER
+                    == _INJECTED_EVENT_MARKER
                 ):
                     return cg_event
-                if self.ignore_trackpad:
-                    is_continuous_field = 88
-                    if Quartz.CGEventGetIntegerValueField(cg_event, is_continuous_field):
-                        return cg_event
+                is_continuous = bool(
+                    Quartz.CGEventGetIntegerValueField(
+                        cg_event, _CG_SCROLL_FIELD_IS_CONTINUOUS
+                    )
+                )
+                if self.ignore_trackpad and is_continuous:
+                    return cg_event
                 h_delta = Quartz.CGEventGetIntegerValueField(
                     cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2
                 )
@@ -404,9 +416,16 @@ class MouseHook(BaseMouseHook):
                     mouse_event = None
                 if should_block:
                     return None
-                if self.invert_vscroll or self.invert_hscroll:
-                    if self._post_inverted_scroll_event(cg_event):
-                        return None
+                # In-place sign flip on the original event so downstream
+                # consumers see unit type / phase preserved. Gated on a
+                # Logitech device being connected: the toggle is meant for
+                # Logitech scroll, not for inverting every trackpad and
+                # generic USB mouse the OS hands us. Also skipped when the
+                # firmware already inverted at the source.
+                if self._apply_vscroll_invert_fallback():
+                    self._negate_scroll_axis(cg_event, 1)
+                if self._apply_hscroll_invert_fallback():
+                    self._negate_scroll_axis(cg_event, 2)
 
             if mouse_event:
                 self._enqueue_dispatch_event(mouse_event)
@@ -419,11 +438,16 @@ class MouseHook(BaseMouseHook):
             print(f"[MouseHook] event tap callback error: {exc}")
             return cg_event
 
-    def _on_hid_gesture_down(self):
-        if not self._gesture_active:
+    def _begin_gesture_capture(self, source_label: str) -> None:
+        """Activate gesture tracking from any source (HID++ gesture
+        button or btn=6 haptic-panel fallback). Lock-guarded against
+        cross-thread mutation of ``_gesture_active``."""
+        with self._gesture_lock:
+            if self._gesture_active:
+                return
             self._gesture_active = True
             self._gesture_triggered = False
-            self._emit_debug("HID gesture button down")
+            self._emit_debug(f"{source_label} button down")
             self._emit_gesture_event({"type": "button_down"})
             if self._gesture_direction_enabled and not self._gesture_cooldown_active():
                 self._start_gesture_tracking()
@@ -431,14 +455,19 @@ class MouseHook(BaseMouseHook):
                 self._gesture_tracking = False
                 self._gesture_triggered = False
 
-    def _on_hid_gesture_up(self):
-        if self._gesture_active:
+    def _end_gesture_capture(self, source_label: str) -> None:
+        """Resolve a capture: dispatch GESTURE_CLICK when no swipe fired,
+        otherwise no-op. Click dispatch runs outside the lock."""
+        should_click = False
+        with self._gesture_lock:
+            if not self._gesture_active:
+                return
             should_click = not self._gesture_triggered
             self._gesture_active = False
             self._finish_gesture_tracking()
             self._gesture_triggered = False
             self._emit_debug(
-                f"HID gesture button up click_candidate={str(should_click).lower()}"
+                f"{source_label} button up click_candidate={str(should_click).lower()}"
             )
             self._emit_gesture_event(
                 {
@@ -446,8 +475,25 @@ class MouseHook(BaseMouseHook):
                     "click_candidate": should_click,
                 }
             )
-            if should_click:
-                self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+        if should_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
+    def _on_hid_gesture_down(self):
+        # MX4 routing: when the Sense Panel is the gesture source for this
+        # device, the small HID++ "gesture" button (CID 0x00c3) is the
+        # Thumb button, not the gesture trigger.
+        if self._gesture_via_sense_panel:
+            self._emit_debug("HID thumb button down")
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_DOWN))
+            return
+        self._begin_gesture_capture("HID gesture")
+
+    def _on_hid_gesture_up(self):
+        if self._gesture_via_sense_panel:
+            self._emit_debug("HID thumb button up")
+            self._dispatch(MouseEvent(MouseEvent.THUMB_BUTTON_UP))
+            return
+        self._end_gesture_capture("HID gesture")
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")
@@ -466,6 +512,10 @@ class MouseHook(BaseMouseHook):
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
     def _on_hid_gesture_move(self, delta_x, delta_y):
+        # MX4 fallback: drop rawXY from the small HID++ button so it
+        # cannot pollute an in-flight haptic-panel gesture.
+        if self._gesture_via_sense_panel:
+            return
         self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
         self._emit_gesture_event(
             {
@@ -491,7 +541,7 @@ class MouseHook(BaseMouseHook):
                 ok = Quartz.CGEventTapIsEnabled(self._tap)
                 print(
                     f"[MouseHook] Event tap re-enabled ({reason}): "
-                    f"{'OK' if ok else 'FAILED — may need restart'}",
+                    f"{'OK' if ok else 'FAILED -- may need restart'}",
                     flush=True,
                 )
             if hg:
@@ -548,7 +598,7 @@ class MouseHook(BaseMouseHook):
 
     def start(self):
         if not _QUARTZ_OK:
-            print("[MouseHook] Quartz not available — hook not installed")
+            print("[MouseHook] Quartz not available -- hook not installed")
             return False
         if self._running:
             return True
@@ -635,7 +685,7 @@ __all__ = [
     "_BTN_MIDDLE",
     "_BTN_BACK",
     "_BTN_FORWARD",
-    "_SCROLL_INVERT_MARKER",
+    "_BTN_OS_EXTRA",
     "_INJECTED_EVENT_MARKER",
     "_kCGEventTapDisabledByTimeout",
     "_kCGEventTapDisabledByUserInput",
