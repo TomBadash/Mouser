@@ -804,8 +804,9 @@ def _merge_defaults(cfg, defaults):
 def _is_compatible_type(value, default_val):
     """Return True for values that are safe despite differing exact types."""
     return (
-        isinstance(default_val, float)
-        and isinstance(value, int)
+        isinstance(default_val, (int, float))
+        and not isinstance(default_val, bool)
+        and isinstance(value, (int, float))
         and not isinstance(value, bool)
     )
 
