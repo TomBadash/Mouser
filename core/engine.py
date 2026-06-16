@@ -373,7 +373,7 @@ class Engine:
 
     def _hscroll_threshold(self):
         return max(
-            0.1,
+            0.01,
             float(self.cfg.get("settings", {}).get("hscroll_threshold", 1)),
         )
 

@@ -375,7 +375,18 @@ class MouseHook(BaseMouseHook):
                 if self.ignore_trackpad:
                     is_continuous_field = 88
                     if Quartz.CGEventGetIntegerValueField(cg_event, is_continuous_field):
-                        return cg_event
+                        scroll_phase = 0
+                        momentum_phase = 0
+                        phase_field = getattr(Quartz, "kCGScrollWheelEventScrollPhase", None)
+                        if phase_field is not None:
+                            scroll_phase = Quartz.CGEventGetIntegerValueField(cg_event, phase_field)
+                        mom_field = getattr(Quartz, "kCGScrollWheelEventMomentumPhase", None)
+                        if mom_field is not None:
+                            momentum_phase = Quartz.CGEventGetIntegerValueField(cg_event, mom_field)
+                        # Only ignore true continuous scrolls from trackpads/Magic Mouse (which have non-zero phases).
+                        # Physical wheels/tilts do not have scroll phases (phase = 0).
+                        if scroll_phase != 0 or momentum_phase != 0:
+                            return cg_event
                 h_delta = Quartz.CGEventGetIntegerValueField(
                     cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2
                 )

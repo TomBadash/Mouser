@@ -118,7 +118,7 @@ class DeviceLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             [hotspot["buttonKey"] for hotspot in layout["hotspots"]],
-            ["middle", "xbutton1", "xbutton2", "hscroll_left"],
+            ["middle", "xbutton1", "xbutton2", "hscroll_left", "hscroll_right"],
         )
         hotspots = {hotspot["buttonKey"]: hotspot for hotspot in layout["hotspots"]}
         self.assertNotIn("gesture_up", hotspots)
@@ -129,10 +129,14 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertEqual(hotspots["xbutton2"]["label"], "Forward button")
 
         left = hotspots["hscroll_left"]
-        self.assertEqual(left["label"], "Horizontal scroll")
-        self.assertEqual(left["summaryType"], "hscroll")
-        self.assertTrue(left["isHScroll"])
-        self.assertNotIn("hscroll_right", hotspots)
+        self.assertEqual(left["label"], "Horizontal scroll left")
+        self.assertEqual(left["summaryType"], "mapping")
+        self.assertFalse(left.get("isHScroll", False))
+
+        right = hotspots["hscroll_right"]
+        self.assertEqual(right["label"], "Horizontal scroll right")
+        self.assertEqual(right["summaryType"], "mapping")
+        self.assertFalse(right.get("isHScroll", False))
 
     def test_mx_anywhere_2s_has_no_self_fallback(self):
         self.assertEqual(_FAMILY_FALLBACKS.get("mx_anywhere_2s"), "mx_anywhere")
