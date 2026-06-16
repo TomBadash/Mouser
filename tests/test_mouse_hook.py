@@ -894,6 +894,8 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
     def setUp(self):
         self.mock_quartz = MagicMock(name="Quartz")
         self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGScrollWheelEventScrollPhase = 99
+        self.mock_quartz.kCGScrollWheelEventMomentumPhase = 123
         mouse_hook.Quartz = self.mock_quartz
 
     def tearDown(self):
@@ -910,7 +912,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
         return hook
 
-    def _mock_get_field(self, is_continuous, source_user_data=0):
+    def _mock_get_field(self, is_continuous, source_user_data=0, scroll_phase=0, momentum_phase=0):
         """side_effect: returns is_continuous for field 88, source_user_data
         for kCGEventSourceUserData, and 0 for everything else."""
         def _get(event, field):
@@ -918,6 +920,10 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
                 return is_continuous
             if field == self.mock_quartz.kCGEventSourceUserData:
                 return source_user_data
+            if field == 99:  # kCGScrollWheelEventScrollPhase
+                return scroll_phase
+            if field == 123:  # kCGScrollWheelEventMomentumPhase
+                return momentum_phase
             return 0
         return _get
 
@@ -926,7 +932,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook = self._make_hook()
         cg_event = MagicMock(name="cg_event")
         self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
-            self._mock_get_field(is_continuous=1)
+            self._mock_get_field(is_continuous=1, scroll_phase=2)  # 2 = Changed phase
 
         result = hook._event_tap_callback(
             None, self._kCGEventScrollWheel, cg_event, None)
@@ -943,6 +949,8 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         def _get(event, field):
             if field == self._kCGScrollWheelEventIsContinuous:
                 return 1  # trackpad
+            if field == 99:  # kCGScrollWheelEventScrollPhase
+                return 2  # Changed phase
             if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
                 return 5 * 65536  # non-zero horizontal delta
             if field == self.mock_quartz.kCGEventSourceUserData:

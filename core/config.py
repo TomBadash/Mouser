@@ -372,7 +372,7 @@ def _validate_types(cfg, defaults, path=""):
                 print(f"[Config] Type mismatch at {path}.{key}: "
                       f"expected dict, got {type(cfg[key]).__name__}")
                 cfg[key] = json.loads(json.dumps(default_val))
-        elif not isinstance(cfg[key], type(default_val)):
+        elif not (isinstance(cfg[key], type(default_val)) or (isinstance(default_val, (int, float)) and not isinstance(default_val, bool) and isinstance(cfg[key], (int, float)) and not isinstance(cfg[key], bool))):
             print(f"[Config] Type mismatch at {path}.{key}: "
                   f"expected {type(default_val).__name__}, "
                   f"got {type(cfg[key]).__name__}")

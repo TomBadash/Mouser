@@ -177,7 +177,22 @@ LOGI_DEVICE_SPECS = (
         "supported_buttons": MX_ANYWHERE_BUTTONS,
         "dpi_max": 4000,
     },
+    {
+        "key": "mx_anywhere_2",
+        "display_name": "MX Anywhere 2",
+        "product_ids": (0xB013, 0xB018, 0xB01F),
+        "aliases": (
+            "Wireless Mobile Mouse MX Anywhere 2",
+            "MX Anywhere 2",
+            "MX Anywhere 2 for Mac",
+        ),
+        "ui_layout": "mx_anywhere_2s",
+        "image_asset": "logitech-mice/mx_anywhere_2s/mouse.png",
+        "supported_buttons": MX_ANYWHERE_BUTTONS,
+        "dpi_max": 1600,
+    },
 )
+
 
 
 LOGI_DEVICE_LAYOUTS = {
@@ -570,14 +585,23 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll",
-                "hscroll",
-                0.38,
-                0.195,
+                "Horizontal scroll left",
+                "mapping",
+                0.45,
+                0.20,
                 label_side="left",
                 label_off_x=-240,
-                label_off_y=-70,
-                is_hscroll=True,
+                label_off_y=-95,
+            ),
+            _hotspot(
+                "hscroll_right",
+                "Horizontal scroll right",
+                "mapping",
+                0.55,
+                0.20,
+                label_side="right",
+                label_off_x=240,
+                label_off_y=-95,
             ),
         ],
     ),
