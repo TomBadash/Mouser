@@ -43,6 +43,54 @@ WINDOWS_FUNCTION_KEY_CODES = {
     for n in range(1, 25)
 }
 
+SCREENSHOT_ACTIONS = frozenset({
+    "screenshot_region_clip",
+    "screenshot_region_file",
+    "screenshot_full_clip",
+    "screenshot_full_file",
+})
+
+_screenshot_action_handler = None
+
+
+def is_screenshot_action(action_id):
+    return action_id in SCREENSHOT_ACTIONS
+
+
+def set_screenshot_action_handler(handler):
+    """Register a callable that performs screenshot actions off the hook thread."""
+    global _screenshot_action_handler
+    _screenshot_action_handler = handler
+
+
+def request_screenshot_action(action_id):
+    if not is_screenshot_action(action_id):
+        return False
+    if _screenshot_action_handler is None:
+        print(f"[KeySimulator] screenshot action unavailable: {action_id}")
+        return False
+    try:
+        _screenshot_action_handler(action_id)
+    except Exception as exc:
+        print(f"[KeySimulator] screenshot action handler failed: {exc}")
+        import traceback; traceback.print_exc()
+    return True
+
+
+def execute_screenshot_shortcut(action_id):
+    """Run the platform shortcut for a screenshot action when one exists."""
+    if not is_screenshot_action(action_id):
+        return False
+    action = globals().get("ACTIONS", {}).get(action_id)
+    keys = action.get("keys") if action else None
+    if not keys:
+        return False
+    sender = globals().get("send_key_combo")
+    if sender is None:
+        return False
+    sender(keys)
+    return True
+
 
 def normalize_captured_shortcut_parts(modifier_names, key_name="", platform_name=None):
     """Normalize captured modifier/key names into stored shortcut syntax."""
@@ -707,6 +755,26 @@ if sys.platform == "win32":
             "keys": [],
             "category": "Mouse",
         },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [],
+            "category": "Screenshot",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -756,6 +824,8 @@ if sys.platform == "win32":
                 return
             if action_id == "brightness_down":
                 _brightness.adjust(-_BrightnessController._STEP)
+                return
+            if request_screenshot_action(action_id):
                 return
             action = ACTIONS.get(action_id)
             if action_id == "close_window":
@@ -1356,6 +1426,26 @@ elif sys.platform == "darwin":
             "keys": [],
             "category": "Mouse",
         },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_4],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_4],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_3],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_3],
+            "category": "Screenshot",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1398,6 +1488,8 @@ elif sys.platform == "darwin":
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
+            return
+        if request_screenshot_action(action_id):
             return
         action = ACTIONS.get(action_id)
         if not action:
@@ -1470,6 +1562,7 @@ elif sys.platform == "linux":
     KEY_F10 = 68
     KEY_F11 = 87
     KEY_F12 = 88
+    KEY_SYSRQ = 99  # Print Screen
 
     _ALL_KEY_CODES = [
         KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_LEFTMETA,
@@ -1793,6 +1886,26 @@ elif sys.platform == "linux":
             "keys": [],
             "category": "Mouse",
         },
+        "screenshot_region_clip": {
+            "label": "Screenshot Region → Clipboard",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_region_file": {
+            "label": "Screenshot Region → File",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_full_clip": {
+            "label": "Screenshot Full Screen → Clipboard",
+            "keys": [],
+            "category": "Screenshot",
+        },
+        "screenshot_full_file": {
+            "label": "Screenshot Full Screen → File",
+            "keys": [],
+            "category": "Screenshot",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1837,6 +1950,8 @@ elif sys.platform == "linux":
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
+            return
+        if request_screenshot_action(action_id):
             return
         action = ACTIONS.get(action_id)
         if not action or not action["keys"]:

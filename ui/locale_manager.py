@@ -156,6 +156,12 @@ _TRANSLATIONS = {
         "scroll.startup_desc": "Start Mouser at login on supported desktop platforms, and choose whether the settings window opens on launch or Mouser stays in the system tray.",
         "scroll.start_at_login": "Start at login",
         "scroll.start_minimized": "Start minimized",
+        "scroll.screenshots": "Screenshots",
+        "scroll.screenshots_desc": "Choose where Mouser saves screenshot file actions. Clipboard actions are unaffected.",
+        "scroll.screenshots_save_to": "Save to",
+        "scroll.screenshots_choose": "Choose...",
+        "scroll.screenshots_default": "Use Default",
+        "scroll.screenshots_system_default": "System default location",
         "scroll.check_for_updates": "Check for updates",
         "scroll.check_for_updates_desc": "Notify when a newer Mouser release is available. Downloads and installation stay manual.",
         "scroll.update_idle": "Mouser can check for new releases.",
@@ -403,6 +409,12 @@ _TRANSLATIONS = {
         "scroll.startup_desc": "\u5728\u53d7\u652f\u6301\u7684\u684c\u9762\u5e73\u53f0\u4e0a\u968f\u767b\u5f55\u542f\u52a8 Mouser\uff0c\u5e76\u9009\u62e9\u542f\u52a8\u65f6\u662f\u5426\u6253\u5f00\u8bbe\u7f6e\u7a97\u53e3\u6216\u4ec5\u4fdd\u6301\u5728\u7cfb\u7edf\u6258\u76d8\u3002",
         "scroll.start_at_login": "\u5f00\u673a\u81ea\u542f\u52a8",
         "scroll.start_minimized": "\u542f\u52a8\u65f6\u6700\u5c0f\u5316",
+        "scroll.screenshots": "\u622a\u56fe",
+        "scroll.screenshots_desc": "\u9009\u62e9 Mouser \u4fdd\u5b58\u622a\u56fe\u6587\u4ef6\u52a8\u4f5c\u7684\u4f4d\u7f6e\u3002\u526a\u8d34\u677f\u52a8\u4f5c\u4e0d\u53d7\u5f71\u54cd\u3002",
+        "scroll.screenshots_save_to": "\u4fdd\u5b58\u5230",
+        "scroll.screenshots_choose": "\u9009\u62e9...",
+        "scroll.screenshots_default": "\u4f7f\u7528\u9ed8\u8ba4",
+        "scroll.screenshots_system_default": "\u7cfb\u7edf\u9ed8\u8ba4\u4f4d\u7f6e",
         "scroll.check_for_updates": "\u68c0\u67e5\u66f4\u65b0",
         "scroll.check_for_updates_desc": "\u6709\u65b0\u7248 Mouser \u53ef\u7528\u65f6\u901a\u77e5\u3002\u4e0b\u8f7d\u548c\u5b89\u88c5\u4ecd\u9700\u624b\u52a8\u5b8c\u6210\u3002",
         "scroll.update_idle": "Mouser \u53ef\u4ee5\u68c0\u67e5\u65b0\u7248\u672c\u3002",
@@ -644,6 +656,12 @@ _TRANSLATIONS = {
         "scroll.startup_desc": "\u5728\u53d7\u652f\u63f4\u7684\u684c\u9762\u5e73\u53f0\u4e0a\u96a8\u767b\u5165\u555f\u52d5 Mouser\uff0c\u4e26\u9078\u64c7\u555f\u52d5\u6642\u662f\u5426\u958b\u555f\u8a2d\u5b9a\u8996\u7a97\u6216\u50c5\u4fdd\u6301\u5728\u7cfb\u7d71\u5217\u3002",
         "scroll.start_at_login": "\u767b\u5165\u6642\u555f\u52d5",
         "scroll.start_minimized": "\u555f\u52d5\u6642\u6700\u5c0f\u5316",
+        "scroll.screenshots": "\u622a\u5716",
+        "scroll.screenshots_desc": "\u9078\u64c7 Mouser \u5132\u5b58\u622a\u5716\u6a94\u6848\u52d5\u4f5c\u7684\u4f4d\u7f6e\u3002\u526a\u8cbc\u7c3f\u52d5\u4f5c\u4e0d\u53d7\u5f71\u97ff\u3002",
+        "scroll.screenshots_save_to": "\u5132\u5b58\u5230",
+        "scroll.screenshots_choose": "\u9078\u64c7...",
+        "scroll.screenshots_default": "\u4f7f\u7528\u9810\u8a2d",
+        "scroll.screenshots_system_default": "\u7cfb\u7d71\u9810\u8a2d\u4f4d\u7f6e",
         "scroll.check_for_updates": "\u6aa2\u67e5\u66f4\u65b0",
         "scroll.check_for_updates_desc": "\u6709\u65b0\u7248 Mouser \u53ef\u7528\u6642\u901a\u77e5\u3002\u4e0b\u8f09\u548c\u5b89\u88dd\u4ecd\u9700\u624b\u52d5\u5b8c\u6210\u3002",
         "scroll.update_idle": "Mouser \u53ef\u4ee5\u6aa2\u67e5\u65b0\u7248\u672c\u3002",
@@ -841,6 +859,7 @@ _CATEGORY_TR: dict[str, dict[str, str]] = {
         "Media":      "\u5a92\u4f53",
         "Navigation": "\u5bfc\u822a",
         "Scroll":     "\u6eda\u8f6e",
+        "Screenshot": "\u622a\u56fe",
         "Custom":     "\u81ea\u5b9a\u4e49",
     },
     "zh_TW": {
@@ -850,6 +869,7 @@ _CATEGORY_TR: dict[str, dict[str, str]] = {
         "Media":      "\u5a92\u9ad4",
         "Navigation": "\u5c0e\u822a",
         "Scroll":     "\u6eda\u8f2a",
+        "Screenshot": "\u622a\u5716",
         "Custom":     "\u81ea\u8a02",
     },
 }
@@ -928,6 +948,12 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         # ── Scroll ────────────────────────────────────────────────────
         "Toggle SmartShift":                        "\u5207\u6362 SmartShift \u5f00\u5173",
         "Switch Scroll Mode (Ratchet / Free Spin)": "\u5207\u6362\u6eda\u8f6e\u6a21\u5f0f\uff08\u68d8\u8f6e / \u98de\u8f6e\uff09",
+
+        # ── Screenshot ────────────────────────────────────────────────
+        "Screenshot Region \u2192 Clipboard":       "\u533a\u57df\u622a\u56fe \u2192 \u526a\u8d34\u677f",
+        "Screenshot Region \u2192 File":            "\u533a\u57df\u622a\u56fe \u2192 \u6587\u4ef6",
+        "Screenshot Full Screen \u2192 Clipboard":  "\u5168\u5c4f\u622a\u56fe \u2192 \u526a\u8d34\u677f",
+        "Screenshot Full Screen \u2192 File":       "\u5168\u5c4f\u622a\u56fe \u2192 \u6587\u4ef6",
 
         # ── Custom ────────────────────────────────────────────────────
         "Open Application":                         "\u6253\u5f00\u5e94\u7528\u7a0b\u5e8f",
@@ -1009,6 +1035,12 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         # ── Scroll ────────────────────────────────────────────────────
         "Toggle SmartShift":                        "\u5207\u63db SmartShift \u958b\u95dc",
         "Switch Scroll Mode (Ratchet / Free Spin)": "\u5207\u63db\u6eda\u8f2a\u6a21\u5f0f\uff08\u68d8\u8f2a / \u98db\u8f2a\uff09",
+
+        # ── Screenshot ────────────────────────────────────────────────
+        "Screenshot Region \u2192 Clipboard":       "\u5340\u57df\u622a\u5716 \u2192 \u526a\u8cbc\u7c3f",
+        "Screenshot Region \u2192 File":            "\u5340\u57df\u622a\u5716 \u2192 \u6a94\u6848",
+        "Screenshot Full Screen \u2192 Clipboard":  "\u5168\u87a2\u5e55\u622a\u5716 \u2192 \u526a\u8cbc\u7c3f",
+        "Screenshot Full Screen \u2192 File":       "\u5168\u87a2\u5e55\u622a\u5716 \u2192 \u6a94\u6848",
 
         # ── Custom ────────────────────────────────────────────────────
         "Open Application":                         "\u958b\u555f\u61c9\u7528\u7a0b\u5f0f",

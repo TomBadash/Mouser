@@ -1,0 +1,104 @@
+"""Shared screenshot action helpers."""
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from PIL import Image
+from PySide6.QtGui import QGuiApplication, QImage
+
+
+SCREENSHOT_REGION_CLIP = "screenshot_region_clip"
+SCREENSHOT_REGION_FILE = "screenshot_region_file"
+SCREENSHOT_FULL_CLIP = "screenshot_full_clip"
+SCREENSHOT_FULL_FILE = "screenshot_full_file"
+
+SCREENSHOT_ACTIONS = frozenset({
+    SCREENSHOT_REGION_CLIP,
+    SCREENSHOT_REGION_FILE,
+    SCREENSHOT_FULL_CLIP,
+    SCREENSHOT_FULL_FILE,
+})
+
+SCREENSHOT_CLIPBOARD_ACTIONS = frozenset({
+    SCREENSHOT_REGION_CLIP,
+    SCREENSHOT_FULL_CLIP,
+})
+
+SCREENSHOT_FILE_ACTIONS = frozenset({
+    SCREENSHOT_REGION_FILE,
+    SCREENSHOT_FULL_FILE,
+})
+
+SCREENSHOT_REGION_ACTIONS = frozenset({
+    SCREENSHOT_REGION_CLIP,
+    SCREENSHOT_REGION_FILE,
+})
+
+SCREENSHOT_FULL_ACTIONS = frozenset({
+    SCREENSHOT_FULL_CLIP,
+    SCREENSHOT_FULL_FILE,
+})
+
+
+def pil_image_to_qimage(image: Image.Image) -> QImage:
+    rgba = image.convert("RGBA")
+    data = rgba.tobytes("raw", "RGBA")
+    fmt = getattr(QImage.Format, "Format_RGBA8888", QImage.Format.Format_ARGB32)
+    qimage = QImage(data, rgba.width, rgba.height, rgba.width * 4, fmt)
+    return qimage.copy()
+
+
+def copy_image_to_clipboard(image: Image.Image, clipboard=None) -> None:
+    if clipboard is None:
+        clipboard = QGuiApplication.clipboard()
+    if clipboard is None:
+        raise RuntimeError("clipboard unavailable")
+    clipboard.setImage(pil_image_to_qimage(image))
+
+
+def screenshots_dir(home: Path | None = None) -> Path:
+    root = home or Path.home()
+    primary = root / "Pictures" / "Screenshots"
+    try:
+        primary.mkdir(parents=True, exist_ok=True)
+        return primary
+    except OSError:
+        fallback = root / "Pictures" / "Mouser Screenshots"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def screenshot_file_path(
+    directory: Path | None = None,
+    now: datetime | None = None,
+) -> Path:
+    return screenshot_file_paths(1, directory=directory, now=now)[0]
+
+
+def screenshot_file_paths(
+    count: int,
+    directory: Path | None = None,
+    now: datetime | None = None,
+) -> list[Path]:
+    if count <= 0:
+        raise ValueError("screenshot file count must be positive")
+    directory = Path(directory) if directory is not None else screenshots_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H%M%S")
+    paths: list[Path] = []
+    for idx in range(1, 1000):
+        name = f"Screenshot {stamp}.png" if idx == 1 else f"Screenshot {stamp} ({idx}).png"
+        candidate = directory / name
+        if not candidate.exists():
+            paths.append(candidate)
+            if len(paths) == count:
+                return paths
+    raise RuntimeError("could not allocate screenshot filename")
+
+
+def save_image_to_file(image: Image.Image, path: Path | None = None) -> Path:
+    target = Path(path) if path is not None else screenshot_file_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    image.save(target, format="PNG")
+    return target

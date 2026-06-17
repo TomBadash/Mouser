@@ -1024,6 +1024,45 @@ def main():
     )
     backend.syncBacklight(ui_state.darkMode)
 
+    if sys.platform == "win32":
+        from core.key_simulator import set_screenshot_action_handler
+        from ui.windows_screenshot import WindowsScreenshotController
+
+        screenshot_controller = WindowsScreenshotController(
+            status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
+            parent=app,
+        )
+        app._mouser_screenshot_controller = screenshot_controller
+        set_screenshot_action_handler(screenshot_controller.request_action)
+    elif sys.platform == "linux":
+        from core.key_simulator import set_screenshot_action_handler
+        from ui.linux_screenshot import LinuxScreenshotController
+
+        screenshot_controller = LinuxScreenshotController(
+            status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
+            parent=app,
+        )
+        app._mouser_screenshot_controller = screenshot_controller
+        set_screenshot_action_handler(screenshot_controller.request_action)
+    elif sys.platform == "darwin":
+        from core.key_simulator import (
+            execute_screenshot_shortcut,
+            set_screenshot_action_handler,
+        )
+        from ui.macos_screenshot import MacScreenshotController
+
+        screenshot_controller = MacScreenshotController(
+            status_callback=backend.statusMessage.emit,
+            path_factory=backend.next_screenshot_file_path,
+            has_custom_directory=backend.has_custom_screenshot_directory,
+            fallback_action=execute_screenshot_shortcut,
+            parent=app,
+        )
+        app._mouser_screenshot_controller = screenshot_controller
+        set_screenshot_action_handler(screenshot_controller.request_action)
+
     # ── QML Engine ─────────────────────────────────────────────
     qml_engine = QQmlApplicationEngine()
     qml_engine.addImageProvider("appicons", AppIconProvider(ROOT))
@@ -1047,16 +1086,6 @@ def main():
         sys.exit(1)
 
     root_window = qml_engine.rootObjects()[0]
-
-    def _sync_linux_ui_passthrough(*_args):
-        if sys.platform != "linux":
-            return
-        engine.set_ui_passthrough(bool(root_window.isVisible()))
-
-    root_window.activeChanged.connect(_sync_linux_ui_passthrough)
-    root_window.visibilityChanged.connect(_sync_linux_ui_passthrough)
-    app.applicationStateChanged.connect(_sync_linux_ui_passthrough)
-    _sync_linux_ui_passthrough()
 
     def show_main_window():
         # Promote BEFORE show so the window registers with WindowServer's
@@ -1121,9 +1150,6 @@ def main():
 
     # ── Accessibility check (macOS) ──────────────────────────────
     accessibility_granted = _check_accessibility(locale_mgr)
-
-    if sys.platform == "linux":
-        engine.set_ui_passthrough(not launch_hidden)
 
     # ── Start engine AFTER window is ready (deferred) ──────────
     _schedule_engine_start(engine, accessibility_granted=accessibility_granted)

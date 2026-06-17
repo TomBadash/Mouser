@@ -778,6 +778,8 @@ class LinuxDeviceHookReconnectTests(unittest.TestCase):
     def test_ui_passthrough_releases_grab_and_wakes_evdev_loop(self):
         module = self._reload_for_linux()
         hook = module.DeviceHook()
+        messages = []
+        hook.set_status_callback(messages.append)
         dev = _FakeEvdevDevice(
             name="MX Master 3S",
             path="/dev/input/event1",
@@ -794,6 +796,13 @@ class LinuxDeviceHookReconnectTests(unittest.TestCase):
         dev.grab.assert_called_once()
         self.assertFalse(hook._rescan_requested.is_set())
         self.assertTrue(hook.evdev_remap_ready)
+        self.assertEqual(
+            messages,
+            [
+                "Linux input passthrough enabled; evdev remapping paused",
+                "Linux input passthrough disabled; evdev remapping restored",
+            ],
+        )
 
     def test_mode_shift_callbacks_fire_again_after_reconnect(self):
         module = self._reload_for_linux()

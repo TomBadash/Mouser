@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+import types
 import unittest
 from unittest.mock import call, patch
 
@@ -91,6 +92,13 @@ class CustomShortcutParsingTests(unittest.TestCase):
 
 
 class LinuxDesktopShortcutTests(unittest.TestCase):
+    _SCREENSHOT_ACTIONS = {
+        "screenshot_region_clip": "Screenshot Region → Clipboard",
+        "screenshot_region_file": "Screenshot Region → File",
+        "screenshot_full_clip": "Screenshot Full Screen → Clipboard",
+        "screenshot_full_file": "Screenshot Full Screen → File",
+    }
+
     def _reload_for_linux(self, desktop: str):
         with (
             patch.object(sys, "platform", "linux"),
@@ -135,8 +143,98 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
         self.assertIn(module._KEY_NAME_TO_CODE["semicolon"], module._ALL_KEY_CODES)
         self.assertIn(module._KEY_NAME_TO_CODE["f24"], module._ALL_KEY_CODES)
 
+    def test_linux_screenshot_actions_are_native_requests(self):
+        module = self._reload_for_linux("KDE")
+
+        for action_id, label in self._SCREENSHOT_ACTIONS.items():
+            self.assertIn(action_id, module.ACTIONS)
+            self.assertEqual(module.ACTIONS[action_id]["label"], label)
+            self.assertEqual(module.ACTIONS[action_id]["category"], "Screenshot")
+            self.assertEqual(module.ACTIONS[action_id]["keys"], [])
+            self.assertTrue(module.is_screenshot_action(action_id))
+
+    def test_linux_screenshot_actions_dispatch_to_handler_not_keys(self):
+        module = self._reload_for_linux("KDE")
+        calls = []
+        module.set_screenshot_action_handler(calls.append)
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("screenshot_region_file")
+
+        self.assertEqual(calls, ["screenshot_region_file"])
+        send_key_combo.assert_not_called()
+
+
+class WindowsScreenshotActionTests(unittest.TestCase):
+    _ACTIONS = {
+        "screenshot_region_clip": "Screenshot Region → Clipboard",
+        "screenshot_region_file": "Screenshot Region → File",
+        "screenshot_full_clip": "Screenshot Full Screen → Clipboard",
+        "screenshot_full_file": "Screenshot Full Screen → File",
+    }
+
+    def _reload_for_windows(self):
+        import ctypes
+
+        def fake_send_input(*_args):
+            return 1
+
+        fake_send_input.argtypes = []
+        fake_send_input.restype = 1
+
+        def fake_get_foreground_window(*_args):
+            return 0
+
+        def fake_post_message(*_args):
+            return 1
+
+        fake_windll = types.SimpleNamespace(
+            user32=types.SimpleNamespace(
+                SendInput=fake_send_input,
+                GetForegroundWindow=fake_get_foreground_window,
+                PostMessageW=fake_post_message,
+            )
+        )
+        platform_patch = patch.object(sys, "platform", "win32")
+        windll_patch = patch.object(ctypes, "windll", fake_windll, create=True)
+        platform_patch.start()
+        windll_patch.start()
+        module = importlib.reload(key_simulator)
+        self.addCleanup(importlib.reload, key_simulator)
+        self.addCleanup(platform_patch.stop)
+        self.addCleanup(windll_patch.stop)
+        return module
+
+    def test_windows_screenshot_actions_are_native_requests(self):
+        module = self._reload_for_windows()
+
+        for action_id, label in self._ACTIONS.items():
+            self.assertIn(action_id, module.ACTIONS)
+            self.assertEqual(module.ACTIONS[action_id]["label"], label)
+            self.assertEqual(module.ACTIONS[action_id]["category"], "Screenshot")
+            self.assertEqual(module.ACTIONS[action_id]["keys"], [])
+            self.assertTrue(module.is_screenshot_action(action_id))
+
+    def test_windows_screenshot_actions_dispatch_to_handler_not_keys(self):
+        module = self._reload_for_windows()
+        calls = []
+        module.set_screenshot_action_handler(calls.append)
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("screenshot_full_clip")
+
+        self.assertEqual(calls, ["screenshot_full_clip"])
+        send_key_combo.assert_not_called()
+
 
 class MacOSZoomActionTests(unittest.TestCase):
+    _SCREENSHOT_ACTIONS = {
+        "screenshot_region_clip": "Screenshot Region → Clipboard",
+        "screenshot_region_file": "Screenshot Region → File",
+        "screenshot_full_clip": "Screenshot Full Screen → Clipboard",
+        "screenshot_full_file": "Screenshot Full Screen → File",
+    }
+
     def _reload_for_macos(self):
         with patch.object(sys, "platform", "darwin"):
             importlib.reload(key_simulator)
@@ -188,6 +286,48 @@ class MacOSZoomActionTests(unittest.TestCase):
             module.execute_action("alt_tab")
 
         send_key_combo.assert_called_once_with([module.kVK_Command, module.kVK_Tab])
+
+    def test_macos_screenshot_actions_keep_shortcut_defaults(self):
+        module = self._reload_for_macos()
+
+        for action_id, label in self._SCREENSHOT_ACTIONS.items():
+            self.assertIn(action_id, module.ACTIONS)
+            self.assertEqual(module.ACTIONS[action_id]["label"], label)
+            self.assertEqual(module.ACTIONS[action_id]["category"], "Screenshot")
+            self.assertTrue(module.ACTIONS[action_id]["keys"])
+            self.assertTrue(module.is_screenshot_action(action_id))
+
+    def test_macos_screenshot_action_without_handler_falls_back_to_shortcut(self):
+        module = self._reload_for_macos()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("screenshot_full_file")
+
+        send_key_combo.assert_called_once_with(
+            [module.kVK_Command, module.kVK_Shift, module.kVK_ANSI_3]
+        )
+
+    def test_macos_screenshot_helper_sends_existing_shortcut(self):
+        module = self._reload_for_macos()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            handled = module.execute_screenshot_shortcut("screenshot_region_clip")
+
+        self.assertTrue(handled)
+        send_key_combo.assert_called_once_with(
+            [module.kVK_Command, module.kVK_Shift, module.kVK_Control, module.kVK_ANSI_4]
+        )
+
+    def test_macos_screenshot_action_dispatches_to_registered_handler(self):
+        module = self._reload_for_macos()
+        calls = []
+        module.set_screenshot_action_handler(calls.append)
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("screenshot_region_file")
+
+        self.assertEqual(calls, ["screenshot_region_file"])
+        send_key_combo.assert_not_called()
 
 
 class CustomShortcutCaptureTests(unittest.TestCase):
