@@ -77,16 +77,16 @@ class MacOSLauncherPathTests(unittest.TestCase):
 
 @unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
 class AppIdentityTests(unittest.TestCase):
-    def test_app_icon_uses_png_on_linux(self):
+    def test_app_icon_uses_linux_runtime_asset(self):
         with (
             patch.object(main_qml.sys, "platform", "linux"),
-            patch.object(main_qml, "ROOT", "/tmp/Mouser"),
+            patch.object(main_qml, "linux_runtime_icon_path", return_value="/tmp/Mouser/linux/icons/hicolor/256x256/apps/io.github.tombadash.mouser.png"),
             patch.object(main_qml.os.path, "isfile", return_value=True),
             patch.object(main_qml, "QIcon", side_effect=lambda path: path),
         ):
             self.assertEqual(
                 main_qml._app_icon(),
-                "/tmp/Mouser/images/logo_icon.png",
+                "/tmp/Mouser/linux/icons/hicolor/256x256/apps/io.github.tombadash.mouser.png",
             )
 
     def test_app_icon_uses_ico_on_windows(self):

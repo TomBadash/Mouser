@@ -66,6 +66,7 @@ from core.config import load_config, save_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
+from core.startup import linux_runtime_icon_path, sync_linux_icon_theme
 from core.version import APP_BUILD_MODE, APP_COMMIT_DISPLAY, APP_VERSION
 from ui.backend import Backend
 from ui.locale_manager import LocaleManager
@@ -172,11 +173,14 @@ def _app_icon() -> QIcon:
     pixmap path produced. Logs and returns an empty QIcon if the asset
     file is missing.
     """
-    if sys.platform == "win32":
+    if sys.platform == "linux":
+        icon_path = linux_runtime_icon_path()
+    elif sys.platform == "win32":
         icon_name = "logo.ico"
+        icon_path = os.path.join(ROOT, "images", icon_name)
     else:
         icon_name = "logo_icon.png"
-    icon_path = os.path.join(ROOT, "images", icon_name)
+        icon_path = os.path.join(ROOT, "images", icon_name)
     if not os.path.isfile(icon_path):
         print(f"[Mouser] App icon missing: {icon_path}")
         return QIcon()
@@ -1022,6 +1026,8 @@ def main():
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Mouser")
     _configure_linux_desktop_file_name(app)
+    if sys.platform == "linux":
+        sync_linux_icon_theme()
     app.setWindowIcon(_app_icon())
     app.setQuitOnLastWindowClosed(False)
     _configure_macos_app_mode()

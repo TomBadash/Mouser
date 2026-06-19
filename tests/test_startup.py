@@ -611,6 +611,31 @@ X-Mouser-SourcePath=@SOURCE_PATH@
             with patch.object(st, "_linux_icon_theme_source_root", return_value=source_root):
                 self.assertFalse(st._sync_linux_icon_theme())
 
+    def test_linux_icon_theme_sync_refreshes_cache_when_tool_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            destination_root = os.path.join(tmpdir, "dest", "hicolor")
+            for size in st.LINUX_ICON_SIZES:
+                icon_dir = os.path.join(source_root, f"{size}x{size}", "apps")
+                os.makedirs(icon_dir, exist_ok=True)
+                with open(os.path.join(icon_dir, st.LINUX_ICON_FILENAME), "wb") as fh:
+                    fh.write(b"png")
+
+            with (
+                patch.object(st, "_linux_icon_theme_source_root", return_value=source_root),
+                patch.object(st, "_linux_user_icon_theme_root", return_value=destination_root),
+                patch.object(st.shutil, "which", return_value="/usr/bin/gtk-update-icon-cache"),
+                patch.object(st.subprocess, "run") as run,
+            ):
+                self.assertTrue(st._sync_linux_icon_theme())
+
+            run.assert_called_once_with(
+                ["/usr/bin/gtk-update-icon-cache", "-qtf", destination_root],
+                check=False,
+                stdout=st.subprocess.DEVNULL,
+                stderr=st.subprocess.DEVNULL,
+            )
+
     def test_linux_icon_resolver_prefers_icon_name_after_sync(self):
         with (
             patch.object(st, "_sync_linux_icon_theme", return_value=True),
@@ -626,6 +651,28 @@ X-Mouser-SourcePath=@SOURCE_PATH@
         ):
             self.assertEqual(
                 st._linux_icon_name_or_path(),
+                "/tmp/Mouser/images/logo_icon.png",
+            )
+
+    def test_linux_runtime_icon_path_prefers_hicolor_asset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            icon_dir = os.path.join(source_root, "256x256", "apps")
+            os.makedirs(icon_dir, exist_ok=True)
+            icon_path = os.path.join(icon_dir, st.LINUX_ICON_FILENAME)
+            with open(icon_path, "wb") as fh:
+                fh.write(b"png")
+
+            with patch.object(st, "_linux_icon_theme_source_root", return_value=source_root):
+                self.assertEqual(st.linux_runtime_icon_path(), icon_path)
+
+    def test_linux_runtime_icon_path_falls_back_to_master_png(self):
+        with (
+            patch.object(st, "_linux_icon_theme_source_root", return_value=""),
+            patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+        ):
+            self.assertEqual(
+                st.linux_runtime_icon_path(),
                 "/tmp/Mouser/images/logo_icon.png",
             )
 

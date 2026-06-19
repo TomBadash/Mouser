@@ -198,6 +198,21 @@ def _linux_icon_destination_path(destination_root: str, size: int) -> str:
     )
 
 
+def _refresh_linux_icon_theme_cache(destination_root: str) -> None:
+    tool = shutil.which("gtk-update-icon-cache")
+    if not tool:
+        return
+    try:
+        subprocess.run(
+            [tool, "-qtf", destination_root],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
+
 def _sync_linux_icon_theme() -> bool:
     source_root = _linux_icon_theme_source_root()
     if not source_root:
@@ -221,12 +236,30 @@ def _sync_linux_icon_theme() -> bool:
     except OSError as exc:
         print(f"[startup] failed to sync Linux icon theme: {exc}")
         return False
+    _refresh_linux_icon_theme_cache(destination_root)
     return True
 
 
 def _linux_icon_name_or_path() -> str:
     if _sync_linux_icon_theme():
         return LINUX_ICON_NAME
+    return _linux_icon_path()
+
+
+def sync_linux_icon_theme() -> bool:
+    """Best-effort sync of Mouser's hicolor icons into the user's icon theme."""
+    return _sync_linux_icon_theme()
+
+
+def linux_runtime_icon_path(preferred_size: int = 256) -> str:
+    """Return the best Linux runtime icon asset for window/tray surfaces."""
+    source_root = _linux_icon_theme_source_root()
+    if source_root:
+        sizes = sorted(LINUX_ICON_SIZES, key=lambda size: abs(size - preferred_size))
+        for size in sizes:
+            candidate = _linux_icon_source_path(source_root, size)
+            if os.path.isfile(candidate):
+                return candidate
     return _linux_icon_path()
 
 
