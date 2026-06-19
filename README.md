@@ -292,7 +292,7 @@ The first normal Linux launch creates or refreshes:
 ~/.local/share/applications/io.github.tombadash.mouser.desktop
 ```
 
-The generated launcher uses absolute paths for the current portable app or source checkout. If you move the checkout, launch Mouser once from the new path to refresh the app-menu entry. Enabling **Start at login** also manages:
+The generated launcher uses absolute paths for the current portable app or source checkout, and syncs Mouser's app icon into the per-user hicolor icon theme when possible. If you move the checkout, launch Mouser once from the new path to refresh the app-menu entry. Enabling **Start at login** also manages:
 
 ```text
 ~/.config/autostart/io.github.tombadash.mouser.desktop

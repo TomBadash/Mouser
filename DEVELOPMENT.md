@@ -319,7 +319,7 @@ pip install pyinstaller
 pyinstaller Mouser-linux.spec --noconfirm
 ```
 
-Output: `dist/Mouser/`. The release pipeline additionally bundles `69-mouser-logitech.rules` and `install-linux-permissions.sh`, runs `ldd` on the resulting binary to flag missing libraries, and performs an offscreen smoke test (`QT_QPA_PLATFORM=offscreen`).
+Output: `dist/Mouser/`. The release pipeline additionally bundles the Linux permission helper files and hicolor app-icon ladder, runs `ldd` on the resulting binary to flag missing libraries, and performs an offscreen smoke test (`QT_QPA_PLATFORM=offscreen`).
 
 ## Desktop shortcut (Windows)
 

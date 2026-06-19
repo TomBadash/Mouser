@@ -102,6 +102,10 @@ a = Analysis(
             os.path.join(ROOT, "packaging", "linux", "io.github.tombadash.mouser.desktop.in"),
             "linux",
         ),
+        (
+            os.path.join(ROOT, "packaging", "linux", "icons"),
+            os.path.join("linux", "icons"),
+        ),
         (BUILD_INFO_DATA, "."),
     ],
     hiddenimports=[

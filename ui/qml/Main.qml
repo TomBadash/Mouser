@@ -74,21 +74,29 @@ ApplicationWindow {
                     spacing: 6
 
                     Rectangle {
+                        // Brand mark in the top-left of the sidebar -- a
+                        // pocket-sized echo of the Dock icon: same navy
+                        // squircle, same white mouse glyph. Renders
+                        // identically across light / dark themes so the
+                        // brand stays recognisable regardless of system
+                        // appearance, and distinguishes itself from the
+                        // teal-accented navigation items below.
                         width: 44
                         height: 44
                         radius: 14
-                        color: root.theme.accent
+                        color: root.theme.brandMarkBg
                         anchors.horizontalCenter: parent.horizontalCenter
 
-                        Text {
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: "Mouser"
+                        Accessible.description: root.versionLabel
+
+                        AppIcon {
                             anchors.centerIn: parent
-                            text: "M"
-                            font {
-                                family: uiState.fontFamily
-                                pixelSize: 20
-                                bold: true
-                            }
-                            color: root.theme.bgSidebar
+                            width: 24
+                            height: 24
+                            name: "mouse-simple"
+                            iconColor: root.theme.brandMarkFg
                         }
                     }
 

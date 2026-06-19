@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import ctypes
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -72,6 +73,89 @@ class MacOSLauncherPathTests(unittest.TestCase):
         symlink.assert_called_once_with(executable, staging)
         replace.assert_called_once_with(staging, target)
         execv.assert_called_once_with(target, [target, "main_qml.py", "--show-window"])
+
+
+@unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
+class AppIdentityTests(unittest.TestCase):
+    def test_app_icon_uses_linux_runtime_asset(self):
+        with (
+            patch.object(main_qml.sys, "platform", "linux"),
+            patch.object(main_qml, "linux_runtime_icon_path", return_value="/tmp/Mouser/linux/icons/hicolor/256x256/apps/io.github.tombadash.mouser.png"),
+            patch.object(main_qml.os.path, "isfile", return_value=True),
+            patch.object(main_qml, "QIcon", side_effect=lambda path: path),
+        ):
+            self.assertEqual(
+                main_qml._app_icon(),
+                "/tmp/Mouser/linux/icons/hicolor/256x256/apps/io.github.tombadash.mouser.png",
+            )
+
+    def test_app_icon_uses_ico_on_windows(self):
+        with (
+            patch.object(main_qml.sys, "platform", "win32"),
+            patch.object(main_qml, "ROOT", "/tmp/Mouser"),
+            patch.object(main_qml.os.path, "isfile", return_value=True),
+            patch.object(main_qml, "QIcon", side_effect=lambda path: path),
+        ):
+            self.assertEqual(
+                main_qml._app_icon(),
+                "/tmp/Mouser/images/logo.ico",
+            )
+
+    def test_windows_app_user_model_id_is_set_on_windows(self):
+        set_app_id = MagicMock(return_value=0)
+        fake_windll = SimpleNamespace(
+            shell32=SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=set_app_id)
+        )
+
+        with (
+            patch.object(main_qml.sys, "platform", "win32"),
+            patch.object(ctypes, "windll", fake_windll, create=True),
+        ):
+            main_qml._configure_windows_app_user_model_id()
+
+        set_app_id.assert_called_once_with(main_qml.WINDOWS_APP_USER_MODEL_ID)
+
+    def test_windows_app_user_model_id_noops_off_windows(self):
+        with (
+            patch.object(main_qml.sys, "platform", "linux"),
+            patch.object(ctypes, "windll", create=True) as windll,
+        ):
+            main_qml._configure_windows_app_user_model_id()
+
+        self.assertFalse(windll.mock_calls)
+
+    def test_linux_desktop_file_name_is_set_on_linux(self):
+        app = MagicMock()
+
+        with patch.object(main_qml.sys, "platform", "linux"):
+            main_qml._configure_linux_desktop_file_name(app)
+
+        app.setDesktopFileName.assert_called_once_with(
+            main_qml.LINUX_DESKTOP_FILE_BASENAME
+        )
+
+    def test_linux_desktop_file_name_noops_off_linux(self):
+        app = MagicMock()
+
+        with patch.object(main_qml.sys, "platform", "darwin"):
+            main_qml._configure_linux_desktop_file_name(app)
+
+        app.setDesktopFileName.assert_not_called()
+
+    def test_macos_dock_icon_refresh_schedules_immediate_and_delayed_reapply(self):
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml.QTimer, "singleShot") as single_shot,
+        ):
+            main_qml._schedule_macos_dock_icon_refresh()
+
+        self.assertEqual(
+            [call.args for call in single_shot.call_args_list],
+            [
+                (0, main_qml._install_macos_dock_icon),
+                (250, main_qml._install_macos_dock_icon),
+            ],
+        )
 
 
 @unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
