@@ -26,6 +26,7 @@ ApplicationWindow {
                                                : (Qt.platform.os === "windows"
                                                   ? "Consolas"
                                                   : "monospace")
+    property var s: lm.strings
     property int currentPage: 0
     property Item hoveredNavItem: null
     property string hoveredNavText: ""
@@ -376,6 +377,10 @@ ApplicationWindow {
                     color: closeAboutMouse.containsMouse
                            ? Qt.rgba(1, 1, 1, uiState.darkMode ? 0.08 : 0.65)
                            : "transparent"
+
+                    Accessible.role: Accessible.Button
+                    Accessible.name: s["dialog.close"]
+                    Accessible.onPressAction: aboutDialog.close()
 
                     AppIcon {
                         anchors.centerIn: parent
