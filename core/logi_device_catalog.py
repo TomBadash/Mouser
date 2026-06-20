@@ -42,6 +42,20 @@ G502_BUTTONS = (
     "hscroll_right",
 )
 
+# G602: HID++ 2.0 over its dedicated wireless receiver (USB 0xC537), but no
+# REPROG_CONTROLS feature in any version, so buttons cannot be diverted via
+# HID++. No tilt wheel either. Default onboard mappings (per the official
+# quick-start guide): G4=Forward, G5=Back (standard OS mouse buttons --
+# covered by xbutton2/xbutton1 below); G7/G8/G9 type keyboard keys 1/2/3
+# (keyboard events, outside the mouse hooks' reach); G6 = battery-check
+# (internal, no OS event); G10/G11 = DPI +/- (onboard). Battery (0x1000)
+# and ADJUSTABLE_DPI (0x2201) are exposed.
+G602_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+)
+
 
 def _hotspot(
     button_key: str,
@@ -255,6 +269,23 @@ LOGI_DEVICE_SPECS = (
         "dpi_min": 200,
         "dpi_max": 12000,
     },
+    {
+        # Pairs only through its dedicated receiver (USB PID 0xC537); the
+        # receiver PID itself is intentionally not listed -- Mouser probes
+        # receiver slots and resolves the device by WPID / HID++ name.
+        "key": "g602",
+        "display_name": "G602",
+        "product_ids": (0x402C,),
+        "aliases": (
+            "G602 Gaming Wireless Mouse",
+            "Wireless Gaming Mouse G602",
+        ),
+        "ui_layout": "g602",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": G602_BUTTONS,
+        "dpi_min": 250,
+        "dpi_max": 2500,
+    },
 )
 
 
@@ -277,6 +308,23 @@ LOGI_DEVICE_LAYOUTS = {
             "G502 buttons are remapped at the OS level. DPI up/down and the "
             "sniper button are handled by the mouse's onboard profile and "
             "cannot be remapped here yet."
+        ),
+        "hotspots": [],
+    },
+    "g602": {
+        "key": "g602",
+        "label": "G602",
+        "image_asset": "icons/mouse-simple.svg",
+        "image_width": 220,
+        "image_height": 220,
+        "interactive": False,
+        # Manual-selectable for the same reason as the g502 layout above.
+        "manual_selectable": True,
+        "note": (
+            "G602 buttons are remapped at the OS level. Side buttons G4/G5 "
+            "act as Forward/Back and are mappable; G7-G9 type keyboard keys "
+            "1/2/3 and G10/G11 adjust DPI onboard, so they cannot be "
+            "remapped here yet."
         ),
         "hotspots": [],
     },

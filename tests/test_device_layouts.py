@@ -86,12 +86,13 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn({"key": "mx_vertical", "label": "MX Vertical family"}, choices)
 
     def test_manual_choices_include_gaming_family_layouts(self):
-        # G502 has no MX-style family fallback, so its layout must be
+        # G502/G602 have no MX-style family fallback, so their layouts must be
         # manually selectable for owners whose device connects with an
         # unrecognized PID/name.
         choices = get_manual_layout_choices()
 
         self.assertIn({"key": "g502", "label": "G502 family"}, choices)
+        self.assertIn({"key": "g602", "label": "G602"}, choices)
 
     def test_manual_choices_do_not_duplicate_layout_keys(self):
         keys = [choice["key"] for choice in get_manual_layout_choices() if choice["key"]]

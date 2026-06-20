@@ -282,6 +282,39 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(50000, info), 25600)
         self.assertEqual(clamp_dpi(50, info), 100)
 
+    def test_resolve_g602_by_wireless_pid(self):
+        device = resolve_device(product_id=0x402C)
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "g602")
+        self.assertEqual(device.ui_layout, "g602")
+
+    def test_resolve_g602_by_reported_name(self):
+        device = resolve_device(product_name="G602 Gaming Wireless Mouse")
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "g602")
+
+    def test_g602_buttons_are_os_level_only(self):
+        buttons = get_buttons_for_layout("g602")
+
+        self.assertEqual(buttons, ("middle", "xbutton1", "xbutton2"))
+
+    def test_build_g602_connected_info(self):
+        info = build_connected_device_info(
+            product_id=0x402C,
+            product_name="G602",
+            transport="USB Receiver",
+        )
+        layout = get_device_layout(info.ui_layout)
+
+        self.assertEqual(info.key, "g602")
+        self.assertEqual(info.display_name, "G602")
+        self.assertEqual(layout["key"], "g602")
+        self.assertFalse(layout["interactive"])
+        self.assertEqual(clamp_dpi(5000, info), 2500)
+        self.assertEqual(clamp_dpi(100, info), 250)
+
     def test_known_device_layout_metadata_is_valid(self):
         for device in iter_known_devices():
             with self.subTest(device=device.key):
