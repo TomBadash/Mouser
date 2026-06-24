@@ -1716,10 +1716,31 @@ class Backend(QObject):
 
     @Slot(int)
     def _handleDpiRead(self, dpi):
-        """Runs on Qt main thread."""
-        self._cfg.setdefault("settings", {})["dpi"] = dpi
+        """Runs on Qt main thread.
+
+        A device-reported DPI is authoritative for "what the hardware is
+        currently set to" -- the user expects Mouser to keep showing the
+        same value across restarts rather than reverting to a stale
+        preference whenever the engine reads the device. Clamp the
+        incoming value, persist it, and keep the engine's cached config
+        in sync so subsequent reads do not loop through a stale picture.
+
+        Skip the engine push (``set_dpi``) here: this handler is reacting
+        to a value the device already reports, so echoing it back would
+        be a redundant HID round-trip.
+        """
+        device = self._resolved_connected_device()
+        clamped = clamp_dpi(dpi, device)
+        settings = self._cfg.setdefault("settings", {})
+        if settings.get("dpi") == clamped:
+            self.dpiFromDevice.emit(clamped)
+            return
+        settings["dpi"] = clamped
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
         self.settingsChanged.emit()
-        self.dpiFromDevice.emit(dpi)
+        self.dpiFromDevice.emit(clamped)
 
     @Slot(bool)
     def _handleConnectionChange(self, connected):

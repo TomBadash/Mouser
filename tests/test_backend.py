@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1375,6 +1376,80 @@ class BackendLoginStartupTests(unittest.TestCase):
         apply_mock.assert_not_called()
         self.assertFalse(backend.startMinimized)
 
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendHandleDpiReadTests(unittest.TestCase):
+    """Device-reported DPI must persist to ``config.json`` so a hardware
+    DPI change taken on the mouse survives the next Mouser restart, and
+    must clamp into the connected device's range to defend against
+    bogus reports."""
+
+    def setUp(self) -> None:
+        self._save_mock = unittest.mock.MagicMock()
+        self._patches = (
+            patch("ui.backend.save_config", self._save_mock),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        )
+        for p in self._patches:
+            p.start()
+        self.addCleanup(self._stop_patches)
+
+    def _stop_patches(self) -> None:
+        for p in self._patches:
+            p.stop()
+
+    def _build(self, *, cfg=None, engine=None):
+        loaded = copy.deepcopy(cfg or DEFAULT_CONFIG)
+        with patch("ui.backend.load_config", return_value=loaded):
+            backend = Backend(engine=engine)
+        self._save_mock.reset_mock()
+        return backend
+
+    def test_persists_new_device_dpi_to_disk(self):
+        backend = self._build()
+        backend._handleDpiRead(2400)
+        self.assertEqual(backend._cfg["settings"]["dpi"], 2400)
+        self._save_mock.assert_called_once_with(backend._cfg)
+
+    def test_clamps_overrange_dpi_to_device_max(self):
+        device = SimpleNamespace(dpi_min=200, dpi_max=4000)
+        engine = _FakeEngine(device_connected=True, connected_device=device)
+        backend = self._build(engine=engine)
+        backend._handleDpiRead(99999)
+        self.assertEqual(backend._cfg["settings"]["dpi"], 4000)
+        self._save_mock.assert_called_once_with(backend._cfg)
+
+    def test_clamps_underrange_dpi_to_device_min(self):
+        device = SimpleNamespace(dpi_min=400, dpi_max=8000)
+        engine = _FakeEngine(device_connected=True, connected_device=device)
+        backend = self._build(engine=engine)
+        backend._handleDpiRead(50)
+        self.assertEqual(backend._cfg["settings"]["dpi"], 400)
+        self._save_mock.assert_called_once_with(backend._cfg)
+
+    def test_no_change_skips_save(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["dpi"] = 1500
+        backend = self._build(cfg=cfg)
+        backend._handleDpiRead(1500)
+        self._save_mock.assert_not_called()
+
+    def test_syncs_engine_cached_config(self):
+        engine = _FakeEngine(device_connected=True)
+        backend = self._build(engine=engine)
+        backend._handleDpiRead(1800)
+        self.assertEqual(engine.cfg["settings"]["dpi"], 1800)
+
+    def test_emits_dpi_from_device_with_clamped_value(self):
+        _ensure_qapp()
+        device = SimpleNamespace(dpi_min=200, dpi_max=4000)
+        engine = _FakeEngine(device_connected=True, connected_device=device)
+        backend = self._build(engine=engine)
+        seen = []
+        backend.dpiFromDevice.connect(seen.append)
+        backend._handleDpiRead(9999)
+        QCoreApplication.processEvents()
+        self.assertEqual(seen, [4000])
 
 if __name__ == "__main__":
     unittest.main()
