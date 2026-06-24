@@ -4,6 +4,7 @@ current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
 
+import sys
 import threading
 import time
 from core.mouse_hook import MouseHook, MouseEvent
@@ -190,6 +191,8 @@ class Engine:
                         self._switch_scroll_mode()
                     elif action_id == "cycle_dpi":
                         self._cycle_dpi()
+                    elif action_id == "cycle_desktops":
+                        self._cycle_desktops()
                     else:
                         execute_action(action_id)
             except Exception as exc:
@@ -332,6 +335,158 @@ class Engine:
             def _write():
                 hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
+
+    @staticmethod
+    def _get_macos_desktop_info():
+        """Get macOS desktop count and current position (1-indexed).
+
+        Returns (desktop_count, current_position) for the display that
+        currently has the cursor.
+
+        Uses CGSGetActiveSpace to get the current space id64, then finds
+        which display's Spaces list contains that id64.  Only id64 values
+        inside the Spaces array are counted (not from "Current Space" or
+        "Collapsed Space" blocks).
+
+        Only works on macOS; returns (4, 1) on other platforms.
+        """
+        if sys.platform != "darwin":
+            return 4, 1
+
+        import ctypes
+        import subprocess
+        import re
+
+        try:
+            # CGSGetActiveSpace returns the current space id64 of the
+            # display where the cursor is located.
+            cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+            cg.CGSGetActiveSpace.restype = ctypes.c_int32
+            current_id64 = cg.CGSGetActiveSpace()
+
+            # Read spaces config
+            result = subprocess.run(
+                ['defaults', 'read', 'com.apple.spaces', 'SpacesDisplayConfiguration'],
+                capture_output=True, text=True, timeout=5
+            )
+            output = result.stdout
+
+            # Split by Display Identifier to get per-monitor sections
+            sections = re.split(r'"Display Identifier"\s*=\s*', output)
+
+            def _extract_spaces_id64_list(section_text):
+                """Extract id64 values only from the Spaces array block."""
+                spaces_match = re.search(r'Spaces\s*=\s*\(', section_text)
+                if not spaces_match:
+                    return []
+                # Find the matching closing paren
+                text = section_text[spaces_match.start():]
+                depth = 0
+                end = 0
+                for i, c in enumerate(text):
+                    if c == '(':
+                        depth += 1
+                    elif c == ')':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end == 0:
+                    return []
+                spaces_block = text[:end]
+                return [int(x) for x in re.findall(r'id64 = (\d+)', spaces_block)]
+
+            # Find the display whose Spaces list contains current_id64
+            active_display_id = None
+            active_id64_list = None
+
+            for section in sections[1:]:  # skip text before first identifier
+                display_id = section.split(';')[0].strip().strip('"')
+                id64_list = _extract_spaces_id64_list(section)
+                if current_id64 in id64_list:
+                    active_display_id = display_id
+                    active_id64_list = id64_list
+                    break
+
+            # Fallback: use Main display
+            if active_id64_list is None:
+                for section in sections[1:]:
+                    display_id = section.split(';')[0].strip().strip('"')
+                    if display_id == 'Main':
+                        active_display_id = 'Main'
+                        active_id64_list = _extract_spaces_id64_list(section)
+                        break
+
+            if not active_id64_list:
+                print("[Engine] No desktops found for active monitor")
+                return 4, 1
+
+            desktop_count = len(active_id64_list)
+
+            # Find current position (1-indexed)
+            if current_id64 in active_id64_list:
+                current_position = active_id64_list.index(current_id64) + 1
+            else:
+                current_position = 1
+
+            print(f"[Engine] macOS desktop info: display={active_display_id}, count={desktop_count}, "
+                  f"position={current_position}, id64={current_id64}, list={active_id64_list}")
+            return desktop_count, current_position
+
+        except Exception as e:
+            print(f"[Engine] Error getting macOS desktop info: {e}")
+            return 4, 1
+
+    def _cycle_desktops(self):
+        """Ping-pong cycle through desktops (macOS only).
+
+        Switches right until the last desktop, then left until the first,
+        then right again, etc.  Uses CGSGetActiveSpace and com.apple.spaces
+        to detect desktop count and current position.
+        """
+        if sys.platform != "darwin":
+            print("[Engine] cycle_desktops only supported on macOS")
+            return
+
+        settings = self.cfg.setdefault("settings", {})
+
+        # Get desktop info
+        desktop_count, current = self._get_macos_desktop_info()
+
+        # Only one desktop — nothing to cycle
+        if desktop_count <= 1:
+            print(f"[Engine] cycle_desktops: only {desktop_count} desktop, skipping")
+            return
+
+        # Read direction state
+        direction = settings.get("desktop_direction", "right")
+
+        # Calculate next position
+        if direction == "right":
+            if current >= desktop_count:
+                # At right edge, reverse
+                direction = "left"
+                next_pos = current - 1
+            else:
+                next_pos = current + 1
+        else:  # left
+            if current <= 1:
+                # At left edge, reverse
+                direction = "right"
+                next_pos = current + 1
+            else:
+                next_pos = current - 1
+
+        # Execute switch
+        print(f"[Engine] cycle_desktops: {current} -> {next_pos} (direction={direction})")
+        if next_pos > current:
+            execute_action("space_right")
+        else:
+            execute_action("space_left")
+
+        # Save direction state
+        settings["desktop_direction"] = direction
+        save_config(self.cfg)
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):

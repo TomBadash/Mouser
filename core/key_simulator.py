@@ -1119,6 +1119,11 @@ elif sys.platform == "darwin":
             "keys": _MAC_ACTION_FALLBACKS["space_right"],
             "category": "Navigation",
         },
+        "cycle_desktops": {
+            "label": "Cycle Desktops",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Navigation",
+        },
         "show_desktop": {
             "label": "Show Desktop",
             "keys": _MAC_ACTION_FALLBACKS["show_desktop"],
