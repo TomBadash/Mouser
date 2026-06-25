@@ -245,16 +245,67 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
-def get_profile_for_app(cfg, exe_name):
-    """Return the profile name that matches the given executable, or 'default'."""
-    if not exe_name:
+def _dedupe_specs(candidates) -> list[str]:
+    result = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate = str(candidate)
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
+
+
+def _identity_specs(app_identity: tuple[str, ...] | None) -> list[str]:
+    return _dedupe_specs(app_identity or ())
+
+
+def _configured_app_specs(app_spec: str | None) -> list[str]:
+    return _dedupe_specs((app_spec,) if app_spec else ())
+
+
+def _app_identity_aliases(spec: str) -> set[str]:
+    if not spec:
+        return set()
+    entry = resolve_app_for_config(spec)
+    if not entry:
+        return {spec.casefold()}
+    aliases = [entry.get("id", ""), *entry.get("aliases", [])]
+    return {alias.casefold() for alias in aliases if alias}
+
+
+def get_profile_for_app_identity(cfg, app_identity: tuple[str, ...] | None) -> str:
+    """
+    Return the profile name that matches an app identity, or 'default'.
+
+    ``app_identity`` is an ordered tuple of identifiers. Identifiers are matched
+    most-specific first, allowing a nested app profile to win before falling
+    back to its host app profile.
+    """
+    identities = _identity_specs(app_identity)
+    if not identities:
         return "default"
-    entry = resolve_app_for_config(exe_name)
-    aliases = {a.lower() for a in ([entry["id"]] + entry.get("aliases", []))} if entry else {exe_name.lower()}
-    for pname, pdata in cfg.get("profiles", {}).items():
-        for app in pdata.get("apps", []):
-            if app.lower() in aliases:
-                return pname
+
+    alias_cache = {}
+
+    def aliases_for(spec: str) -> set[str]:
+        key = spec.casefold()
+        if key not in alias_cache:
+            alias_cache[key] = _app_identity_aliases(spec)
+        return alias_cache[key]
+
+    profiles = list(cfg.get("profiles", {}).items())
+    for identity in identities:
+        aliases = aliases_for(identity)
+        for pname, pdata in profiles:
+            for app in pdata.get("apps", []):
+                for app_spec in _configured_app_specs(app):
+                    if aliases & aliases_for(app_spec):
+                        return pname
     return "default"
 
 

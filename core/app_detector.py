@@ -5,14 +5,119 @@ Windows: GetForegroundWindow + QueryFullProcessImageNameW (with UWP resolution).
 macOS:   NSWorkspace.sharedWorkspace().frontmostApplication().
 """
 
+import functools
 import os
+import plistlib
 import sys
 import threading
 import time
 
 
+def _path_from_nsurl(url) -> str | None:
+    if url is None:
+        return None
+    try:
+        path_attr = getattr(url, "path", None)
+        path = path_attr() if callable(path_attr) else path_attr
+        return str(path) if path else None
+    except Exception:
+        return None
+
+
+def _call_ns_method(obj, name: str):
+    try:
+        attr = getattr(obj, name, None)
+        return attr() if callable(attr) else attr
+    except Exception:
+        return None
+
+
+def _dedupe_keep_order(values) -> tuple[str, ...]:
+    result = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return tuple(result)
+
+
+def _single_identity(value: str | None) -> tuple[str, ...]:
+    return (value,) if value else ()
+
+
+def _macos_app_bundles_in_path(path: str | None) -> tuple[str, ...]:
+    """Return containing .app bundles ordered inner-most to outer-most."""
+    if not path:
+        return ()
+
+    normalized = os.path.abspath(path)
+    parts = normalized.split(os.sep)
+    bundles = []
+    for idx, part in enumerate(parts):
+        if part.endswith(".app"):
+            if normalized.startswith(os.sep):
+                bundles.append(os.path.join(os.sep, *parts[1:idx + 1]))
+            else:
+                bundles.append(os.path.join(*parts[:idx + 1]))
+    return tuple(reversed(bundles))
+
+
+@functools.lru_cache(maxsize=256)
+def _read_macos_bundle_identifier(app_path: str | None) -> str | None:
+    if not app_path:
+        return None
+    info_path = os.path.join(app_path, "Contents", "Info.plist")
+    try:
+        with open(info_path, "rb") as f:
+            info = plistlib.load(f)
+        ident = info.get("CFBundleIdentifier")
+        return str(ident) if ident else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _macos_running_app_identities(app) -> tuple[str, ...]:
+    """Return profile-matching identities, ordered most-specific first."""
+    bundle_path = _path_from_nsurl(_call_ns_method(app, "bundleURL"))
+    executable_path = _path_from_nsurl(_call_ns_method(app, "executableURL"))
+    ident = _call_ns_method(app, "bundleIdentifier")
+    localized_name = _call_ns_method(app, "localizedName")
+
+    identities = []
+    if ident:
+        identities.append(str(ident))
+
+    bundles = _dedupe_keep_order([
+        *_macos_app_bundles_in_path(bundle_path),
+        *_macos_app_bundles_in_path(executable_path),
+    ])
+    for app_path in bundles:
+        bundle_ident = _read_macos_bundle_identifier(app_path)
+        if bundle_ident:
+            identities.append(bundle_ident)
+        identities.append(app_path)
+        identities.append(os.path.basename(app_path))
+        identities.append(os.path.splitext(os.path.basename(app_path))[0])
+
+    if executable_path:
+        identities.append(executable_path)
+        identities.append(os.path.basename(executable_path))
+    if localized_name:
+        identities.append(str(localized_name))
+
+    return _dedupe_keep_order(identities)
+
+
 # ==================================================================
-# Platform-specific get_foreground_exe()
+# Platform-specific foreground app identity resolution
 # ==================================================================
 
 if sys.platform == "win32":
@@ -133,24 +238,24 @@ if sys.platform == "win32":
         user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
         return result[0]
 
-    def get_foreground_exe() -> str | None:
-        """Return the foreground app path on Windows, or None."""
+    def get_foreground_app_identity() -> tuple[str, ...]:
+        """Return the foreground app path on Windows, or an empty tuple."""
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return None
+            return ()
         pid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == 0:
-            return None
+            return ()
         exe_path = _path_from_pid(pid.value)
         if not exe_path:
-            return None
+            return ()
         exe_lower = os.path.basename(exe_path).lower()
         if exe_lower == "applicationframehost.exe":
             real = _resolve_uwp_child(hwnd)
-            # If we can't resolve the real app (e.g. fullscreen UWP),
-            # return None so the detector keeps the last known profile.
-            return real
+            # If we can't resolve the real app (e.g. fullscreen UWP), return
+            # an empty tuple so the detector keeps the last known profile.
+            return _single_identity(real)
         if exe_lower == "explorer.exe":
             wc = _get_window_class(hwnd)
             if wc not in _EXPLORER_CLASSES:
@@ -158,14 +263,12 @@ if sys.platform == "win32":
                 print(f"[AppDetect] FG: explorer.exe class={wc} title='{title}'")
                 real = _resolve_uwp_child(hwnd)
                 if real:
-                    return real
+                    return _single_identity(real)
                 real = _find_uwp_app_global()
-                return real  # None keeps last profile
-        return exe_path
+                return _single_identity(real)
+        return _single_identity(exe_path)
 
 elif sys.platform == "darwin":
-    import functools
-
     try:
         import objc as _objc
     except ImportError as exc:
@@ -182,22 +285,16 @@ elif sys.platform == "darwin":
         return wrapper
 
     @_autoreleased
-    def get_foreground_exe() -> str | None:
-        """Return a stable app identifier for the frontmost app on macOS."""
+    def get_foreground_app_identity() -> tuple[str, ...]:
+        """Return stable frontmost app identities on macOS."""
         try:
             from AppKit import NSWorkspace
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
-                return None
-            ident = app.bundleIdentifier()
-            if ident:
-                return ident
-            url = app.executableURL()
-            if url:
-                return os.path.basename(url.path())
-            return app.localizedName()
+                return ()
+            return _macos_running_app_identities(app)
         except Exception:
-            return None
+            return ()
 
 elif sys.platform == "linux":
     import subprocess as _subprocess
@@ -237,35 +334,37 @@ elif sys.platform == "linux":
             pass
         return None
 
-    def get_foreground_exe() -> str | None:
+    def get_foreground_app_identity() -> tuple[str, ...]:
         """Return the foreground app executable path on Linux."""
         if _WAYLAND:
             if _KDE:
                 exe = _get_foreground_kdotool()
                 if exe:
-                    return exe
+                    return _single_identity(exe)
                 # Fall back to xdotool so XWayland apps still work when
                 # kdotool is unavailable or cannot resolve the active window.
-                return _get_foreground_xdotool()
+                exe = _get_foreground_xdotool()
+                return _single_identity(exe)
             # GNOME / other Wayland compositors: not yet supported
-            return None
-        return _get_foreground_xdotool()
+            return ()
+        exe = _get_foreground_xdotool()
+        return _single_identity(exe)
 
 else:
-    def get_foreground_exe() -> str | None:
-        return None
+    def get_foreground_app_identity() -> tuple[str, ...]:
+        return ()
 
 
 class AppDetector:
     """
     Polls the foreground window every *interval* seconds.
-    Calls ``on_change(exe_name: str)`` when the foreground app changes.
+    Calls ``on_change(app_identity)`` when the foreground app changes.
     """
 
     def __init__(self, on_change, interval: float = 0.3):
         self._on_change = on_change
         self._interval = interval
-        self._last_exe: str | None = None
+        self._last_app_identity: tuple[str, ...] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -285,10 +384,10 @@ class AppDetector:
     def _poll(self):
         while not self._stop.is_set():
             try:
-                exe = get_foreground_exe()
-                if exe and exe != self._last_exe:
-                    self._last_exe = exe
-                    self._on_change(exe)
+                app_identity = get_foreground_app_identity()
+                if app_identity and app_identity != self._last_app_identity:
+                    self._last_app_identity = app_identity
+                    self._on_change(app_identity)
             except Exception:
                 pass
             self._stop.wait(self._interval)
