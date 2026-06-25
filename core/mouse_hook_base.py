@@ -123,6 +123,27 @@ class BaseMouseHook:
             connected_device=self._connected_device,
         )
 
+    def _should_intercept_events(self) -> bool:
+        """True only when the platform hook should block, remap, or dispatch
+        OS-level mouse events to the engine.
+
+        Mouser exists to remap a Logitech mouse's buttons. The global event
+        taps on macOS (CGEventTap) and Windows (WH_MOUSE_LL) see events
+        from every input device the OS knows about -- when no Logitech is
+        currently bound to this host (KVM switched to another machine,
+        the device is mid-reconnect after sleep, or the user simply has
+        not plugged one in) those hooks must stay completely out of the
+        way, otherwise xbutton clicks and scroll events from a trackpad
+        or generic USB mouse get swallowed and routed through Mouser's
+        remap pipeline.
+
+        Linux's evdev hook only attaches once a Logitech source device
+        has been resolved, so it is naturally gated -- but consult this
+        property defensively before dispatching there as well so the
+        contract stays platform-uniform.
+        """
+        return self._connected_device is not None
+
     def dump_device_info(self):
         hg = getattr(self, "_hid_gesture", None)
         if hg and hasattr(hg, "dump_device_info"):

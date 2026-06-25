@@ -283,6 +283,18 @@ class MouseHook(BaseMouseHook):
                     return cg_event
             except Exception:
                 pass
+
+            # KVM / cold-start guard: when no Logitech is currently bound to
+            # this host, the CGEventTap must be a complete pass-through. The
+            # tap sees events from every mouse the OS knows about, so without
+            # this guard a trackpad swipe or a generic USB mouse's xbutton
+            # click would get routed through Mouser's remap pipeline -- the
+            # exact failure mode users hit when their KVM switches the
+            # Logitech to another machine while Mouser keeps running on
+            # this one.
+            if not self._should_intercept_events():
+                return cg_event
+
             mouse_event = None
             should_block = False
 
