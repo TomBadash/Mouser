@@ -1376,5 +1376,74 @@ class BackendLoginStartupTests(unittest.TestCase):
         self.assertFalse(backend.startMinimized)
 
 
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendListPropertyMemoizationTests(unittest.TestCase):
+    """The five ``@Property(list, ...)`` getters on ``Backend`` (``buttons``,
+    ``profiles``, ``knownApps``, ``actionCategories``, ``allActions``) are
+    read by every QML binding that depends on them, including those evaluated
+    inside delegate rebuilds. Without memoization the lists -- and their
+    per-entry catalog / icon lookups -- were rebuilt on every paint."""
+
+    def _build(self, cfg=None):
+        loaded = copy.deepcopy(cfg or DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=loaded),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=None)
+
+    def test_buttons_returns_same_object_across_reads(self):
+        backend = self._build()
+        first = backend.buttons
+        second = backend.buttons
+        self.assertIs(first, second)
+
+    def test_mappings_changed_invalidates_buttons_cache(self):
+        backend = self._build()
+        before = backend.buttons
+        backend.mappingsChanged.emit()
+        after = backend.buttons
+        self.assertIsNot(before, after)
+        self.assertEqual(before, after)
+
+    def test_device_layout_changed_invalidates_buttons_and_actions(self):
+        backend = self._build()
+        buttons_before = backend.buttons
+        cats_before = backend.actionCategories
+        actions_before = backend.allActions
+        backend.deviceLayoutChanged.emit()
+        self.assertIsNot(backend.buttons, buttons_before)
+        self.assertIsNot(backend.actionCategories, cats_before)
+        self.assertIsNot(backend.allActions, actions_before)
+
+    def test_active_profile_changed_invalidates_profiles_cache(self):
+        backend = self._build()
+        before = backend.profiles
+        backend.activeProfileChanged.emit()
+        self.assertIsNot(backend.profiles, before)
+
+    def test_known_apps_changed_invalidates_known_apps_cache(self):
+        backend = self._build()
+        before = backend.knownApps
+        backend.knownAppsChanged.emit()
+        self.assertIsNot(backend.knownApps, before)
+
+    def test_profiles_cache_not_invalidated_by_unrelated_signals(self):
+        backend = self._build()
+        first = backend.profiles
+        backend.knownAppsChanged.emit()
+        backend.mappingsChanged.emit()
+        self.assertIs(backend.profiles, first)
+
+    def test_known_apps_cache_not_invalidated_by_unrelated_signals(self):
+        backend = self._build()
+        first = backend.knownApps
+        backend.profilesChanged.emit()
+        backend.mappingsChanged.emit()
+        backend.deviceLayoutChanged.emit()
+        self.assertIs(backend.knownApps, first)
+
+
 if __name__ == "__main__":
     unittest.main()
