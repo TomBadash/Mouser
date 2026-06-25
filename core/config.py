@@ -91,7 +91,7 @@ DEFAULT_CONFIG = {
     "settings": {
         "start_minimized": True,
         "start_at_login": False,
-        "hscroll_threshold": 1,
+        "hscroll_threshold": 0.1,
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
@@ -360,6 +360,16 @@ def _merge_defaults(cfg, defaults):
     return cfg
 
 
+
+def _is_compatible_type(value, default_val):
+    """Return True for values that are safe despite differing exact types."""
+    return (
+        isinstance(default_val, float)
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    )
+
+
 def _validate_types(cfg, defaults, path=""):
     """Reset values whose type doesn't match the defaults template."""
     for key, default_val in defaults.items():
@@ -372,6 +382,8 @@ def _validate_types(cfg, defaults, path=""):
                 print(f"[Config] Type mismatch at {path}.{key}: "
                       f"expected dict, got {type(cfg[key]).__name__}")
                 cfg[key] = json.loads(json.dumps(default_val))
+        elif _is_compatible_type(cfg[key], default_val):
+            continue
         elif not isinstance(cfg[key], type(default_val)):
             print(f"[Config] Type mismatch at {path}.{key}: "
                   f"expected {type(default_val).__name__}, "
