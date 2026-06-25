@@ -14,6 +14,7 @@ class MouseHookLike(Protocol):
     invert_hscroll: bool
     divert_mode_shift: bool
     divert_dpi_switch: bool
+    divert_haptic: bool
     _hid_gesture: Any
 
     def register(self, event_type: str, callback: Callable[[Any], None]) -> None: ...

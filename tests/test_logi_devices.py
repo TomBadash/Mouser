@@ -358,6 +358,26 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertIsNotNone(device)
         self.assertIs(get_buttons_for_layout("mx_anywhere_2s"), device.supported_buttons)
 
+    def test_mx_master_4_supports_haptic_button(self):
+        device = resolve_device(product_id=0xB042)
+        self.assertIsNotNone(device)
+        self.assertIn("haptic", device.supported_buttons)
+
+    def test_other_mx_master_devices_do_not_expose_haptic(self):
+        for pid in (0xB034, 0xB023, 0xB019, 0xB012):  # 3S, 3, 2S, original
+            device = resolve_device(product_id=pid)
+            self.assertIsNotNone(device, f"missing device for PID {pid:#06x}")
+            self.assertNotIn(
+                "haptic",
+                device.supported_buttons,
+                f"{device.key} should not expose haptic button",
+            )
+
+    def test_mx_master_4_layout_buttons_include_haptic(self):
+        buttons = get_buttons_for_layout("mx_master_4")
+        self.assertIsNotNone(buttons)
+        self.assertIn("haptic", buttons)
+
 
 class RuntimeSupportedButtonTests(unittest.TestCase):
     @staticmethod
@@ -406,7 +426,7 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertTrue(inventory.battery)
         self.assertEqual(
             inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
+            [],
         )
 
     def test_reprog_control_filter_removes_missing_gesture_group(self):
@@ -675,7 +695,7 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertIn("hscroll_left", info.supported_buttons)
         self.assertIn("hscroll_right", info.supported_buttons)
 
-    def test_mx_master_4_haptic_control_does_not_create_supported_button(self):
+    def test_mx_master_4_haptic_control_is_supported(self):
         info = build_connected_device_info(
             product_id=0xB042,
             reprog_controls=[
@@ -694,11 +714,10 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
 
         self.assertIn("mode_shift", info.supported_buttons)
         self.assertIn("gesture_down", info.supported_buttons)
-        self.assertNotIn("action_ring", info.supported_buttons)
-        self.assertNotIn("haptic", info.supported_buttons)
+        self.assertIn("haptic", info.supported_buttons)
         self.assertEqual(
             info.capability_inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
+            [],
         )
 
 

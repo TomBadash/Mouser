@@ -18,6 +18,19 @@ class _FakeMouseHook:
         self._hid_gesture = None
         self.start_called = False
         self.stop_called = False
+        self.divert_mode_shift = False
+        self.divert_dpi_switch = False
+        self.divert_haptic = False
+
+    def _build_extra_diverts(self):
+        extra = {}
+        if self.divert_mode_shift:
+            extra[0x00C4] = {"on_down": lambda: None, "on_up": lambda: None}
+        if self.divert_dpi_switch:
+            extra[0x00FD] = {"on_down": lambda: None, "on_up": lambda: None}
+        if self.divert_haptic:
+            extra[0x01A0] = {"on_down": lambda: None, "on_up": lambda: None}
+        return extra
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -511,6 +524,84 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
 
         engine.hook._hid_gesture.read_battery.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+
+class EngineHapticDivertGateTests(unittest.TestCase):
+    """``divert_haptic`` must only flip True for the MX Master 4."""
+
+    def _make_engine(self, mappings_overrides=None):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        if mappings_overrides:
+            cfg["profiles"]["default"]["mappings"].update(mappings_overrides)
+
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def _device(self, key, supported_buttons):
+        return SimpleNamespace(key=key, supported_buttons=supported_buttons)
+
+    def test_haptic_divert_on_for_mx_master_4_when_mapped(self):
+        engine = self._make_engine({"haptic": "mission_control"})
+        engine.hook.connected_device = self._device(
+            "mx_master_4",
+            ("middle", "gesture", "haptic"),
+        )
+
+        engine._apply_divert_flags()
+
+        self.assertTrue(engine.hook.divert_haptic)
+
+    def test_haptic_divert_off_for_mx_master_4_when_unmapped(self):
+        engine = self._make_engine({"haptic": "none"})
+        engine.hook.connected_device = self._device(
+            "mx_master_4",
+            ("middle", "gesture", "haptic"),
+        )
+
+        engine._apply_divert_flags()
+
+        self.assertFalse(engine.hook.divert_haptic)
+
+    def test_haptic_divert_off_for_mx_master_3s_even_when_mapped(self):
+        engine = self._make_engine({"haptic": "mission_control"})
+        engine.hook.connected_device = self._device(
+            "mx_master_3s",
+            ("middle", "gesture", "mode_shift"),
+        )
+
+        engine._apply_divert_flags()
+
+        self.assertFalse(engine.hook.divert_haptic)
+
+    def test_apply_divert_flags_pushes_to_listener_when_changed(self):
+        engine = self._make_engine({"haptic": "mission_control"})
+        listener = Mock()
+        engine.hook._hid_gesture = listener
+        engine.hook.connected_device = self._device(
+            "mx_master_4",
+            ("middle", "gesture", "haptic"),
+        )
+
+        engine._apply_divert_flags()
+
+        listener.update_extra_diverts.assert_called_once()
+        new_extras = listener.update_extra_diverts.call_args[0][0]
+        self.assertIn(0x01A0, new_extras)
+
+    def test_apply_divert_flags_skips_listener_when_unchanged(self):
+        engine = self._make_engine({"haptic": "none"})
+        listener = Mock()
+        engine.hook._hid_gesture = listener
+        # No device, no mapping → flags are already at defaults.
+        engine._apply_divert_flags()
+
+        listener.update_extra_diverts.assert_not_called()
 
 
 if __name__ == "__main__":

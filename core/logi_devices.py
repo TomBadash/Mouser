@@ -8,6 +8,7 @@ future per-device capabilities off a single place.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import re
 from typing import Iterable
@@ -35,6 +36,11 @@ MX_MASTER_BUTTONS = (
     "hscroll_right",
     "mode_shift",
 )
+
+# MX Master 4 adds the haptic thumb-rest button (CID 0x01A0) that triggers
+# Logitech's Action Ring overlay when not diverted. Listed only here so other
+# MX Master family members never expose it in the UI or HID++ divert set.
+MX_MASTER_4_BUTTONS = MX_MASTER_BUTTONS + ("haptic",)
 
 # Conservative fallback for generic MX Anywhere-family overrides. Exact
 # cataloged MX Anywhere devices provide their own button sets.
@@ -82,7 +88,6 @@ _CID_GATED_BUTTONS = {
 _HSCROLL_CIDS = (0x005B, 0x005D)
 _KNOWN_UNSUPPORTED_CONTROLS = {
     0x00ED: "precision_mode",
-    0x01A0: "haptic",
 }
 _KEY_FLAG_DIVERTABLE = 0x0020
 _KEY_FLAG_RAW_XY = 0x0100
@@ -384,6 +389,19 @@ KNOWN_LOGI_DEVICES = tuple(
         supported_buttons=MX_VERTICAL_BUTTONS,
         dpi_max=4000,
     ),
+)
+
+# Per-device supported_buttons overrides for cataloged devices. Kept here
+# (not in the catalog dict) so the family-button constants stay centralized
+# in this module and we avoid a circular import into logi_device_catalog.
+_PER_DEVICE_BUTTON_OVERRIDES = {
+    "mx_master_4": MX_MASTER_4_BUTTONS,
+}
+KNOWN_LOGI_DEVICES = tuple(
+    dataclasses.replace(d, supported_buttons=_PER_DEVICE_BUTTON_OVERRIDES[d.key])
+    if d.key in _PER_DEVICE_BUTTON_OVERRIDES
+    else d
+    for d in KNOWN_LOGI_DEVICES
 )
 
 
@@ -763,6 +781,7 @@ def derive_supported_buttons_from_reprog_controls(
 # resolve buttons even when individual devices use per-device ui_layout keys.
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
+    "mx_master_4": MX_MASTER_4_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,

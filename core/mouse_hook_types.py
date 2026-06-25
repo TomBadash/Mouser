@@ -38,6 +38,8 @@ class MouseEvent:
     MODE_SHIFT_UP = "mode_shift_up"
     DPI_SWITCH_DOWN = "dpi_switch_down"
     DPI_SWITCH_UP = "dpi_switch_up"
+    HAPTIC_DOWN = "haptic_down"
+    HAPTIC_UP = "haptic_up"
 
     def __init__(self, event_type, raw_data=None):
         self.event_type = event_type

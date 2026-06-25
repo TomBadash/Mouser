@@ -219,8 +219,9 @@ DEVICE_LAYOUTS = {
 # Maps a device-specific key like "mx_master_3s" to its family layout key.
 # Entries here let per-device keys fall back to the family layout until a
 # dedicated layout is added.  Extend this dict as new devices are cataloged.
+# Note: mx_master_4 has its own dedicated layout (with the haptic thumb-rest
+# button) and is intentionally NOT listed here.
 _FAMILY_FALLBACKS = {
-    "mx_master_4": "mx_master",
     "mx_master_3s": "mx_master",
     "mx_master_3": "mx_master",
     "mx_master_2s": "mx_master",

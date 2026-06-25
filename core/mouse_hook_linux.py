@@ -489,6 +489,18 @@ class MouseHook(BaseMouseHook):
         self._emit_debug("HID DPI switch button up")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
+    def _on_hid_haptic_down(self):
+        if self._ui_passthrough:
+            return
+        self._emit_debug("HID haptic button down")
+        self._dispatch(MouseEvent(MouseEvent.HAPTIC_DOWN))
+
+    def _on_hid_haptic_up(self):
+        if self._ui_passthrough:
+            return
+        self._emit_debug("HID haptic button up")
+        self._dispatch(MouseEvent(MouseEvent.HAPTIC_UP))
+
     def _on_hid_gesture_move(self, delta_x, delta_y):
         if self._ui_passthrough:
             return

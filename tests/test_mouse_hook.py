@@ -834,6 +834,18 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             ],
         )
 
+    def test_haptic_divert_only_added_when_flag_enabled(self):
+        module = self._reload_for_linux()
+
+        with patch.object(module, "_EVDEV_OK", False):
+            hook = module.MouseHook()
+            self.assertNotIn(0x01A0, hook._build_extra_diverts())
+            hook.divert_haptic = True
+            extras = hook._build_extra_diverts()
+            self.assertIn(0x01A0, extras)
+            self.assertTrue(callable(extras[0x01A0]["on_down"]))
+            self.assertTrue(callable(extras[0x01A0]["on_up"]))
+
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
 class MacOSEventTapDisabledTests(unittest.TestCase):
