@@ -82,6 +82,12 @@ GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 GetMessageW = windll.user32.GetMessageW
 PostThreadMessageW = windll.user32.PostThreadMessageW
 
+GetAsyncKeyState = windll.user32.GetAsyncKeyState
+GetAsyncKeyState.argtypes = [c_int]
+GetAsyncKeyState.restype = ctypes.c_short
+
+VK_SHIFT = 0x10
+
 WM_QUIT = 0x0012
 INJECTED_FLAG = 0x00000001
 
@@ -208,6 +214,7 @@ def hiword(dword):
 WM_APP = 0x8000
 WM_APP_INJECT_VSCROLL = WM_APP + 1
 WM_APP_INJECT_HSCROLL = WM_APP + 2
+WM_APP_INJECT_SHIFT_HSCROLL = WM_APP + 3
 
 WM_DEVICECHANGE = 0x0219
 DBT_DEVNODES_CHANGED = 0x0007
@@ -232,8 +239,10 @@ class MouseHook(BaseMouseHook):
         self._hook_proc = None
         self._pending_vscroll = 0
         self._pending_hscroll = 0
+        self._pending_shift_hscroll = 0
         self._vscroll_posted = False
         self._hscroll_posted = False
+        self._shift_hscroll_posted = False
         self._ri_wndproc_ref = None
         self._ri_hwnd = None
         self._device_name_cache = {}
@@ -427,8 +436,25 @@ class MouseHook(BaseMouseHook):
                 should_block = MouseEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
+                delta = hiword(mouse_data)
+                if delta != 0 and (GetAsyncKeyState(VK_SHIFT) & 0x8000):
+                    if self._ri_hwnd:
+                        h_delta = -delta if self.invert_hscroll else delta
+                        self._pending_shift_hscroll += h_delta
+                        if self._shift_hscroll_posted:
+                            return 1
+                        if PostMessageW(
+                            self._ri_hwnd, WM_APP_INJECT_SHIFT_HSCROLL, 0, 0
+                        ):
+                            self._shift_hscroll_posted = True
+                            return 1
+                        self._pending_shift_hscroll -= h_delta
+                    else:
+                        self._emit_debug(
+                            "Shift+wheel translation skipped: "
+                            "raw input window unavailable"
+                        )
                 if self.invert_vscroll:
-                    delta = hiword(mouse_data)
                     if delta != 0 and self._ri_hwnd:
                         self._pending_vscroll += -delta
                         if self._vscroll_posted:
@@ -512,6 +538,14 @@ class MouseHook(BaseMouseHook):
             delta = self._pending_hscroll
             self._pending_hscroll = 0
             self._hscroll_posted = False
+            if delta != 0:
+                _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
+            return 0
+
+        if msg == WM_APP_INJECT_SHIFT_HSCROLL:
+            delta = self._pending_shift_hscroll
+            self._pending_shift_hscroll = 0
+            self._shift_hscroll_posted = False
             if delta != 0:
                 _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
             return 0
