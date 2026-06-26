@@ -1150,8 +1150,11 @@ def main():
 
     def _on_window_visibility_changed(visibility):
         # QWindow.Visibility: Hidden = 0; any other value (Windowed,
-        # Maximized, FullScreen, Minimized) means there is an on-screen
-        # window. macOS Cmd+Tab / Mission Control / Dock representation
+        # Maximized, FullScreen, Minimized) means there is a window surface.
+        # Background HID polling is only useful while the settings window is
+        # actually visible enough to show refreshed battery / SmartShift state.
+        #
+        # macOS Cmd+Tab / Mission Control / Dock representation
         # depends on the activation policy, which we toggle to mirror
         # whether a window is currently shown:
         #   shown  → Regular   (real foreground app)
@@ -1162,20 +1165,26 @@ def main():
         # `_set_macos_activation_policy` is idempotent, so the storm of
         # visibilityChanged emits during a window state transition
         # collapses to at most one AppKit round-trip per direction.
-        is_visible = visibility != QWindow.Visibility.Hidden
-        _set_macos_activation_policy(regular=is_visible)
-        if is_visible:
+        has_window_surface = visibility != QWindow.Visibility.Hidden
+        frontend_visible = visibility not in (
+            QWindow.Visibility.Hidden,
+            QWindow.Visibility.Minimized,
+        )
+        engine.set_frontend_visible(frontend_visible)
+        if sys.platform != "darwin":
+            return
+        _set_macos_activation_policy(regular=has_window_surface)
+        if has_window_surface:
             # Window just became visible -- bring the app forward so the
             # user actually sees it (covers initial launch + tray clicks).
             _activate_macos_window()
 
+    root_window.visibilityChanged.connect(_on_window_visibility_changed)
+    # The window was created before this handler was connected, so its initial
+    # visibility transition may already have fired with no listener. Reconcile
+    # the engine's frontend-visible flag now.
+    _on_window_visibility_changed(root_window.visibility())
     if sys.platform == "darwin":
-        root_window.visibilityChanged.connect(_on_window_visibility_changed)
-        # The window was created visible (QML `visible: !launchHidden`) before
-        # this handler was connected, so its initial visibility transition has
-        # already fired with no listener. Reconcile the activation policy now
-        # so the Dock tile shows on a `--show-window` / non-hidden start.
-        _on_window_visibility_changed(root_window.visibility())
         global _MACOS_QUIT_FILTER
         _MACOS_QUIT_FILTER = _MacOSQuitToTrayFilter(root_window, app)
         app.installEventFilter(_MACOS_QUIT_FILTER)
