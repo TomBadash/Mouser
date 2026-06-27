@@ -148,6 +148,22 @@ def _parse_custom_combo(action_id, key_name_to_code):
     return codes
 
 
+def _resolve_action_keys(action_id):
+    """Return the platform key-code list for a custom or built-in keyboard action.
+
+    Resolves against the active platform's ACTIONS / _KEY_NAME_TO_CODE globals
+    (set by whichever implementation block ran), so it is shared across win32,
+    darwin and linux.  Returns None when there is no key list (e.g. mouse or
+    media actions).
+    """
+    if action_id.startswith("custom:"):
+        return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
+    action = ACTIONS.get(action_id)
+    if action and action.get("keys"):
+        return list(action["keys"])
+    return None
+
+
 # ==================================================================
 # Windows implementation
 # ==================================================================
@@ -434,15 +450,6 @@ if sys.platform == "win32":
 
     def send_key_press(vk):
         send_key_combo([vk])
-
-    def _resolve_action_keys(action_id):
-        """Return the VK list for a custom or built-in keyboard action, or None."""
-        if action_id.startswith("custom:"):
-            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
-        action = ACTIONS.get(action_id)
-        if action and action.get("keys"):
-            return list(action["keys"])
-        return None
 
     def press_action(action_id):
         """Press and hold the keys for a keyboard action (no release)."""
@@ -942,15 +949,6 @@ elif sys.platform == "darwin":
 
     def send_key_press(vk):
         send_key_combo([vk])
-
-    def _resolve_action_keys(action_id):
-        """Return the CGKeyCode list for a custom or built-in keyboard action."""
-        if action_id.startswith("custom:"):
-            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
-        action = ACTIONS.get(action_id)
-        if action and action.get("keys"):
-            return list(action["keys"])
-        return None
 
     def press_action(action_id):
         """Press and hold the keys for a keyboard action (no release)."""
@@ -1557,15 +1555,6 @@ elif sys.platform == "linux":
 
     def send_key_press(vk):
         send_key_combo([vk])
-
-    def _resolve_action_keys(action_id):
-        """Return the evdev key-code list for a custom or built-in action."""
-        if action_id.startswith("custom:"):
-            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
-        action = ACTIONS.get(action_id)
-        if action and action.get("keys"):
-            return list(action["keys"])
-        return None
 
     def press_action(action_id):
         """Press and hold the keys for a keyboard action (no release)."""
