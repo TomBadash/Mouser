@@ -110,19 +110,21 @@ class BaseMouseHook:
 
         When enabled the gesture button reports down/up like a normal key and
         the cursor is not locked while held; swipe gestures are disabled.
-        Re-diverts the live HID++ connection so the change takes effect now.
+        Re-diverts the live HID++ connection in-place (no reconnect) so the
+        change takes effect immediately without dropping the device.
         """
         enabled = bool(enabled)
         if enabled == self.gesture_hold_mode:
-            # Unchanged — avoid dropping the HID connection on unrelated
+            # Unchanged — avoid touching the HID connection on unrelated
             # setting changes that also run through reload_mappings.
             return
         self.gesture_hold_mode = enabled
         hg = getattr(self, "_hid_gesture", None)
         if hg is not None:
             try:
+                # set_rawxy_preference queues an in-place re-divert on the
+                # listener thread; no force_reconnect needed.
                 hg.set_rawxy_preference(not enabled)
-                hg.force_reconnect()
             except Exception as exc:
                 print(f"[MouseHook] set_gesture_hold_mode error: {exc}")
 
