@@ -705,6 +705,11 @@ class MouseHook(BaseMouseHook):
             print("[MouseHook] Failed to reinstall hook!")
 
     def _on_hid_gesture_down(self):
+        if self.gesture_hold_mode:
+            self._emit_debug("HID gesture button down (hold mode)")
+            self._emit_gesture_event({"type": "button_down"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
+            return
         if not self._gesture_active:
             self._gesture_active = True
             self._gesture_triggered = False
@@ -717,6 +722,11 @@ class MouseHook(BaseMouseHook):
                 self._gesture_triggered = False
 
     def _on_hid_gesture_up(self):
+        if self.gesture_hold_mode:
+            self._emit_debug("HID gesture button up (hold mode)")
+            self._emit_gesture_event({"type": "button_up"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
+            return
         if self._gesture_active:
             should_click = not self._gesture_triggered
             self._gesture_active = False

@@ -18,6 +18,8 @@ class _FakeMouseHook:
         self._hid_gesture = None
         self.start_called = False
         self.stop_called = False
+        self.gesture_hold_mode = False
+        self.registered = {}
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -38,10 +40,13 @@ class _FakeMouseHook:
         pass
 
     def register(self, event_type, callback):
-        pass
+        self.registered[event_type] = callback
+
+    def set_gesture_hold_mode(self, enabled):
+        self.gesture_hold_mode = bool(enabled)
 
     def reset_bindings(self):
-        pass
+        self.registered = {}
 
     def start(self):
         self.start_called = True
@@ -90,6 +95,52 @@ class _RecordedThread:
         if self._target:
             return self._target(*self._args, **self._kwargs)
         return None
+
+
+class EngineGestureRegistrationTests(unittest.TestCase):
+    def _make_engine(self, mappings=None, settings=None, profile_extra=None):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        if mappings:
+            cfg["profiles"]["default"]["mappings"].update(mappings)
+        if settings:
+            cfg["settings"].update(settings)
+        if profile_extra:
+            cfg["profiles"]["default"].update(profile_extra)
+
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_all_swipe_directions_register_handlers(self):
+        # Regression: gesture_swipe_up ends in "_up" but is a single-fire event,
+        # not the release half of a button pair — it must still get a handler.
+        engine = self._make_engine(mappings={
+            "gesture_left": "copy",
+            "gesture_right": "paste",
+            "gesture_up": "alt_tab",
+            "gesture_down": "find",
+        })
+        for evt in (
+            MouseEvent.GESTURE_SWIPE_LEFT,
+            MouseEvent.GESTURE_SWIPE_RIGHT,
+            MouseEvent.GESTURE_SWIPE_UP,
+            MouseEvent.GESTURE_SWIPE_DOWN,
+        ):
+            self.assertIn(evt, engine.hook.registered, f"{evt} not registered")
+
+    def test_gesture_hold_mode_splits_press_release_for_custom(self):
+        engine = self._make_engine(
+            mappings={"gesture": "custom:m"},
+            profile_extra={"swipe_gestures_enabled": False},
+        )
+        self.assertTrue(engine.hook.gesture_hold_mode)
+        self.assertIn(MouseEvent.GESTURE_DOWN, engine.hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, engine.hook.registered)
 
 
 class EngineHorizontalScrollTests(unittest.TestCase):

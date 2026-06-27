@@ -148,6 +148,22 @@ def _parse_custom_combo(action_id, key_name_to_code):
     return codes
 
 
+def _resolve_action_keys(action_id):
+    """Return the platform key-code list for a custom or built-in keyboard action.
+
+    Resolves against the active platform's ACTIONS / _KEY_NAME_TO_CODE globals
+    (set by whichever implementation block ran), so it is shared across win32,
+    darwin and linux.  Returns None when there is no key list (e.g. mouse or
+    media actions).
+    """
+    if action_id.startswith("custom:"):
+        return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
+    action = ACTIONS.get(action_id)
+    if action and action.get("keys"):
+        return list(action["keys"])
+    return None
+
+
 # ==================================================================
 # Windows implementation
 # ==================================================================
@@ -168,9 +184,14 @@ if sys.platform == "win32":
     VK_MENU = 0x12
     VK_TAB = 0x09
     VK_LMENU = 0xA4
+    VK_RMENU = 0xA5
     VK_SHIFT = 0x10
     VK_CONTROL = 0x11
+    VK_RCONTROL = 0xA3
     VK_LWIN = 0x5B
+    VK_RWIN = 0x5C
+    VK_APPS = 0x5D
+    VK_DIVIDE = 0x6F
     VK_ESCAPE = 0x1B
     VK_RETURN = 0x0D
     VK_SPACE = 0x20
@@ -269,6 +290,28 @@ if sys.platform == "win32":
     SendInput.argtypes = [c_ulong, ctypes.POINTER(INPUT), ctypes.c_int]
     SendInput.restype = c_ulong
 
+    MAPVK_VK_TO_VSC = 0
+    MapVirtualKeyW = getattr(ctypes.windll.user32, "MapVirtualKeyW", None)
+    if MapVirtualKeyW is not None:
+        MapVirtualKeyW.argtypes = [c_ulong, c_ulong]
+        MapVirtualKeyW.restype = c_ulong
+
+    def _vk_to_scan(vk):
+        """Return the hardware scancode for a VK, or 0 when unavailable.
+
+        Uses MAPVK_VK_TO_VSC (not the _EX variant): _EX is documented to encode
+        the 0xE0 prefix in the high byte, but in practice it does NOT do so for
+        the arrow / navigation cluster, which would drop the extended flag and
+        produce the numpad scancode instead.  We get the base scancode here and
+        set KEYEVENTF_EXTENDEDKEY explicitly from _EXTENDED_VKS below.
+        """
+        if MapVirtualKeyW is None:
+            return 0
+        try:
+            return MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+        except Exception:
+            return 0
+
     MOUSEEVENTF_LEFTDOWN   = 0x0002
     MOUSEEVENTF_LEFTUP     = 0x0004
     MOUSEEVENTF_RIGHTDOWN  = 0x0008
@@ -349,7 +392,11 @@ if sys.platform == "win32":
         arr = (INPUT * 1)(inp)
         SendInput(1, arr, sizeof(INPUT))
 
-    # VKs that require the KEYEVENTF_EXTENDEDKEY flag in SendInput
+    # VKs that require the KEYEVENTF_EXTENDEDKEY flag (E0 prefix) in SendInput.
+    # This matters for scancode injection: an extended key sent without the flag
+    # (or a non-extended key sent with it) produces the wrong scancode.  Note Tab
+    # and the main Return key are NOT extended; the Windows keys, the right-hand
+    # modifiers, the menu key, numpad-divide and the navigation cluster are.
     _EXTENDED_VKS = frozenset({
         VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_BROWSER_REFRESH,
         VK_BROWSER_STOP, VK_BROWSER_HOME,
@@ -357,7 +404,8 @@ if sys.platform == "win32":
         VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK,
         VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
         VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
-        VK_DELETE, VK_RETURN, VK_TAB,
+        VK_DELETE, VK_LWIN, VK_RWIN, VK_APPS,
+        VK_RCONTROL, VK_RMENU, VK_DIVIDE,
         VK_PRIOR, VK_NEXT, VK_HOME, VK_END, VK_INSERT,  # navigation cluster
     })
 
@@ -365,26 +413,68 @@ if sys.platform == "win32":
         return vk in _EXTENDED_VKS
 
     def _make_key_input(vk, flags=0):
+        # Inject by hardware scancode whenever one exists for this VK.  Games
+        # that read input through Raw Input / DirectInput (e.g. Squad) only see
+        # scancode events and ignore VK-only synthetic input, which is why
+        # VK-only injection typed in text boxes but not in-game.  Media / browser
+        # keys have no usable scancode, so fall back to VK injection for those.
+        scan = _vk_to_scan(vk)
         inp = INPUT()
         inp.type = INPUT_KEYBOARD
-        inp.union.ki.wVk = vk
-        inp.union.ki.dwFlags = flags
+        if scan:
+            inp.union.ki.wVk = 0
+            inp.union.ki.wScan = scan
+            inp.union.ki.dwFlags = flags | KEYEVENTF_SCANCODE
+        else:
+            inp.union.ki.wVk = vk
+            inp.union.ki.dwFlags = flags
         inp.union.ki.dwExtraInfo = ctypes.pointer(c_ulong(0))
         return inp
 
-    def send_key_combo(keys, hold_ms=50):
-        inputs = []
-        for vk in keys:
-            flags = KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0
-            inputs.append(_make_key_input(vk, flags))
-        for vk in reversed(keys):
-            flags = KEYEVENTF_KEYUP | (KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0)
-            inputs.append(_make_key_input(vk, flags))
+    def _send_inputs(inputs):
+        if not inputs:
+            return
         arr = (INPUT * len(inputs))(*inputs)
         SendInput(len(inputs), arr, sizeof(INPUT))
 
+    def _press_keys(keys):
+        """Press (key-down) a list of VKs in order."""
+        _send_inputs([
+            _make_key_input(vk, KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0)
+            for vk in keys
+        ])
+
+    def _release_keys(keys):
+        """Release (key-up) a list of VKs in reverse order."""
+        _send_inputs([
+            _make_key_input(
+                vk, KEYEVENTF_KEYUP | (KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0)
+            )
+            for vk in reversed(keys)
+        ])
+
+    def send_key_combo(keys, hold_ms=50):
+        # Hold the keys briefly between down and up so polling-based games
+        # register the press; an instant down+up in the same frame is missed.
+        _press_keys(keys)
+        if hold_ms:
+            time.sleep(hold_ms / 1000.0)
+        _release_keys(keys)
+
     def send_key_press(vk):
         send_key_combo([vk])
+
+    def press_action(action_id):
+        """Press and hold the keys for a keyboard action (no release)."""
+        keys = _resolve_action_keys(action_id)
+        if keys:
+            _press_keys(keys)
+
+    def release_action(action_id):
+        """Release the keys for a keyboard action previously pressed."""
+        keys = _resolve_action_keys(action_id)
+        if keys:
+            _release_keys(keys)
 
     def _send_phased_alt_arrow(arrow_vk, hold_ms=50):
         # Some Chromium-based browsers silently drop batched VK-only SendInput chords;
@@ -872,6 +962,33 @@ elif sys.platform == "darwin":
 
     def send_key_press(vk):
         send_key_combo([vk])
+
+    def press_action(action_id):
+        """Press and hold the keys for a keyboard action (no release)."""
+        if not _QUARTZ_OK:
+            return
+        keys = _resolve_action_keys(action_id)
+        if not keys:
+            return
+        flags = 0
+        for k in keys:
+            flags |= _MOD_FLAGS.get(k, 0)
+        for k in keys:
+            ev = Quartz.CGEventCreateKeyboardEvent(None, k, True)
+            if flags:
+                Quartz.CGEventSetFlags(ev, flags)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+    def release_action(action_id):
+        """Release the keys for a keyboard action previously pressed."""
+        if not _QUARTZ_OK:
+            return
+        keys = _resolve_action_keys(action_id)
+        if not keys:
+            return
+        for k in reversed(keys):
+            ev = Quartz.CGEventCreateKeyboardEvent(None, k, False)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def _send_media_key(key_id):
         """Send a media key event via NSEvent (Fn-key based)."""
@@ -1452,6 +1569,26 @@ elif sys.platform == "linux":
     def send_key_press(vk):
         send_key_combo([vk])
 
+    def press_action(action_id):
+        """Press and hold the keys for a keyboard action (no release)."""
+        keys = _resolve_action_keys(action_id)
+        kbd = _get_virtual_kbd()
+        if not keys or not kbd:
+            return
+        for key in keys:
+            kbd.write(EV_KEY, key, 1)
+            kbd.syn()
+
+    def release_action(action_id):
+        """Release the keys for a keyboard action previously pressed."""
+        keys = _resolve_action_keys(action_id)
+        kbd = _get_virtual_kbd()
+        if not keys or not kbd:
+            return
+        for key in reversed(keys):
+            kbd.write(EV_KEY, key, 0)
+            kbd.syn()
+
     def inject_scroll(flags, delta):
         kbd = _get_virtual_kbd()
         if not kbd:
@@ -1758,6 +1895,8 @@ else:
     def inject_scroll(flags, delta): pass
     def send_key_combo(keys, hold_ms=50): pass
     def send_key_press(vk): pass
+    def press_action(action_id): pass
+    def release_action(action_id): pass
     def execute_action(action_id): pass
     def inject_mouse_down(action_id): pass
     def inject_mouse_up(action_id): pass

@@ -69,6 +69,7 @@ Item {
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
     property var selectedProfileMappingState: ({})
+    property bool selectedProfileSwipeEnabled: true
     property string appSearchText: ""
     property var filteredKnownApps: []
     property var suggestedKnownApps: []
@@ -88,6 +89,7 @@ Item {
             mappingState[mapping.key] = mapping
         }
         selectedProfileMappingState = mappingState
+        selectedProfileSwipeEnabled = backend.getProfileSwipeGesturesEnabled(selectedProfile)
     }
 
     function mappingFor(key) {
@@ -1384,9 +1386,41 @@ Item {
                                     color: theme.border
                                 }
 
+                                CheckBox {
+                                    id: swipeGesturesCheck
+                                    width: parent.width
+                                    text: s["mouse.enable_swipes"] || "Enable swipe gestures"
+                                    checked: selectedProfileSwipeEnabled
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 12 }
+                                    contentItem: Text {
+                                        text: swipeGesturesCheck.text
+                                        font: swipeGesturesCheck.font
+                                        color: theme.textPrimary
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: swipeGesturesCheck.indicator.width + 8
+                                        wrapMode: Text.WordWrap
+                                    }
+                                    onToggled: {
+                                        backend.setProfileSwipeGesturesEnabled(selectedProfile, checked)
+                                        refreshSelectedProfileMappings()
+                                    }
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    visible: !selectedProfileSwipeEnabled
+                                    text: s["mouse.swipes_off_hint"]
+                                          || "Gesture button acts as a normal held button; the cursor stays free while held."
+                                    wrapMode: Text.WordWrap
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
                                 Row {
                                     width: parent.width
                                     spacing: 12
+                                    visible: selectedProfileSwipeEnabled
 
                                 Text {
                                     text: s["mouse.threshold"]
@@ -1408,6 +1442,7 @@ Item {
                                 WheelSafeSlider {
                                     id: gestureThresholdSlider
                                     width: parent.width
+                                    visible: selectedProfileSwipeEnabled
                                     from: 20
                                     to: 400
                                     stepSize: 5
@@ -1435,6 +1470,7 @@ Item {
 
                                 Text {
                                     text: s["mouse.swipe_actions"]
+                                    visible: selectedProfileSwipeEnabled
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1443,6 +1479,7 @@ Item {
                                 RowLayout {
                                     width: parent.width
                                     spacing: 12
+                                    visible: selectedProfileSwipeEnabled
 
                                     Text {
                                         text: s["mouse.swipe_left"]
@@ -1477,6 +1514,7 @@ Item {
                                 RowLayout {
                                     width: parent.width
                                     spacing: 12
+                                    visible: selectedProfileSwipeEnabled
 
                                     Text {
                                         text: s["mouse.swipe_right"]
@@ -1511,6 +1549,7 @@ Item {
                                 RowLayout {
                                     width: parent.width
                                     spacing: 12
+                                    visible: selectedProfileSwipeEnabled
 
                                     Text {
                                         text: s["mouse.swipe_up"]
@@ -1545,6 +1584,7 @@ Item {
                                 RowLayout {
                                     width: parent.width
                                     spacing: 12
+                                    visible: selectedProfileSwipeEnabled
 
                                     Text {
                                         text: s["mouse.swipe_down"]

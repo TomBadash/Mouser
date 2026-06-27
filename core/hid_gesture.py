@@ -710,7 +710,9 @@ class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 rawxy_preference=True):
+        self._rawxy_preference = bool(rawxy_preference)
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
@@ -744,6 +746,10 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        # Set by set_rawxy_preference(); applied in-loop on the live connection
+        # so swap between swipe/hold mode is a single CID-reporting write rather
+        # than a full (multi-second) reconnect.
+        self._pending_redivert = False
         self._pending_battery = None
         self._battery_result = None
         self._last_logged_battery = None
@@ -1229,11 +1235,16 @@ class HidGestureListener:
             return False
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
-            resp = self._set_cid_reporting(cid, 0x33)
-            if resp is not None:
-                self._rawxy_enabled = True
-                print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
-                return True
+            # RawXY divert makes the firmware suppress cursor movement while the
+            # button is held (needed for swipe gestures).  When the user disables
+            # swipe gestures we skip it so the cursor stays free and the button
+            # behaves like a plain held key.
+            if self._rawxy_preference:
+                resp = self._set_cid_reporting(cid, 0x33)
+                if resp is not None:
+                    self._rawxy_enabled = True
+                    print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
+                    return True
             self._rawxy_enabled = False
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
@@ -1243,6 +1254,33 @@ class HidGestureListener:
                 return True
         self._gesture_cid = DEFAULT_GESTURE_CID
         return False
+
+    def _apply_pending_redivert(self):
+        """Re-issue the gesture CID divert with the current RawXY preference.
+
+        Runs on the listener thread (where all device I/O happens) so it can
+        safely write to the open connection.  No reconnect, no feature
+        re-discovery — just one CID-reporting write, so swipe/hold mode swaps
+        and profile switches don't drop the device or lose button events.
+        """
+        self._pending_redivert = False
+        if self._feat_idx is None or self._gesture_cid is None:
+            return
+        # Flags byte: bit0 divert / bit1 divert-valid / bit4 rawXY / bit5
+        # rawXY-valid.  A field only changes when its valid bit is set, so to
+        # turn rawXY OFF in-place we must use 0x23 (divert on, rawXY-valid set,
+        # rawXY bit cleared) — 0x03 would leave the firmware's rawXY state (and
+        # thus the cursor lock) unchanged.
+        flags = 0x33 if self._rawxy_preference else 0x23
+        resp = self._set_cid_reporting(self._gesture_cid, flags)
+        if resp is not None:
+            self._rawxy_enabled = bool(self._rawxy_preference)
+            mode = "RawXY (swipe)" if self._rawxy_preference else "plain (hold)"
+            print(f"[HidGesture] Re-divert {_format_cid(self._gesture_cid)} "
+                  f"-> {mode}: OK")
+        else:
+            print(f"[HidGesture] Re-divert {_format_cid(self._gesture_cid)} "
+                  f"FAILED")
 
     def _divert_extras(self):
         """Divert additional CIDs (e.g. mode shift) without raw XY."""
@@ -1429,6 +1467,23 @@ class HidGestureListener:
             print("[HidGesture] Smart Shift set FAILED")
             result = False
         self._finish_pending_smart_shift(result)
+
+    def set_rawxy_preference(self, enabled):
+        """Choose whether the gesture button is diverted with RawXY (swipe) mode.
+
+        Applied in-place on the live connection: the listener loop re-issues the
+        gesture CID-reporting write with the new flag (0x33 with RawXY / 0x23
+        plain).  This avoids a full reconnect, which on a USB receiver can take
+        20+ seconds while devIdx slots are re-scanned.  If no device is currently
+        connected the preference is simply used on the next divert.
+        """
+        enabled = bool(enabled)
+        if enabled == self._rawxy_preference:
+            return
+        self._rawxy_preference = enabled
+        # Thread-safe: a plain bool flag checked at the top of the event loop,
+        # same pattern as _reconnect_requested / _pending_dpi.
+        self._pending_redivert = True
 
     def force_reconnect(self):
         """Request the listener thread to drop and re-establish the HID++ connection.
@@ -1939,6 +1994,10 @@ class HidGestureListener:
                         print(f"[HidGesture] {self._consecutive_request_timeouts} consecutive "
                               f"request timeouts — forcing reconnect")
                         raise IOError("consecutive request timeouts — device likely asleep")
+                    # Apply an in-place gesture re-divert (swipe <-> hold mode)
+                    # without tearing down the connection.
+                    if self._pending_redivert:
+                        self._apply_pending_redivert()
                     # Apply any queued DPI command
                     if self._pending_dpi is not None:
                         if self._pending_dpi == "read":
@@ -2005,6 +2064,9 @@ class HidGestureListener:
             self._rawxy_enabled = False
             self._connected_device_info = None
             self._reconnect_requested = False
+            # A fresh connect re-runs _divert() with the current preference,
+            # so any queued in-place re-divert is now redundant.
+            self._pending_redivert = False
             if self._connected:
                 self._connected = False
                 if self._on_disconnect:

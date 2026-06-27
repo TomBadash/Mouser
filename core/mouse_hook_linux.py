@@ -430,6 +430,11 @@ class MouseHook(BaseMouseHook):
     def _on_hid_gesture_down(self):
         if self._ui_passthrough:
             return
+        if self.gesture_hold_mode:
+            self._emit_debug("HID gesture button down (hold mode)")
+            self._emit_gesture_event({"type": "button_down"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
+            return
         with self._gesture_lock:
             if not self._gesture_active:
                 self._gesture_active = True
@@ -444,6 +449,11 @@ class MouseHook(BaseMouseHook):
 
     def _on_hid_gesture_up(self):
         if self._ui_passthrough:
+            return
+        if self.gesture_hold_mode:
+            self._emit_debug("HID gesture button up (hold mode)")
+            self._emit_gesture_event({"type": "button_up"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
             return
         dispatch_click = False
         with self._gesture_lock:

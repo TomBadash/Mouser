@@ -20,7 +20,7 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, get_swipe_gestures_enabled, set_swipe_gestures_enabled,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -1376,6 +1376,23 @@ class Backend(QObject):
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(str, result=bool)
+    def getProfileSwipeGesturesEnabled(self, profileName):
+        """Return the per-profile swipe-gestures-enabled flag."""
+        return get_swipe_gestures_enabled(self._cfg, profileName)
+
+    @Slot(str, bool)
+    def setProfileSwipeGesturesEnabled(self, profileName, value):
+        """Set the per-profile swipe-gestures-enabled flag."""
+        value = bool(value)
+        if self.getProfileSwipeGesturesEnabled(profileName) == value:
+            return
+        self._cfg = set_swipe_gestures_enabled(self._cfg, value, profile=profileName)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.profilesChanged.emit()
         self.settingsChanged.emit()
 
     @Slot(int)

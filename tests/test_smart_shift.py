@@ -749,7 +749,7 @@ class ConfigV7MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v6_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -811,7 +811,7 @@ class ConfigV8MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v7_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
 
 
 class HidForceReconnectTests(unittest.TestCase):
@@ -856,6 +856,65 @@ class HidForceReconnectTests(unittest.TestCase):
         listener._apply_pending_smart_shift()
         self.assertFalse(listener._smart_shift_result)
         self.assertIsNone(listener._pending_smart_shift)
+
+
+class HidInPlaceRedivertTests(unittest.TestCase):
+    """set_rawxy_preference() queues an in-place re-divert instead of reconnecting."""
+
+    def _make_listener(self):
+        return hid_gesture.HidGestureListener()
+
+    def test_change_queues_redivert_without_reconnect(self):
+        listener = self._make_listener()
+        self.assertTrue(listener._rawxy_preference)  # default
+        self.assertFalse(listener._pending_redivert)
+        listener.set_rawxy_preference(False)
+        self.assertFalse(listener._rawxy_preference)
+        self.assertTrue(listener._pending_redivert)
+        # Must NOT fall back to a full reconnect.
+        self.assertFalse(listener._reconnect_requested)
+
+    def test_unchanged_preference_is_noop(self):
+        listener = self._make_listener()
+        listener.set_rawxy_preference(True)  # already the default
+        self.assertFalse(listener._pending_redivert)
+
+    def test_apply_writes_plain_flag_and_clears_pending(self):
+        listener = self._make_listener()
+        listener._feat_idx = 0x08
+        listener._gesture_cid = 0x00C3
+        listener._rawxy_preference = False
+        listener._pending_redivert = True
+        captured = []
+        listener._request = lambda idx, fn, params, **kw: captured.append(
+            (idx, fn, list(params))) or [0, 0, 0, 0, []]
+        listener._apply_pending_redivert()
+        self.assertFalse(listener._pending_redivert)
+        self.assertFalse(listener._rawxy_enabled)
+        # Divert with rawXY explicitly cleared (0x23): rawXY-valid bit set,
+        # rawXY bit off — otherwise the firmware keeps the cursor locked.
+        self.assertEqual(captured, [(0x08, 3, [0x00, 0xC3, 0x23, 0x00, 0x00])])
+
+    def test_apply_writes_rawxy_flag(self):
+        listener = self._make_listener()
+        listener._feat_idx = 0x08
+        listener._gesture_cid = 0x00C3
+        listener._rawxy_preference = True
+        listener._pending_redivert = True
+        captured = []
+        listener._request = lambda idx, fn, params, **kw: captured.append(
+            (idx, fn, list(params))) or [0, 0, 0, 0, []]
+        listener._apply_pending_redivert()
+        self.assertTrue(listener._rawxy_enabled)
+        # RawXY divert flag 0x33.
+        self.assertEqual(captured, [(0x08, 3, [0x00, 0xC3, 0x33, 0x00, 0x00])])
+
+    def test_apply_without_feature_is_safe(self):
+        listener = self._make_listener()
+        listener._feat_idx = None
+        listener._pending_redivert = True
+        listener._apply_pending_redivert()  # must not raise
+        self.assertFalse(listener._pending_redivert)
 
 
 if __name__ == "__main__":
