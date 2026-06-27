@@ -14,6 +14,7 @@ from core.key_simulator import (
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
+    get_swipe_gestures_enabled,
     BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
 )
 from core.app_detector import AppDetector
@@ -108,8 +109,8 @@ class Engine:
         self.hook.debug_mode = self._debug_events_enabled
         # When swipe gestures are disabled the gesture button becomes a plain
         # held button: the cursor is not locked while held and direction swipes
-        # are off.  set_gesture_hold_mode re-diverts the live HID++ connection.
-        swipe_enabled = settings.get("swipe_gestures_enabled", True)
+        # are off.  Per-profile, so switching apps re-diverts in-place.
+        swipe_enabled = get_swipe_gestures_enabled(self.cfg)
         if hasattr(self.hook, "set_gesture_hold_mode"):
             self.hook.set_gesture_hold_mode(not swipe_enabled)
         self.hook.configure_gestures(

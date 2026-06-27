@@ -98,7 +98,7 @@ class _RecordedThread:
 
 
 class EngineGestureRegistrationTests(unittest.TestCase):
-    def _make_engine(self, mappings=None, settings=None):
+    def _make_engine(self, mappings=None, settings=None, profile_extra=None):
         from core.engine import Engine
 
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -106,6 +106,8 @@ class EngineGestureRegistrationTests(unittest.TestCase):
             cfg["profiles"]["default"]["mappings"].update(mappings)
         if settings:
             cfg["settings"].update(settings)
+        if profile_extra:
+            cfg["profiles"]["default"].update(profile_extra)
 
         with (
             patch("core.engine.MouseHook", _FakeMouseHook),
@@ -134,7 +136,7 @@ class EngineGestureRegistrationTests(unittest.TestCase):
     def test_gesture_hold_mode_splits_press_release_for_custom(self):
         engine = self._make_engine(
             mappings={"gesture": "custom:m"},
-            settings={"swipe_gestures_enabled": False},
+            profile_extra={"swipe_gestures_enabled": False},
         )
         self.assertTrue(engine.hook.gesture_hold_mode)
         self.assertIn(MouseEvent.GESTURE_DOWN, engine.hook.registered)

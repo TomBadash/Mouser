@@ -73,6 +73,9 @@ DEFAULT_CONFIG = {
         "default": {
             "label": "Default (All Apps)",
             "apps": [],          # empty = all apps (fallback profile)
+            # False → gesture button acts as a plain held button (cursor stays
+            # free while held); per-profile so games and desktop can differ.
+            "swipe_gestures_enabled": True,
             "mappings": {
                 "middle": "none",
                 "gesture": "none",
@@ -102,7 +105,6 @@ DEFAULT_CONFIG = {
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
         "gesture_cooldown_ms": 500,
-        "swipe_gestures_enabled": True,  # False → gesture button acts as a plain held button (cursor stays free)
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -203,6 +205,31 @@ def get_active_mappings(cfg):
     return profile.get("mappings", DEFAULT_CONFIG["profiles"]["default"]["mappings"])
 
 
+def get_swipe_gestures_enabled(cfg, profile_name=None):
+    """Return the per-profile swipe-gestures-enabled flag (default True).
+
+    Uses the active profile when profile_name is None.
+    """
+    if profile_name is None:
+        profile_name = cfg.get("active_profile", "default")
+    profiles = cfg.get("profiles", {})
+    profile = profiles.get(profile_name, profiles.get("default", {}))
+    return bool(profile.get("swipe_gestures_enabled", True))
+
+
+def set_swipe_gestures_enabled(cfg, enabled, profile=None):
+    """Set the per-profile swipe-gestures-enabled flag (active profile if None)."""
+    if profile is None:
+        profile = cfg.get("active_profile", "default")
+    cfg.setdefault("profiles", {}).setdefault(profile, {
+        "label": profile,
+        "mappings": dict(DEFAULT_CONFIG["profiles"]["default"]["mappings"]),
+    })
+    cfg["profiles"][profile]["swipe_gestures_enabled"] = bool(enabled)
+    save_config(cfg)
+    return cfg
+
+
 def set_mapping(cfg, button, action_id, profile=None):
     """Set a mapping for a button in the given profile (or active profile)."""
     if profile is None:
@@ -224,6 +251,7 @@ def create_profile(cfg, name, label=None, copy_from="default", apps=None):
     cfg["profiles"][name] = {
         "label": label,
         "apps": apps if apps is not None else [],
+        "swipe_gestures_enabled": source.get("swipe_gestures_enabled", True),
         "mappings": dict(source.get("mappings", {})),
     }
     save_config(cfg)
@@ -332,8 +360,10 @@ def _migrate(cfg):
         cfg["version"] = 9
 
     if version < 10:
-        settings = cfg.setdefault("settings", {})
-        settings.setdefault("swipe_gestures_enabled", True)
+        # swipe_gestures_enabled is per-profile: the gesture button can act as a
+        # plain held button (cursor free) in some profiles and swipe in others.
+        for pdata in cfg.get("profiles", {}).values():
+            pdata.setdefault("swipe_gestures_enabled", True)
         cfg["version"] = 10
 
     cfg.setdefault("settings", {})
@@ -342,13 +372,13 @@ def _migrate(cfg):
     cfg["settings"].setdefault("device_layout_overrides", {})
     cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("ignore_trackpad", True)
-    cfg["settings"].setdefault("swipe_gestures_enabled", True)
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():
+        pdata.setdefault("swipe_gestures_enabled", True)
         apps = pdata.get("apps", [])
         for i, a in enumerate(apps):
             if a.lower() == "wmplayer.exe":

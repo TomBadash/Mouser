@@ -45,6 +45,11 @@ class ConfigMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["version"], 10)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
+        # swipe_gestures_enabled is per-profile, not a global setting.
+        self.assertTrue(
+            migrated["profiles"]["default"]["swipe_gestures_enabled"]
+        )
+        self.assertNotIn("swipe_gestures_enabled", migrated["settings"])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
         self.assertEqual(migrated["settings"]["dpi"], 1000)
@@ -150,6 +155,25 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
         )
+
+    def test_migrate_adds_per_profile_swipe_flag(self):
+        legacy = {
+            "version": 9,
+            "active_profile": "default",
+            "profiles": {
+                "default": {"label": "Default", "apps": [], "mappings": {}},
+                "game": {"label": "Game", "apps": ["squad.exe"], "mappings": {}},
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertEqual(migrated["version"], 10)
+        # Flag is per-profile, never a global setting.
+        self.assertNotIn("swipe_gestures_enabled", migrated["settings"])
+        self.assertTrue(migrated["profiles"]["default"]["swipe_gestures_enabled"])
+        self.assertTrue(migrated["profiles"]["game"]["swipe_gestures_enabled"])
 
     def test_migrate_renames_start_with_windows_to_start_at_login(self):
         legacy = {

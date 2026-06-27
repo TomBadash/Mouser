@@ -69,6 +69,7 @@ Item {
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
     property var selectedProfileMappingState: ({})
+    property bool selectedProfileSwipeEnabled: true
     property string appSearchText: ""
     property var filteredKnownApps: []
     property var suggestedKnownApps: []
@@ -88,6 +89,7 @@ Item {
             mappingState[mapping.key] = mapping
         }
         selectedProfileMappingState = mappingState
+        selectedProfileSwipeEnabled = backend.getProfileSwipeGesturesEnabled(selectedProfile)
     }
 
     function mappingFor(key) {
@@ -1388,7 +1390,7 @@ Item {
                                     id: swipeGesturesCheck
                                     width: parent.width
                                     text: s["mouse.enable_swipes"] || "Enable swipe gestures"
-                                    checked: backend.swipeGesturesEnabled
+                                    checked: selectedProfileSwipeEnabled
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 12 }
                                     contentItem: Text {
@@ -1399,12 +1401,15 @@ Item {
                                         leftPadding: swipeGesturesCheck.indicator.width + 8
                                         wrapMode: Text.WordWrap
                                     }
-                                    onToggled: backend.setSwipeGesturesEnabled(checked)
+                                    onToggled: {
+                                        backend.setProfileSwipeGesturesEnabled(selectedProfile, checked)
+                                        refreshSelectedProfileMappings()
+                                    }
                                 }
 
                                 Text {
                                     width: parent.width
-                                    visible: !backend.swipeGesturesEnabled
+                                    visible: !selectedProfileSwipeEnabled
                                     text: s["mouse.swipes_off_hint"]
                                           || "Gesture button acts as a normal held button; the cursor stays free while held."
                                     wrapMode: Text.WordWrap
@@ -1415,7 +1420,7 @@ Item {
                                 Column {
                                     width: parent.width
                                     spacing: 14
-                                    visible: backend.swipeGesturesEnabled
+                                    visible: selectedProfileSwipeEnabled
 
                                     Row {
                                         width: parent.width
