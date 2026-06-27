@@ -76,6 +76,14 @@ def _create_prompt_options(app_services, core_foundation):
 
 
 def is_process_trusted(prompt: bool = False) -> bool:
+    """Check whether the current process is trusted for accessibility.
+
+    On macOS, this checks the system accessibility trust status. On other
+    platforms, or if the macOS frameworks cannot be loaded, returns ``True``
+    so the application does not block on permission checks that are not
+    applicable or cannot be performed. Exceptions during the trust check
+    also result in ``True`` to prevent the application from blocking.
+    """
     frameworks = _load_frameworks()
     if not frameworks:
         return True
