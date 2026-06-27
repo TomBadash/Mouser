@@ -184,9 +184,14 @@ if sys.platform == "win32":
     VK_MENU = 0x12
     VK_TAB = 0x09
     VK_LMENU = 0xA4
+    VK_RMENU = 0xA5
     VK_SHIFT = 0x10
     VK_CONTROL = 0x11
+    VK_RCONTROL = 0xA3
     VK_LWIN = 0x5B
+    VK_RWIN = 0x5C
+    VK_APPS = 0x5D
+    VK_DIVIDE = 0x6F
     VK_ESCAPE = 0x1B
     VK_RETURN = 0x0D
     VK_SPACE = 0x20
@@ -292,7 +297,14 @@ if sys.platform == "win32":
         MapVirtualKeyW.restype = c_ulong
 
     def _vk_to_scan(vk):
-        """Return the hardware scancode for a VK, or 0 when unavailable."""
+        """Return the hardware scancode for a VK, or 0 when unavailable.
+
+        Uses MAPVK_VK_TO_VSC (not the _EX variant): _EX is documented to encode
+        the 0xE0 prefix in the high byte, but in practice it does NOT do so for
+        the arrow / navigation cluster, which would drop the extended flag and
+        produce the numpad scancode instead.  We get the base scancode here and
+        set KEYEVENTF_EXTENDEDKEY explicitly from _EXTENDED_VKS below.
+        """
         if MapVirtualKeyW is None:
             return 0
         try:
@@ -383,8 +395,8 @@ if sys.platform == "win32":
     # VKs that require the KEYEVENTF_EXTENDEDKEY flag (E0 prefix) in SendInput.
     # This matters for scancode injection: an extended key sent without the flag
     # (or a non-extended key sent with it) produces the wrong scancode.  Note Tab
-    # and the main Return key are NOT extended; the Windows key and the navigation
-    # cluster are.
+    # and the main Return key are NOT extended; the Windows keys, the right-hand
+    # modifiers, the menu key, numpad-divide and the navigation cluster are.
     _EXTENDED_VKS = frozenset({
         VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_BROWSER_REFRESH,
         VK_BROWSER_STOP, VK_BROWSER_HOME,
@@ -392,7 +404,8 @@ if sys.platform == "win32":
         VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK,
         VK_MEDIA_STOP, VK_MEDIA_PLAY_PAUSE,
         VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
-        VK_DELETE, VK_LWIN,
+        VK_DELETE, VK_LWIN, VK_RWIN, VK_APPS,
+        VK_RCONTROL, VK_RMENU, VK_DIVIDE,
         VK_PRIOR, VK_NEXT, VK_HOME, VK_END, VK_INSERT,  # navigation cluster
     })
 

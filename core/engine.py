@@ -67,6 +67,7 @@ class Engine:
         self._replay_inflight = False
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
+        self._release_timers = {}   # action_id → Timer for safety auto-release
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -173,11 +174,11 @@ class Engine:
                 # in "_up" but have no partner, so they must not be treated as the
                 # release half of a pair.
                 base = None
-                is_down = is_up = False
+                is_down = False
                 if evt_type.endswith("_down"):
                     base, is_down = evt_type[:-len("_down")], True
                 elif evt_type.endswith("_up"):
-                    base, is_up = evt_type[:-len("_up")], True
+                    base = evt_type[:-len("_up")]
                 is_pair = base is not None and (base + "_down") in event_set \
                     and (base + "_up") in event_set
 
@@ -240,6 +241,29 @@ class Engine:
         else:
             release_action(action_id)
 
+    def _cancel_release_timer(self, action_id):
+        old = self._release_timers.pop(action_id, None)
+        if old is not None:
+            old.cancel()
+
+    def _arm_release_timer(self, action_id):
+        """(Re)start the 20s safety auto-release for a held action."""
+        self._cancel_release_timer(action_id)
+
+        def _safety_release():
+            try:
+                print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
+                self._release_timers.pop(action_id, None)
+                self._release_action(action_id)
+            except Exception as exc:
+                print(f"[Engine] _safety_release EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+
+        t = threading.Timer(20.0, _safety_release)
+        t.daemon = True
+        self._release_timers[action_id] = t
+        t.start()
+
     def _make_press_handler(self, action_id):
         def handler(event):
             try:
@@ -248,6 +272,8 @@ class Engine:
                         f"Mapped {event.event_type} -> {action_id} (press)"
                     )
                     self._press_action(action_id)
+                    # Safety: auto-release after 20s if the UP event never arrives.
+                    self._arm_release_timer(action_id)
             except Exception as exc:
                 print(f"[Engine] press_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
@@ -260,6 +286,7 @@ class Engine:
                     self._emit_debug(
                         f"Mapped {event.event_type} -> {action_id} (release)"
                     )
+                    self._cancel_release_timer(action_id)
                     self._release_action(action_id)
             except Exception as exc:
                 print(f"[Engine] release_handler EXCEPTION for {action_id}: {exc}")
