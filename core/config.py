@@ -53,7 +53,7 @@ PROFILE_BUTTON_NAMES = {
 # Maps config button keys to the MouseEvent types they correspond to
 BUTTON_TO_EVENTS = {
     "middle":        ("middle_down", "middle_up"),
-    "gesture":       ("gesture_click",),
+    "gesture":       ("gesture_click", "gesture_down", "gesture_up"),
     "gesture_left":  ("gesture_swipe_left",),
     "gesture_right": ("gesture_swipe_right",),
     "gesture_up":    ("gesture_swipe_up",),
@@ -67,7 +67,7 @@ BUTTON_TO_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -102,6 +102,7 @@ DEFAULT_CONFIG = {
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
         "gesture_cooldown_ms": 500,
+        "swipe_gestures_enabled": True,  # False → gesture button acts as a plain held button (cursor stays free)
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -330,12 +331,18 @@ def _migrate(cfg):
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
 
+    if version < 10:
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("swipe_gestures_enabled", True)
+        cfg["version"] = 10
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
     cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("ignore_trackpad", True)
+    cfg["settings"].setdefault("swipe_gestures_enabled", True)
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})

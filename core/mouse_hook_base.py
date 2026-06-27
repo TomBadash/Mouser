@@ -29,6 +29,9 @@ class BaseMouseHook:
         self._connection_change_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
+        # When True the gesture button is treated as a plain held button:
+        # RawXY divert is disabled (cursor stays free) and swipe detection is off.
+        self.gesture_hold_mode = False
         self._gesture_direction_enabled = False
         self._gesture_threshold = 50.0
         self._gesture_deadzone = 40.0
@@ -101,6 +104,27 @@ class BaseMouseHook:
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_input_source = None
+
+    def set_gesture_hold_mode(self, enabled):
+        """Toggle plain held-button mode for the gesture button.
+
+        When enabled the gesture button reports down/up like a normal key and
+        the cursor is not locked while held; swipe gestures are disabled.
+        Re-diverts the live HID++ connection so the change takes effect now.
+        """
+        enabled = bool(enabled)
+        if enabled == self.gesture_hold_mode:
+            # Unchanged — avoid dropping the HID connection on unrelated
+            # setting changes that also run through reload_mappings.
+            return
+        self.gesture_hold_mode = enabled
+        hg = getattr(self, "_hid_gesture", None)
+        if hg is not None:
+            try:
+                hg.set_rawxy_preference(not enabled)
+                hg.force_reconnect()
+            except Exception as exc:
+                print(f"[MouseHook] set_gesture_hold_mode error: {exc}")
 
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
@@ -273,6 +297,7 @@ class BaseMouseHook:
             on_connect=self._on_hid_connect,
             on_disconnect=self._on_hid_disconnect,
             extra_diverts=self._build_extra_diverts(),
+            rawxy_preference=not self.gesture_hold_mode,
         )
         self._hid_gesture = listener
         if not listener.start():

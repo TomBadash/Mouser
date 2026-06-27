@@ -1384,6 +1384,39 @@ Item {
                                     color: theme.border
                                 }
 
+                                CheckBox {
+                                    id: swipeGesturesCheck
+                                    width: parent.width
+                                    text: s["mouse.enable_swipes"] || "Enable swipe gestures"
+                                    checked: backend.swipeGesturesEnabled
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 12 }
+                                    contentItem: Text {
+                                        text: swipeGesturesCheck.text
+                                        font: swipeGesturesCheck.font
+                                        color: theme.textPrimary
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: swipeGesturesCheck.indicator.width + 8
+                                        wrapMode: Text.WordWrap
+                                    }
+                                    onToggled: backend.setSwipeGesturesEnabled(checked)
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    visible: !backend.swipeGesturesEnabled
+                                    text: s["mouse.swipes_off_hint"]
+                                          || "Gesture button acts as a normal held button; the cursor stays free while held."
+                                    wrapMode: Text.WordWrap
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 14
+                                    visible: backend.swipeGesturesEnabled
+
                                 Row {
                                     width: parent.width
                                     spacing: 12
@@ -1574,6 +1607,7 @@ Item {
                                                 selectedProfile, "gesture_down", aid)
                                         }
                                     }
+                                }
                                 }
                             }
 

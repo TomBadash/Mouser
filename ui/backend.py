@@ -526,6 +526,10 @@ class Backend(QObject):
     def ignoreTrackpad(self):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
 
+    @Property(bool, notify=settingsChanged)
+    def swipeGesturesEnabled(self):
+        return self._cfg.get("settings", {}).get("swipe_gestures_enabled", True)
+
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
@@ -1373,6 +1377,17 @@ class Backend(QObject):
     @Slot(bool)
     def setIgnoreTrackpad(self, value):
         self._cfg.setdefault("settings", {})["ignore_trackpad"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(bool)
+    def setSwipeGesturesEnabled(self, value):
+        value = bool(value)
+        if self.swipeGesturesEnabled == value:
+            return
+        self._cfg.setdefault("settings", {})["swipe_gestures_enabled"] = value
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

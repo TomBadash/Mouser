@@ -10,6 +10,7 @@ from core.mouse_hook import MouseHook, MouseEvent
 from core.key_simulator import (
     ACTIONS, execute_action, is_mouse_button_action,
     inject_mouse_down, inject_mouse_up,
+    press_action, release_action,
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
@@ -65,7 +66,6 @@ class Engine:
         self._replay_inflight = False
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
-        self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -106,9 +106,17 @@ class Engine:
         if hasattr(self.hook, "ignore_trackpad"):
             self.hook.ignore_trackpad = settings.get("ignore_trackpad", True)
         self.hook.debug_mode = self._debug_events_enabled
+        # When swipe gestures are disabled the gesture button becomes a plain
+        # held button: the cursor is not locked while held and direction swipes
+        # are off.  set_gesture_hold_mode re-diverts the live HID++ connection.
+        swipe_enabled = settings.get("swipe_gestures_enabled", True)
+        if hasattr(self.hook, "set_gesture_hold_mode"):
+            self.hook.set_gesture_hold_mode(not swipe_enabled)
         self.hook.configure_gestures(
-            enabled=any(mappings.get(key, "none") != "none"
-                        for key in GESTURE_DIRECTION_BUTTONS),
+            enabled=swipe_enabled and any(
+                mappings.get(key, "none") != "none"
+                for key in GESTURE_DIRECTION_BUTTONS
+            ),
             threshold=settings.get("gesture_threshold", 50),
             deadzone=settings.get("gesture_deadzone", 40),
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
@@ -142,32 +150,49 @@ class Engine:
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
+            if action_id == "none":
+                continue
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
-            has_paired_down = any(e.endswith("_down") for e in events)
-            has_up = any(e.endswith("_up") for e in events)
+            event_set = set(events)
+            # Holdable actions (mouse buttons, custom keyboard shortcuts) are
+            # split into press-on-down / release-on-up so the gesture button
+            # behaves like a real held key.  Other actions fire once on press.
+            holdable = self._is_holdable_action(action_id)
 
             for evt_type in events:
-                if has_paired_down and evt_type.endswith("_up"):
-                    if action_id != "none":
-                        self.hook.block(evt_type)
-                        if is_mouse_button_action(action_id):
-                            self.hook.register(evt_type, self._make_mouse_up_handler(action_id))
+                self.hook.block(evt_type)
+
+                if "hscroll" in evt_type:
+                    self.hook.register(evt_type, self._make_hscroll_handler(action_id))
                     continue
 
-                if action_id != "none":
-                    self.hook.block(evt_type)
+                # A down/up pair only exists when BOTH halves are present for this
+                # same button (e.g. middle_down + middle_up, gesture_down +
+                # gesture_up).  Single-fire events like gesture_swipe_up also end
+                # in "_up" but have no partner, so they must not be treated as the
+                # release half of a pair.
+                base = None
+                is_down = is_up = False
+                if evt_type.endswith("_down"):
+                    base, is_down = evt_type[:-len("_down")], True
+                elif evt_type.endswith("_up"):
+                    base, is_up = evt_type[:-len("_up")], True
+                is_pair = base is not None and (base + "_down") in event_set \
+                    and (base + "_up") in event_set
 
-                    if "hscroll" in evt_type:
-                        self.hook.register(evt_type, self._make_hscroll_handler(action_id))
-                    elif is_mouse_button_action(action_id):
-                        if has_up:
-                            # Button has a matching _up event → split press/release
-                            self.hook.register(evt_type, self._make_mouse_down_handler(action_id))
-                        else:
-                            # Single-fire event (gesture, swipe) → full click
-                            self.hook.register(evt_type, self._make_handler(action_id))
+                if is_pair and holdable:
+                    if is_down:
+                        self.hook.register(evt_type, self._make_press_handler(action_id))
                     else:
+                        self.hook.register(evt_type, self._make_release_handler(action_id))
+                elif is_pair:
+                    # Non-holdable action on a real button: fire once on press,
+                    # suppress the bare release (blocked above, no handler).
+                    if is_down:
                         self.hook.register(evt_type, self._make_handler(action_id))
+                else:
+                    # Single-fire event (gesture_click, swipe_*) → full click.
+                    self.hook.register(evt_type, self._make_handler(action_id))
 
     def _make_handler(self, action_id):
         def handler(event):
@@ -197,51 +222,46 @@ class Engine:
                 import traceback; traceback.print_exc()
         return handler
 
-    def _make_mouse_down_handler(self, action_id):
-        def _safety_release():
-            """Auto-release if the UP event never fires."""
-            try:
-                print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
-                self._mouse_release_timers.pop(action_id, None)
-                inject_mouse_up(action_id)
-            except Exception as exc:
-                print(f"[Engine] _safety_release EXCEPTION for {action_id}: {exc}")
-                import traceback; traceback.print_exc()
+    @staticmethod
+    def _is_holdable_action(action_id):
+        """Actions that can be pressed-and-held: mouse buttons and custom keys."""
+        return is_mouse_button_action(action_id) or action_id.startswith("custom:")
 
+    def _press_action(self, action_id):
+        if is_mouse_button_action(action_id):
+            inject_mouse_down(action_id)
+        else:
+            press_action(action_id)
+
+    def _release_action(self, action_id):
+        if is_mouse_button_action(action_id):
+            inject_mouse_up(action_id)
+        else:
+            release_action(action_id)
+
+    def _make_press_handler(self, action_id):
         def handler(event):
             try:
                 if self._enabled:
                     self._emit_debug(
-                        f"Mapped {event.event_type} -> {action_id} (mouse down)"
+                        f"Mapped {event.event_type} -> {action_id} (press)"
                     )
-                    inject_mouse_down(action_id)
-                    # Safety: auto-release after 20s if UP event is never received
-                    old = self._mouse_release_timers.pop(action_id, None)
-                    if old is not None:
-                        old.cancel()
-                    t = threading.Timer(20.0, _safety_release)
-                    t.daemon = True
-                    self._mouse_release_timers[action_id] = t
-                    t.start()
+                    self._press_action(action_id)
             except Exception as exc:
-                print(f"[Engine] mouse_down_handler EXCEPTION for {action_id}: {exc}")
+                print(f"[Engine] press_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
         return handler
 
-    def _make_mouse_up_handler(self, action_id):
+    def _make_release_handler(self, action_id):
         def handler(event):
             try:
                 if self._enabled:
                     self._emit_debug(
-                        f"Mapped {event.event_type} -> {action_id} (mouse up)"
+                        f"Mapped {event.event_type} -> {action_id} (release)"
                     )
-                    # Cancel safety timer
-                    old = self._mouse_release_timers.pop(action_id, None)
-                    if old is not None:
-                        old.cancel()
-                    inject_mouse_up(action_id)
+                    self._release_action(action_id)
             except Exception as exc:
-                print(f"[Engine] mouse_up_handler EXCEPTION for {action_id}: {exc}")
+                print(f"[Engine] release_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
         return handler
 

@@ -59,6 +59,8 @@ _TRANSLATIONS = {
         "mouse.scroll_left": "SCROLL LEFT",
         "mouse.scroll_right": "SCROLL RIGHT",
         "mouse.tap_action": "TAP ACTION",
+        "mouse.enable_swipes": "Enable swipe gestures",
+        "mouse.swipes_off_hint": "Gesture button acts as a normal held button; the cursor stays free while held.",
         "mouse.swipe_actions": "SWIPE ACTIONS",
         "mouse.swipe_left": "Swipe left",
         "mouse.swipe_right": "Swipe right",

@@ -710,7 +710,9 @@ class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 rawxy_preference=True):
+        self._rawxy_preference = bool(rawxy_preference)
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
@@ -1229,11 +1231,16 @@ class HidGestureListener:
             return False
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
-            resp = self._set_cid_reporting(cid, 0x33)
-            if resp is not None:
-                self._rawxy_enabled = True
-                print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
-                return True
+            # RawXY divert makes the firmware suppress cursor movement while the
+            # button is held (needed for swipe gestures).  When the user disables
+            # swipe gestures we skip it so the cursor stays free and the button
+            # behaves like a plain held key.
+            if self._rawxy_preference:
+                resp = self._set_cid_reporting(cid, 0x33)
+                if resp is not None:
+                    self._rawxy_enabled = True
+                    print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
+                    return True
             self._rawxy_enabled = False
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
@@ -1429,6 +1436,14 @@ class HidGestureListener:
             print("[HidGesture] Smart Shift set FAILED")
             result = False
         self._finish_pending_smart_shift(result)
+
+    def set_rawxy_preference(self, enabled):
+        """Choose whether the gesture button is diverted with RawXY (swipe) mode.
+
+        Takes effect on the next divert; callers should follow with
+        force_reconnect() to re-divert the live connection immediately.
+        """
+        self._rawxy_preference = bool(enabled)
 
     def force_reconnect(self):
         """Request the listener thread to drop and re-establish the HID++ connection.
