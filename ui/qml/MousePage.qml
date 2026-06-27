@@ -1417,197 +1417,197 @@ Item {
                                     spacing: 14
                                     visible: backend.swipeGesturesEnabled
 
-                                Row {
-                                    width: parent.width
-                                    spacing: 12
-
-                                Text {
-                                    text: s["mouse.threshold"]
-                                    font { family: uiState.fontFamily; pixelSize: 12; bold: true }
-                                    color: theme.textPrimary
-                                }
+                                    Row {
+                                        width: parent.width
+                                        spacing: 12
 
                                     Text {
-                                        text: (
-                                            gestureThresholdSlider.pressed
-                                            ? Math.round(gestureThresholdSlider.value / 5.0) * 5
-                                            : backend.gestureThreshold
-                                        ) + " px"
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: theme.textSecondary
-                                    }
-                                }
-
-                                WheelSafeSlider {
-                                    id: gestureThresholdSlider
-                                    width: parent.width
-                                    from: 20
-                                    to: 400
-                                    stepSize: 5
-                                    value: backend.gestureThreshold
-                                    accentColor: theme.accent
-                                    accentDimColor: theme.accentDim
-                                    trackColor: theme.border
-                                    onMoved: gestureThresholdSave.restart()
-                                    onPressedChanged: {
-                                        if (!pressed) {
-                                            gestureThresholdSave.stop()
-                                            backend.setGestureThreshold(
-                                                Math.round(value / 5.0) * 5)
-                                        }
-                                    }
-                                }
-
-                                Timer {
-                                    id: gestureThresholdSave
-                                    interval: 250
-                                    repeat: false
-                                    onTriggered: backend.setGestureThreshold(
-                                        Math.round(gestureThresholdSlider.value / 5.0) * 5)
-                                }
-
-                                Text {
-                                    text: s["mouse.swipe_actions"]
-                                    font { family: uiState.fontFamily; pixelSize: 11;
-                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
-                                    color: theme.textDim
-                                }
-
-                                RowLayout {
-                                    width: parent.width
-                                    spacing: 12
-
-                                    Text {
-                                        text: s["mouse.swipe_left"]
-                                        Layout.preferredWidth: 100
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        text: s["mouse.threshold"]
+                                        font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                                         color: theme.textPrimary
                                     }
 
-                                    ComboBox {
-                                        Layout.fillWidth: true
-                                        model: backend.allActions
-                                        textRole: "label"
-                                        delegate: actionComboDelegate
-                                        Material.accent: theme.accent
-                                        font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureLeftActionId)
-                                        displayText: isCustomAction(gestureLeftActionId)
-                                                     ? customLabel(gestureLeftActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
-                                        onActivated: function(index) {
-                                            var aid = backend.allActions[index].id
-                                            if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_left")
-                                                return
-                                            }
-                                            backend.setProfileMapping(
-                                                selectedProfile, "gesture_left", aid)
+                                        Text {
+                                            text: (
+                                                gestureThresholdSlider.pressed
+                                                ? Math.round(gestureThresholdSlider.value / 5.0) * 5
+                                                : backend.gestureThreshold
+                                            ) + " px"
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textSecondary
                                         }
                                     }
-                                }
 
-                                RowLayout {
-                                    width: parent.width
-                                    spacing: 12
+                                    WheelSafeSlider {
+                                        id: gestureThresholdSlider
+                                        width: parent.width
+                                        from: 20
+                                        to: 400
+                                        stepSize: 5
+                                        value: backend.gestureThreshold
+                                        accentColor: theme.accent
+                                        accentDimColor: theme.accentDim
+                                        trackColor: theme.border
+                                        onMoved: gestureThresholdSave.restart()
+                                        onPressedChanged: {
+                                            if (!pressed) {
+                                                gestureThresholdSave.stop()
+                                                backend.setGestureThreshold(
+                                                    Math.round(value / 5.0) * 5)
+                                            }
+                                        }
+                                    }
+
+                                    Timer {
+                                        id: gestureThresholdSave
+                                        interval: 250
+                                        repeat: false
+                                        onTriggered: backend.setGestureThreshold(
+                                            Math.round(gestureThresholdSlider.value / 5.0) * 5)
+                                    }
 
                                     Text {
-                                        text: s["mouse.swipe_right"]
-                                        Layout.preferredWidth: 100
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: theme.textPrimary
+                                        text: s["mouse.swipe_actions"]
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
                                     }
 
-                                    ComboBox {
-                                        Layout.fillWidth: true
-                                        model: backend.allActions
-                                        textRole: "label"
-                                        delegate: actionComboDelegate
-                                        Material.accent: theme.accent
-                                        font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureRightActionId)
-                                        displayText: isCustomAction(gestureRightActionId)
-                                                     ? customLabel(gestureRightActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
-                                        onActivated: function(index) {
-                                            var aid = backend.allActions[index].id
-                                            if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_right")
-                                                return
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 12
+
+                                        Text {
+                                            text: s["mouse.swipe_left"]
+                                            Layout.preferredWidth: 100
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textPrimary
+                                        }
+
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: backend.allActions
+                                            textRole: "label"
+                                            delegate: actionComboDelegate
+                                            Material.accent: theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            currentIndex: actionIndexForId(gestureLeftActionId)
+                                            displayText: isCustomAction(gestureLeftActionId)
+                                                         ? customLabel(gestureLeftActionId)
+                                                         : (lm.strings, lm.trAction(currentText))
+                                            onActivated: function(index) {
+                                                var aid = backend.allActions[index].id
+                                                if (aid === "__custom__") {
+                                                    keyCaptureDialog.open(selectedProfile, "gesture_left")
+                                                    return
+                                                }
+                                                backend.setProfileMapping(
+                                                    selectedProfile, "gesture_left", aid)
                                             }
-                                            backend.setProfileMapping(
-                                                selectedProfile, "gesture_right", aid)
                                         }
                                     }
-                                }
 
-                                RowLayout {
-                                    width: parent.width
-                                    spacing: 12
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 12
 
-                                    Text {
-                                        text: s["mouse.swipe_up"]
-                                        Layout.preferredWidth: 100
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: theme.textPrimary
-                                    }
+                                        Text {
+                                            text: s["mouse.swipe_right"]
+                                            Layout.preferredWidth: 100
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textPrimary
+                                        }
 
-                                    ComboBox {
-                                        Layout.fillWidth: true
-                                        model: backend.allActions
-                                        textRole: "label"
-                                        delegate: actionComboDelegate
-                                        Material.accent: theme.accent
-                                        font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureUpActionId)
-                                        displayText: isCustomAction(gestureUpActionId)
-                                                     ? customLabel(gestureUpActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
-                                        onActivated: function(index) {
-                                            var aid = backend.allActions[index].id
-                                            if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_up")
-                                                return
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: backend.allActions
+                                            textRole: "label"
+                                            delegate: actionComboDelegate
+                                            Material.accent: theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            currentIndex: actionIndexForId(gestureRightActionId)
+                                            displayText: isCustomAction(gestureRightActionId)
+                                                         ? customLabel(gestureRightActionId)
+                                                         : (lm.strings, lm.trAction(currentText))
+                                            onActivated: function(index) {
+                                                var aid = backend.allActions[index].id
+                                                if (aid === "__custom__") {
+                                                    keyCaptureDialog.open(selectedProfile, "gesture_right")
+                                                    return
+                                                }
+                                                backend.setProfileMapping(
+                                                    selectedProfile, "gesture_right", aid)
                                             }
-                                            backend.setProfileMapping(
-                                                selectedProfile, "gesture_up", aid)
                                         }
                                     }
-                                }
 
-                                RowLayout {
-                                    width: parent.width
-                                    spacing: 12
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 12
 
-                                    Text {
-                                        text: s["mouse.swipe_down"]
-                                        Layout.preferredWidth: 100
-                                        font { family: uiState.fontFamily; pixelSize: 12 }
-                                        color: theme.textPrimary
-                                    }
+                                        Text {
+                                            text: s["mouse.swipe_up"]
+                                            Layout.preferredWidth: 100
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textPrimary
+                                        }
 
-                                    ComboBox {
-                                        Layout.fillWidth: true
-                                        model: backend.allActions
-                                        textRole: "label"
-                                        delegate: actionComboDelegate
-                                        Material.accent: theme.accent
-                                        font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureDownActionId)
-                                        displayText: isCustomAction(gestureDownActionId)
-                                                     ? customLabel(gestureDownActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
-                                        onActivated: function(index) {
-                                            var aid = backend.allActions[index].id
-                                            if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_down")
-                                                return
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: backend.allActions
+                                            textRole: "label"
+                                            delegate: actionComboDelegate
+                                            Material.accent: theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            currentIndex: actionIndexForId(gestureUpActionId)
+                                            displayText: isCustomAction(gestureUpActionId)
+                                                         ? customLabel(gestureUpActionId)
+                                                         : (lm.strings, lm.trAction(currentText))
+                                            onActivated: function(index) {
+                                                var aid = backend.allActions[index].id
+                                                if (aid === "__custom__") {
+                                                    keyCaptureDialog.open(selectedProfile, "gesture_up")
+                                                    return
+                                                }
+                                                backend.setProfileMapping(
+                                                    selectedProfile, "gesture_up", aid)
                                             }
-                                            backend.setProfileMapping(
-                                                selectedProfile, "gesture_down", aid)
                                         }
                                     }
-                                }
+
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 12
+
+                                        Text {
+                                            text: s["mouse.swipe_down"]
+                                            Layout.preferredWidth: 100
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textPrimary
+                                        }
+
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: backend.allActions
+                                            textRole: "label"
+                                            delegate: actionComboDelegate
+                                            Material.accent: theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            currentIndex: actionIndexForId(gestureDownActionId)
+                                            displayText: isCustomAction(gestureDownActionId)
+                                                         ? customLabel(gestureDownActionId)
+                                                         : (lm.strings, lm.trAction(currentText))
+                                            onActivated: function(index) {
+                                                var aid = backend.allActions[index].id
+                                                if (aid === "__custom__") {
+                                                    keyCaptureDialog.open(selectedProfile, "gesture_down")
+                                                    return
+                                                }
+                                                backend.setProfileMapping(
+                                                    selectedProfile, "gesture_down", aid)
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
