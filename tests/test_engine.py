@@ -496,6 +496,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
 
     def test_battery_poll_skips_smart_shift_reads_while_replay_is_inflight(self):
         engine = self._make_engine()
+        engine.set_frontend_visible(True)
         stop_event = Mock()
         stop_event.is_set.return_value = False
         stop_event.wait.return_value = True
@@ -511,6 +512,76 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
 
         engine.hook._hid_gesture.read_battery.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+    def test_battery_poll_skips_background_hid_reads_while_frontend_hidden(self):
+        engine = self._make_engine()
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.return_value = True
+        engine.hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(name="MX Master 3S"),
+            smart_shift_supported=True,
+            read_battery=Mock(return_value=None),
+            read_smart_shift=Mock(return_value={
+                "mode": "ratchet",
+                "enabled": False,
+                "threshold": 25,
+            }),
+        )
+
+        engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.read_battery.assert_not_called()
+        engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+    def test_battery_poll_skips_background_hid_reads_while_system_idle(self):
+        engine = self._make_engine()
+        engine.set_frontend_visible(True)
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.return_value = True
+        engine.hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(name="MX Master 3S"),
+            smart_shift_supported=True,
+            read_battery=Mock(return_value=None),
+            read_smart_shift=Mock(return_value={
+                "mode": "ratchet",
+                "enabled": False,
+                "threshold": 25,
+            }),
+        )
+
+        with patch("core.engine._system_idle_seconds", return_value=120.0):
+            engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.read_battery.assert_not_called()
+        engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+    def test_battery_poll_does_not_repeat_without_user_activity_after_poll(self):
+        engine = self._make_engine()
+        engine.set_frontend_visible(True)
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.side_effect = [False, False, True]
+        engine.hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(name="MX Master 3S"),
+            smart_shift_supported=True,
+            read_battery=Mock(return_value=None),
+            read_smart_shift=Mock(return_value=None),
+        )
+
+        with (
+            patch("core.engine.time.time", side_effect=[
+                0.0, 0.0, 0.0, 5.0, 300.0, 300.0,
+            ]),
+            patch("core.engine._system_idle_seconds", side_effect=[
+                0.0, 0.0, 300.0,
+            ]),
+        ):
+            engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.read_battery.assert_called_once_with()
+        engine.hook._hid_gesture.read_smart_shift.assert_called_once_with()
 
 
 if __name__ == "__main__":

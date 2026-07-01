@@ -4,6 +4,7 @@ current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
 
+import sys
 import threading
 import time
 from core.mouse_hook import MouseHook, MouseEvent
@@ -27,6 +28,48 @@ from core.logi_devices import clamp_dpi
 HSCROLL_ACTION_COOLDOWN_S = 0.35
 HSCROLL_VOLUME_COOLDOWN_S = 0.06
 _VOLUME_ACTIONS = {"volume_up", "volume_down"}
+BACKGROUND_BATTERY_POLL_INTERVAL_S = 1800
+BACKGROUND_SMART_SHIFT_POLL_INTERVAL_S = 300
+BACKGROUND_HID_POLL_IDLE_GRACE_S = 60.0
+BACKGROUND_HID_POLL_EVENT_FUZZ_S = 2.0
+
+
+def _system_idle_seconds():
+    """Return seconds since the last user input when the platform exposes it."""
+    if sys.platform == "darwin":
+        try:
+            import Quartz
+            state = getattr(Quartz, "kCGEventSourceStateCombinedSessionState", 0)
+            any_event = getattr(Quartz, "kCGAnyInputEventType", 0xFFFFFFFF)
+            return float(Quartz.CGEventSourceSecondsSinceLastEventType(
+                state, any_event
+            ))
+        except Exception:
+            return None
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", ctypes.c_uint),
+                    ("dwTime", ctypes.c_uint),
+                ]
+
+            last_input = LASTINPUTINFO()
+            last_input.cbSize = ctypes.sizeof(LASTINPUTINFO)
+            if not ctypes.windll.user32.GetLastInputInfo(
+                ctypes.byref(last_input)
+            ):
+                return None
+            tick_count = ctypes.windll.kernel32.GetTickCount()
+            elapsed_ms = (tick_count - last_input.dwTime) & 0xFFFFFFFF
+            return elapsed_ms / 1000.0
+        except Exception:
+            return None
+
+    return None
 
 
 class Engine:
@@ -59,6 +102,8 @@ class Engine:
         )
         self._battery_poll_stop = threading.Event()
         self._battery_poll_thread = None          # track the poller thread
+        self._last_background_hid_poll_at = None
+        self._frontend_visible = False
         self._last_connection_state = bool(self._hid_runtime_state().input_ready)
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
@@ -635,10 +680,37 @@ class Engine:
         if hid_features_ready and hid_features_changed:
             self._request_saved_settings_replay()
 
+    def _background_hid_poll_allowed(self, now):
+        if not self._frontend_visible:
+            return False
+        idle_seconds = _system_idle_seconds()
+        if idle_seconds is None:
+            return True
+        if idle_seconds >= BACKGROUND_HID_POLL_IDLE_GRACE_S:
+            return False
+
+        last_poll_at = self._last_background_hid_poll_at
+        if last_poll_at is None:
+            return True
+
+        seconds_since_poll = max(0.0, now - last_poll_at)
+        if seconds_since_poll <= BACKGROUND_HID_POLL_EVENT_FUZZ_S:
+            return True
+
+        return idle_seconds < (
+            seconds_since_poll - BACKGROUND_HID_POLL_EVENT_FUZZ_S
+        )
+
+    def _record_background_hid_poll(self, now):
+        self._last_background_hid_poll_at = now
+
+    def set_frontend_visible(self, visible):
+        self._frontend_visible = bool(visible)
+
     def _battery_poll_loop(self, stop_event):
         """Read battery and smart shift mode periodically until disconnected."""
-        _battery_poll_interval = 300   # seconds between battery reads
-        _ss_poll_interval = 15         # seconds between scroll-mode reads
+        _battery_poll_interval = BACKGROUND_BATTERY_POLL_INTERVAL_S
+        _ss_poll_interval = BACKGROUND_SMART_SHIFT_POLL_INTERVAL_S
         _last_battery = time.time() - _battery_poll_interval  # fire immediately
         _last_ss = time.time() - _ss_poll_interval            # fire immediately
         _last_ss_mode = None
@@ -647,8 +719,12 @@ class Engine:
             now = time.time()
             hg = self.hook._hid_gesture
             if hg and hg.connected_device is not None:
-                if now - _last_battery >= _battery_poll_interval:
+                if (
+                    now - _last_battery >= _battery_poll_interval
+                    and self._background_hid_poll_allowed(now)
+                ):
                     _last_battery = now
+                    self._record_background_hid_poll(now)
                     level = hg.read_battery()
                     if stop_event.is_set():
                         return
@@ -662,8 +738,10 @@ class Engine:
                     not self._replay_inflight
                     and now - _last_ss >= _ss_poll_interval
                     and hg.smart_shift_supported
+                    and self._background_hid_poll_allowed(now)
                 ):
                     _last_ss = now
+                    self._record_background_hid_poll(now)
                     ss_mode = hg.read_smart_shift()
                     if stop_event.is_set():
                         return
