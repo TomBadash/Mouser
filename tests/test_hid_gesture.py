@@ -790,6 +790,96 @@ class HidBoltReceiverTests(unittest.TestCase):
         self.assertEqual(listener.connected_device.transport, "USB Receiver")
 
 
+class HidMultipleBluetoothTests(unittest.TestCase):
+    """Two Bluetooth devices are separate HID interfaces (separate handles) that
+    both report on device-index 0xFF; the multiplexer must bind both, not just
+    the first interface it succeeds on."""
+
+    def test_binds_both_direct_bluetooth_devices(self):
+        listener = hid_gesture.HidGestureListener()
+        infos = [
+            {"product_id": 0xB023, "usage_page": 0xFF00, "usage": 0x0001,
+             "source": "hidapi-enumerate", "product_string": "MX Master 3",
+             "serial_number": "aa:bb:cc:dd:ee:01", "path": b"/dev/hidraw-a"},
+            {"product_id": 0xB035, "usage_page": 0xFF00, "usage": 0x0001,
+             "source": "hidapi-enumerate", "product_string": "MX Keys",
+             "serial_number": "aa:bb:cc:dd:ee:02", "path": b"/dev/hidraw-b"},
+        ]
+
+        def fake_find_feature(feature_id, timeout_ms=2000):
+            # Both devices answer REPROG_V4 on the direct index 0xFF only.
+            if (feature_id == hid_gesture.FEAT_REPROG_V4
+                    and listener._dev_idx == hid_gesture.BT_DEV_IDX):
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=infos),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                # A fresh handle per open(): distinct Bluetooth interfaces.
+                SimpleNamespace(device=lambda: _FakeHidDevice()),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        # Both devices bound as separate sessions on two distinct handles.
+        self.assertEqual(len(listener._sessions), 2)
+        self.assertEqual(len(listener._distinct_session_handles()), 2)
+        names = sorted(d.product_name for d in listener.connected_devices)
+        self.assertEqual(names, ["MX Keys", "MX Master 3"])
+
+    def test_skips_second_collection_of_same_bluetooth_device(self):
+        """A single BLE device exposes several 0xFF00 collections (same serial);
+        it must be bound once, not once per collection."""
+        listener = hid_gesture.HidGestureListener()
+        infos = [
+            {"product_id": 0xB023, "usage_page": 0xFF00, "usage": 0x0002,
+             "source": "hidapi-enumerate", "product_string": "MX Master 3",
+             "serial_number": "aa:bb:cc:dd:ee:01", "path": b"/dev/hidraw-a&col01"},
+            {"product_id": 0xB023, "usage_page": 0xFF00, "usage": 0x0001,
+             "source": "hidapi-enumerate", "product_string": "MX Master 3",
+             "serial_number": "aa:bb:cc:dd:ee:01", "path": b"/dev/hidraw-a&col02"},
+        ]
+
+        def fake_find_feature(feature_id, timeout_ms=2000):
+            if (feature_id == hid_gesture.FEAT_REPROG_V4
+                    and listener._dev_idx == hid_gesture.BT_DEV_IDX):
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=infos),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: _FakeHidDevice()),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertEqual(len(listener._sessions), 1)
+
+
 class HidReconnectInvariantTests(unittest.TestCase):
     def test_force_release_stale_holds_clears_gesture_and_extra_buttons(self):
         gesture_up = Mock()

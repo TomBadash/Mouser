@@ -418,8 +418,12 @@ class Backend(QObject):
         if device_type == "keyboard":
             # DPI cycling needs a mouse sensor; not applicable to keyboards.
             hidden.add("cycle_dpi")
-        else:
-            # The crown feel toggle only applies to devices with a crown.
+        # The crown feel toggle only applies to devices with a crown (the Craft),
+        # not every keyboard — a plain keyboard like the MX Keys has none. Gate on
+        # a crown_* control being present rather than on mouse-vs-keyboard.
+        has_crown = bool(supported) and any(
+            str(button).startswith("crown_") for button in supported)
+        if not has_crown:
             hidden.add("toggle_crown_smooth")
         return hidden
 

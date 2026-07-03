@@ -631,7 +631,7 @@ class Engine:
         if hg is None or getattr(hg, "connected_device", None) is None:
             return False
 
-        if saved_dpi is not None:
+        if saved_dpi is not None and getattr(hg, "dpi_supported", True):
             if not hasattr(hg, "set_dpi"):
                 replay_ok = False
             elif hg.set_dpi(saved_dpi):

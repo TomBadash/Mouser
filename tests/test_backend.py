@@ -1319,6 +1319,31 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         backend._effective_supported_buttons = ["kbd_brightness_up"]
         self.assertFalse(backend.deviceHasSmartShift)
 
+    def test_crown_toggle_hidden_for_keyboard_without_crown(self):
+        # A plain keyboard (MX Keys) has no crown, so the crown feel toggle
+        # action must not appear in its picker.
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for(
+            "keyboard", ["kbd_brightness_up", "kbd_volume_down"])
+        self.assertIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_shown_for_keyboard_with_crown(self):
+        # The Craft exposes crown_* controls, so the crown feel toggle applies.
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for(
+            "keyboard", ["crown_left", "crown_right", "kbd_volume_down"])
+        self.assertNotIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_hidden_for_mouse(self):
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for("mouse", ["middle", "mode_shift"])
+        self.assertIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_hidden_when_device_unknown(self):
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for("keyboard", None)
+        self.assertIn("toggle_crown_smooth", hidden)
+
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendLoginStartupTests(unittest.TestCase):

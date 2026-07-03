@@ -126,7 +126,14 @@ class Probe:
         self._dev.write(buf)
 
     def _rx(self, timeout_ms):
-        d = self._dev.read(64, timeout_ms)
+        # Windows refuses reads on the reserved keyboard/mouse top-level
+        # collections (UP 0x0001); hidapi surfaces that as OSError. Treat any
+        # read failure as "no data" so one un-probeable collection does not
+        # abort the whole scan — the caller just times out and moves on.
+        try:
+            d = self._dev.read(64, timeout_ms)
+        except Exception:
+            return None
         return list(d) if d else None
 
     def request(self, feat_idx, func, params, timeout_ms=900):
@@ -631,8 +638,21 @@ def keys_capture(args):
         print(f"hidapi not available: {HIDAPI_IMPORT_ERROR}", file=sys.stderr)
         return 2
 
+    # With several REPROG_V4 devices connected (e.g. an MX mouse AND an MX Keys
+    # over Bluetooth), enumeration order is arbitrary, so target the intended
+    # device explicitly: --pid selects by product id, --match by product-string
+    # substring. Otherwise the first REPROG_V4 interface wins.
+    want_pid = int(args.pid, 16) if args.pid else None
+    want_match = (args.match or "").lower()
+
     target = None
     for info in HidGestureListener._vendor_hid_infos():
+        pid = int(info.get("product_id", 0) or 0)
+        product = (info.get("product_string") or "").lower()
+        if want_pid is not None and pid != want_pid:
+            continue
+        if want_match and want_match not in product:
+            continue
         try:
             dev = open_hid(info)
         except Exception:
@@ -736,6 +756,12 @@ def main():
     ap.add_argument("--json", help="write the full report to this file")
     ap.add_argument("--keys", action="store_true",
                     help="guided per-key capture (press keys one at a time)")
+    ap.add_argument("--pid", default="",
+                    help="target only this product id (hex, e.g. 'B35B') for "
+                         "--keys, when several REPROG_V4 devices are connected")
+    ap.add_argument("--match", default="",
+                    help="target only interfaces whose product string contains "
+                         "this substring (case-insensitive) for --keys")
     ap.add_argument("--scan-devices", action="store_true",
                     help="scan all HID++ device indices behind a receiver")
     ap.add_argument("--test-shared", action="store_true",
@@ -862,6 +888,9 @@ def main():
                     else:
                         print(f"    [{c['index']:>2}] cid={c['cid']} task={c['task']} "
                               f"flags={c['flags']} [{c['flag_names']}]")
+        except Exception as exc:
+            print(f"  probe error on this interface: {exc}")
+            entry["error"] = f"probe error: {exc}"
         finally:
             try:
                 dev.close()

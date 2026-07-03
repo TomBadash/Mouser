@@ -54,6 +54,10 @@ STANDARD_KEYBOARD_KEYS = (
     {"key": "kbd_brightness_up",   "cid": 0x00C8, "label": "Brightness Up"},
     {"key": "kbd_task_view",       "cid": 0x00E0, "label": "Task View"},
     {"key": "kbd_app_switch",      "cid": 0x00FF, "label": "App Switch / Dashboard"},
+    # MX Keys' F4 exposes App Switch / Launchpad as 0x00E1 (verified on hardware)
+    # instead of the 0x00FF the Craft uses. Keep both; each keyboard advertises
+    # only the control id its firmware reports.
+    {"key": "kbd_launchpad",       "cid": 0x00E1, "label": "Launchpad / App Switch"},
     {"key": "kbd_show_desktop",    "cid": 0x006E, "label": "Show Desktop"},
     {"key": "kbd_backlight_down",  "cid": 0x00E2, "label": "Backlight Down"},
     {"key": "kbd_backlight_up",    "cid": 0x00E3, "label": "Backlight Up"},
@@ -83,12 +87,19 @@ KEYBOARD_KEY_LABELS = {k["key"]: k["label"] for k in STANDARD_KEYBOARD_KEYS}
 # The Craft is the standard key set PLUS its unique Crown dial.
 CRAFT_BUTTONS = CROWN_BUTTONS + KEYBOARD_KEY_BUTTONS
 
-# MX Keys top-row controls (no crown). Matches the keys placed on the mx_keys
-# interactive layout; keep the two in sync.
+# MX Keys top-row controls (no crown). Every standard keyboard key the device
+# actually advertises over REPROG_CONTROLS_V4 — verified on hardware with
+# tools/craft_probe.py --keys (PID 0xB35B, Bluetooth). The MX Keys exposes all
+# of STANDARD_KEYBOARD_KEYS except App Switch (0x00FF), which it does not report.
+# Matches the keys placed on the mx_keys interactive layout; keep the two in sync.
 MX_KEYS_BUTTONS = (
     "kbd_brightness_down",
     "kbd_brightness_up",
     "kbd_task_view",
+    "kbd_launchpad",
+    "kbd_show_desktop",
+    "kbd_backlight_down",
+    "kbd_backlight_up",
     "kbd_prev_track",
     "kbd_play_pause",
     "kbd_next_track",
@@ -96,6 +107,9 @@ MX_KEYS_BUTTONS = (
     "kbd_volume_down",
     "kbd_volume_up",
     "kbd_calculator",
+    "kbd_screen_capture",
+    "kbd_context_menu",
+    "kbd_screen_lock",
 )
 
 
@@ -446,6 +460,10 @@ LOGI_DEVICE_LAYOUTS = {
             _key("kbd_brightness_down", 0.1649, 0.328),
             _key("kbd_brightness_up",   0.2031, 0.328),
             _key("kbd_task_view",       0.2412, 0.328),
+            _key("kbd_launchpad",       0.2794, 0.328),
+            _key("kbd_show_desktop",    0.3176, 0.328),
+            _key("kbd_backlight_down",  0.3558, 0.328),
+            _key("kbd_backlight_up",    0.3939, 0.328),
             _key("kbd_prev_track",      0.4320, 0.328),
             _key("kbd_play_pause",      0.4701, 0.328),
             _key("kbd_next_track",      0.5083, 0.328),
@@ -453,6 +471,9 @@ LOGI_DEVICE_LAYOUTS = {
             _key("kbd_volume_down",     0.5846, 0.328),
             _key("kbd_volume_up",       0.6227, 0.328),
             _key("kbd_calculator",      0.7882, 0.332),
+            _key("kbd_screen_capture",  0.8269, 0.332),
+            _key("kbd_context_menu",    0.8655, 0.332),
+            _key("kbd_screen_lock",     0.9042, 0.332),
         ],
         note="Top-row keys remapped over HID++.",
         key_w=0.034,

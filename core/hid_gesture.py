@@ -12,6 +12,7 @@ Falls back gracefully if the package or device are unavailable.
 """
 
 import os
+import re
 import stat
 import sys
 import queue
@@ -818,12 +819,18 @@ class HidGestureListener:
         self._backlight_pref = None         # desired (enabled: bool, pct: int 0-100)
         self._pending_backlight = None      # queued live backlight change
         self._device_type = "mouse"         # current cursor device type
-        # Multiplexer: per-device sessions keyed by HID++ device-index. The flat
+        # Multiplexer: per-device sessions keyed by a unique session id. The flat
         # self._* fields above act as a transient "cursor" reused by the
         # synchronous discovery/control helpers; persistent per-device state
-        # lives in these session snapshots. See craft-multidevice notes.
-        self._sessions = {}                 # dev_idx -> snapshot dict
-        self._primary_dev_idx = None
+        # (including its owning HID handle) lives in these session snapshots.
+        # A USB receiver multiplexes several devices on one handle by
+        # device-index (1..6); direct Bluetooth devices each own a separate
+        # handle and all report on device-index 0xFF, so the session key must be
+        # handle-aware rather than the device-index. See craft-multidevice notes.
+        self._sessions = {}                 # session_key -> snapshot dict
+        self._session_key = None            # cursor's current session key
+        self._next_session_key = 0          # monotonic session-key allocator
+        self._primary_session = None        # session_key of the primary device
         self._recv_handle = None        # short HID++ handle used to enable
                                         # receiver notifications (kept open)
 
@@ -872,7 +879,7 @@ class HidGestureListener:
         # the primary session.
         if self._connected_device_info is not None:
             return self._connected_device_info
-        s = self._sessions.get(self._primary_dev_idx)
+        s = self._sessions.get(self._primary_session)
         return s.get("_connected_device_info") if s else None
 
     @property
@@ -887,16 +894,49 @@ class HidGestureListener:
 
     def _load_session_with(self, field):
         """Load the cursor with the first session whose *field* is set."""
-        for dev_idx, s in self._sessions.items():
+        for key, s in self._sessions.items():
             if s.get(field) is not None:
                 self._load_cursor(s)
-                return dev_idx
+                return key
         return None
 
     def _save_cursor_session(self):
         """Persist the current cursor back to its session."""
-        if self._dev_idx in self._sessions:
-            self._sessions[self._dev_idx] = self._snapshot_cursor()
+        if self._session_key in self._sessions:
+            self._sessions[self._session_key] = self._snapshot_cursor()
+
+    def _distinct_session_handles(self):
+        """Every open HID handle backing a session (identity de-duplicated).
+
+        A USB receiver yields a single handle shared by all its device
+        sessions; direct Bluetooth devices each contribute their own handle."""
+        handles = []
+        for s in self._sessions.values():
+            dev = s.get("_dev")
+            if dev is not None and not any(dev is h for h in handles):
+                handles.append(dev)
+        return handles
+
+    @staticmethod
+    def _physical_device_key(info):
+        """Stable identity for the physical device behind a HID interface.
+
+        Used to de-duplicate the several HID collections a single Bluetooth
+        device exposes (all sharing one serial/MAC), so we bind it once rather
+        than once per collection. Prefers the serial number (a MAC for BLE),
+        falling back to a collection-stripped device path plus PID."""
+        serial = (info.get("serial_number") or "").strip()
+        if serial:
+            return ("sn", serial.lower())
+        path = info.get("path") or b""
+        if isinstance(path, bytes):
+            path = path.decode("utf-8", "replace")
+        # Group the per-collection paths of one device: drop the trailing
+        # "&Col0N" collection suffix and the interface-GUID tail.
+        base = re.split(r"&col[0-9a-f]+", path, flags=re.IGNORECASE)[0]
+        base = base.split("#{", 1)[0]
+        pid = int(info.get("product_id", 0) or 0)
+        return ("path", pid, base.lower())
 
     def _discovered_feature_ids(self):
         feature_ids = []
@@ -1719,21 +1759,21 @@ class HidGestureListener:
             self._crown_touch_active = False
 
     def _arm_touch_timer(self):
-        # Capture the device-index so the timer resolves against the right
+        # Capture the session key so the timer resolves against the right
         # session even after the cursor has moved to another device.
-        dev_idx = self._dev_idx
+        session_key = self._session_key
         with self._crown_touch_lock:
             self._cancel_pending_touch_locked()
             self._crown_touch_pending = True
             timer = threading.Timer(
-                CROWN_TOUCH_CLICK_WINDOW_S, lambda: self._resolve_touch(dev_idx))
+                CROWN_TOUCH_CLICK_WINDOW_S, lambda: self._resolve_touch(session_key))
             timer.daemon = True
             self._crown_touch_timer = timer
             timer.start()
 
-    def _resolve_touch(self, dev_idx=None):
+    def _resolve_touch(self, session_key=None):
         with self._crown_touch_lock:
-            state = self._sessions.get(dev_idx) if dev_idx is not None else None
+            state = self._sessions.get(session_key) if session_key is not None else None
             if state is not None:
                 if not state.get("_crown_touch_pending") or state.get("_crown_pressed"):
                     return
@@ -1856,6 +1896,16 @@ class HidGestureListener:
             return any(s.get("_smart_shift_idx") is not None
                        for s in self._sessions.values())
         return self._smart_shift_idx is not None
+
+    @property
+    def dpi_supported(self):
+        # True when any bound device exposes Adjustable DPI (a mouse). A
+        # keyboard-only session has no DPI feature, so a saved DPI value must
+        # not be replayed against it (and its absence is not a failure).
+        if self._sessions:
+            return any(s.get("_dpi_idx") is not None
+                       for s in self._sessions.values())
+        return self._dpi_idx is not None
 
     @property
     def backlight_supported(self):
@@ -2127,9 +2177,10 @@ class HidGestureListener:
                         except Exception:
                             pass
             if s is not None and changed:
-                self._sessions[self._dev_idx] = self._snapshot_cursor()
+                self._sessions[self._session_key] = self._snapshot_cursor()
 
     _CURSOR_FIELDS = (
+        "_dev", "_session_key",
         "_dev_idx", "_feat_idx", "_dpi_idx", "_smart_shift_idx",
         "_smart_shift_enhanced", "_battery_idx", "_battery_feature_id",
         "_wheel_feature_indexes", "_crown_idx", "_gesture_cid",
@@ -2155,17 +2206,32 @@ class HidGestureListener:
             return
         dev_idx, feat, func, _sw, params = msg
         if self._sessions:
-            session = self._sessions.get(dev_idx)
-            if session is None:
-                return  # report from a device-index we are not managing
-            self._load_cursor(session)
+            key = self._route_session_key(dev_idx)
+            if key is None:
+                return  # report from a device we are not managing
+            self._load_cursor(self._sessions[key])
             try:
                 self._process_report(feat, func, params)
             finally:
-                self._sessions[dev_idx] = self._snapshot_cursor()
+                self._sessions[key] = self._snapshot_cursor()
             return
         # During connect (no sessions yet) process against the live cursor.
         self._process_report(feat, func, params)
+
+    def _route_session_key(self, dev_idx):
+        """Session key for an incoming report's device-index.
+
+        Bluetooth devices all report on device-index 0xFF, so the handle the
+        report was read from (self._dev) disambiguates them; a USB receiver
+        instead shares one handle across device-indexes 1..6. Match on both
+        handle and device-index first, then fall back to device-index alone."""
+        for key, s in self._sessions.items():
+            if s.get("_dev_idx") == dev_idx and s.get("_dev") is self._dev:
+                return key
+        for key, s in self._sessions.items():
+            if s.get("_dev_idx") == dev_idx:
+                return key
+        return None
 
     def _process_report(self, feat, func, params):
         """Process a parsed report against the current cursor device state."""
@@ -2279,10 +2345,13 @@ class HidGestureListener:
         }
 
     def _try_connect(self):
-        """Open the vendor HID collection, discover features, divert. Binds ALL
-        HID++ devices behind a receiver as per-device sessions (multiplexer)."""
+        """Open the vendor HID collection(s), discover features, divert. Binds
+        ALL HID++ devices as per-device sessions (multiplexer): every device on
+        a USB receiver's single handle, plus each direct Bluetooth device on its
+        own handle."""
         self._sessions = {}
-        self._primary_dev_idx = None
+        self._primary_session = None
+        self._next_session_key = 0
         infos = self._vendor_hid_infos()
         if not infos:
             return False
@@ -2322,12 +2391,22 @@ class HidGestureListener:
                   f"usage=0x{usage:04X} transport={transport or '-'} "
                   f"source={source} product={product} path={path or '-'}")
 
+        # Direct (Bluetooth) devices already bound via one of their HID
+        # collections; skip their remaining collections so a device is not bound
+        # twice (each BLE device exposes several 0xFF00 collections).
+        bound_direct_keys = set()
         for info in infos:
             pid = info.get("product_id", 0)
             up = info.get("usage_page", 0)
             usage = info.get("usage", 0)
             product = info.get("product_string")
             source = info.get("source", "unknown")
+            is_receiver = "receiver" in (product or "").lower()
+            phys_key = None
+            if not is_receiver:
+                phys_key = self._physical_device_key(info)
+                if phys_key in bound_direct_keys:
+                    continue  # this direct device is already bound
             device_spec = resolve_device(product_id=pid, product_name=product)
             self._feat_idx = None
             self._dpi_idx = None
@@ -2420,7 +2499,6 @@ class HidGestureListener:
             # (Bluetooth) device answers only on 0xFF. Prefer probing just the
             # slots the receiver announces, so we neither stall on empty slots
             # nor miss an idle device that needs a longer wake timeout.
-            is_receiver = "receiver" in (product or "").lower()
             if is_receiver:
                 announced = self._discover_receiver_slots()
                 scan_slots = tuple(announced) if announced else (1, 2, 3, 4, 5, 6)
@@ -2432,6 +2510,7 @@ class HidGestureListener:
                 scan_timeout = 2000
             reprog_found = False
             hidpp_name = None
+            sessions_before = len(self._sessions)
             for idx in scan_slots:
                 self._dev_idx = idx
                 fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=scan_timeout)
@@ -2568,11 +2647,14 @@ class HidGestureListener:
                         self._device_type = (
                             self._connected_device_info.device_type
                         )
-                        # Save this device as a session and keep scanning the
-                        # remaining slots for more devices on the same receiver.
-                        self._sessions[idx] = self._snapshot_cursor()
-                        if self._primary_dev_idx is None:
-                            self._primary_dev_idx = idx
+                        # Save this device under a unique session key (device
+                        # indexes are not unique across Bluetooth handles, which
+                        # all report on 0xFF) and keep scanning for more devices.
+                        self._session_key = self._next_session_key
+                        self._next_session_key += 1
+                        self._sessions[self._session_key] = self._snapshot_cursor()
+                        if self._primary_session is None:
+                            self._primary_session = self._session_key
                         print(f"[HidGesture] Bound {self._device_type} "
                               f"'{hidpp_name or product}' @devIdx=0x{idx:02X} "
                               f"transport={actual_transport} "
@@ -2582,24 +2664,23 @@ class HidGestureListener:
                             # A Bluetooth HID interface represents exactly one
                             # device; additional Bluetooth keyboards/mice surface
                             # as separate interfaces handled by the outer
-                            # candidate loop, so this is not a global BT limit.
+                            # candidate loop below.
                             break
                         continue
                     continue     # divert failed — try next receiver slot
 
-            # Bound at least one device on this interface → use it.
-            if self._sessions:
-                self._dev_idx = self._primary_dev_idx
-                if self._primary_dev_idx in self._sessions:
-                    self._load_cursor(self._sessions[self._primary_dev_idx])
-                self._consecutive_request_timeouts = 0
-                bound = ", ".join(
-                    f"0x{i:02X}:{s.get('_device_type', '?')}"
-                    for i, s in sorted(self._sessions.items())
-                )
-                print(f"[HidGesture] Bound {len(self._sessions)} device(s) on "
-                      f"this interface [{bound}] primary=0x{self._primary_dev_idx:02X}")
-                return True
+            bound_this_iface = len(self._sessions) > sessions_before
+            if bound_this_iface:
+                if is_receiver:
+                    # A receiver multiplexes all its devices on this one handle;
+                    # its remaining collections would only rediscover the same
+                    # devices, so stop scanning candidates.
+                    break
+                # A direct device keeps its own handle open and we keep scanning
+                # the remaining candidates for additional Bluetooth devices.
+                if phys_key is not None:
+                    bound_direct_keys.add(phys_key)
+                continue
 
             if not reprog_found:
                 print(
@@ -2615,6 +2696,20 @@ class HidGestureListener:
             except Exception:
                 pass
             self._dev = None
+
+        # Activate the primary device's cursor/handle; the main loop then polls
+        # every distinct session handle (receiver handle + each Bluetooth one).
+        if self._sessions:
+            self._load_cursor(self._sessions[self._primary_session])
+            self._consecutive_request_timeouts = 0
+            bound = ", ".join(
+                f"{s.get('_device_type', '?')}@0x{int(s.get('_dev_idx', 0) or 0):02X}"
+                for s in self._sessions.values()
+            )
+            print(f"[HidGesture] Bound {len(self._sessions)} device(s) across "
+                  f"{len(self._distinct_session_handles())} handle(s) "
+                  f"[{bound}] primary={self._primary_session}")
+            return True
 
         return False
 
@@ -2676,10 +2771,23 @@ class HidGestureListener:
                         else:
                             self._apply_pending_read_battery()
                     self._poll_receiver_notifications()
-                    raw = self._rx(1000)
-                    if raw:
+                    # Poll every distinct session handle. A USB receiver has a
+                    # single handle; multiple direct Bluetooth devices each have
+                    # their own, so we read from each in turn and let _on_report
+                    # route by handle. Split the ~1s budget across handles.
+                    handles = self._distinct_session_handles()
+                    if not handles and self._dev is not None:
+                        handles = [self._dev]
+                    per_handle_ms = max(50, 1000 // max(1, len(handles)))
+                    got_data = False
+                    for handle in handles:
+                        self._dev = handle
+                        raw = self._rx(per_handle_ms)
+                        if raw:
+                            got_data = True
+                            self._on_report(raw)
+                    if got_data:
                         _no_data_count = 0
-                        self._on_report(raw)
                     else:
                         _no_data_count += 1
                         # Force-release buttons stuck in held state when the
@@ -2712,11 +2820,22 @@ class HidGestureListener:
                             except Exception:
                                 pass
                 self._cancel_pending_touch()
+            # Close every distinct session handle (receiver + each Bluetooth
+            # device), then drop the sessions.
+            session_handles = self._distinct_session_handles()
             self._sessions = {}
-            self._primary_dev_idx = None
+            self._primary_session = None
+            self._session_key = None
             self._close_recv_handle()
+            for handle in session_handles:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             try:
-                if self._dev:
+                if self._dev is not None and not any(
+                    self._dev is h for h in session_handles
+                ):
                     self._dev.close()
             except Exception:
                 pass

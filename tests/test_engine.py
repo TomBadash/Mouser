@@ -292,14 +292,16 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
     def _non_battery_threads(instances):
         return [thread for thread in instances if thread.name != "BatteryPoll"]
 
-    def _make_hid(self, *, connected_device=None, dpi_result=True, smart_shift_result=True):
+    def _make_hid(self, *, connected_device=None, dpi_result=True, smart_shift_result=True,
+                  dpi_supported=True, smart_shift_supported=True):
         return SimpleNamespace(
             connected_device=connected_device,
             read_battery=Mock(return_value=None),
             read_all_batteries=Mock(return_value={}),
             set_dpi=Mock(return_value=dpi_result),
             set_smart_shift=Mock(return_value=smart_shift_result),
-            smart_shift_supported=True,
+            dpi_supported=dpi_supported,
+            smart_shift_supported=smart_shift_supported,
         )
 
     def test_hid_ready_transition_requests_replay_worker(self):
@@ -496,6 +498,38 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
                 "could not be restored" in message.lower()
                 for message in status_messages
             ),
+            status_messages,
+        )
+
+    def test_keyboard_only_reconnect_does_not_emit_failure_status(self):
+        # A keyboard exposes neither Adjustable DPI nor Smart Shift, so saved
+        # mouse settings must be skipped rather than counted as a failed replay
+        # (which would surface the misleading "Mouse reconnected…" message).
+        engine = self._make_engine()
+        status_messages = []
+        engine.set_status_callback(status_messages.append)
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=None,
+            dpi_result=False,
+            smart_shift_result=False,
+            dpi_supported=False,
+            smart_shift_supported=False,
+        )
+        threads = []
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._on_connection_change(True)
+            engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Keys")
+            engine._on_connection_change(True)
+
+        replay_threads = self._non_battery_threads(threads)
+        self.assertEqual(len(replay_threads), 1)
+        replay_threads[0].run_target()
+
+        engine.hook._hid_gesture.set_dpi.assert_not_called()
+        engine.hook._hid_gesture.set_smart_shift.assert_not_called()
+        self.assertFalse(
+            any("could not be restored" in message.lower() for message in status_messages),
             status_messages,
         )
 
