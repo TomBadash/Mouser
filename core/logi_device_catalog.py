@@ -11,7 +11,8 @@ from __future__ import annotations
 
 MX_ANYWHERE_BUTTONS = (
     "middle",
-    "gesture",
+    "gesture_release",
+    "gesture_press",
     "gesture_left",
     "gesture_right",
     "gesture_up",
@@ -374,7 +375,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-90,
             ),
             _hotspot(
-                "gesture",
+                "gesture_release",
                 "Gesture button",
                 "gesture",
                 0.386,
@@ -444,7 +445,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-10,
             ),
             _hotspot(
-                "gesture",
+                "gesture_release",
                 "Gesture button",
                 "gesture",
                 0.08,
@@ -514,7 +515,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-10,
             ),
             _hotspot(
-                "gesture",
+                "gesture_release",
                 "Gesture button",
                 "gesture",
                 0.08,
@@ -584,7 +585,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-30,
             ),
             _hotspot(
-                "gesture",
+                "gesture_release",
                 "Gesture button",
                 "gesture",
                 0.13,
@@ -654,7 +655,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-30,
             ),
             _hotspot(
-                "gesture",
+                "gesture_release",
                 "Gesture button",
                 "gesture",
                 0.13,

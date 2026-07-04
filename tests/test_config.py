@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -52,6 +52,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["settings"]["gesture_deadzone"], 40)
         self.assertEqual(migrated["settings"]["gesture_timeout_ms"], 3000)
         self.assertEqual(migrated["settings"]["gesture_cooldown_ms"], 500)
+        self.assertTrue(migrated["settings"]["gesture_lock_cursor"])
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
@@ -62,8 +63,12 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertNotIn("start_with_windows", migrated["settings"])
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"], "none"
+            migrated["profiles"]["default"]["mappings"]["gesture_release"], "none"
         )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture_press"], "none"
+        )
+        self.assertNotIn("gesture", migrated["profiles"]["default"]["mappings"])
         for key in config.GESTURE_DIRECTION_BUTTONS:
             self.assertEqual(
                 migrated["profiles"]["default"]["mappings"][key], "none"
@@ -89,7 +94,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -132,10 +137,11 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 9)
+        self.assertEqual(loaded["version"], 10)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
+        self.assertTrue(loaded["settings"]["gesture_lock_cursor"])
         self.assertEqual(loaded["settings"]["appearance_mode"], "system")
         self.assertFalse(loaded["settings"]["debug_mode"])
         self.assertEqual(loaded["settings"]["device_layout_overrides"], {})
@@ -150,6 +156,9 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
         )
+        self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["gesture_press"], "none"
+        )
 
     def test_migrate_renames_start_with_windows_to_start_at_login(self):
         legacy = {
@@ -160,11 +169,75 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 10)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
+        )
+
+    def test_migrate_preserves_existing_gesture_lock_cursor_setting(self):
+        legacy = {
+            "version": 9,
+            "profiles": {"default": {"apps": [], "mappings": {}}},
+            "settings": {"gesture_lock_cursor": False},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertFalse(migrated["settings"]["gesture_lock_cursor"])
+
+    def test_default_config_locks_cursor_during_swipes(self):
+        self.assertTrue(config.DEFAULT_CONFIG["settings"]["gesture_lock_cursor"])
+
+    def test_gesture_press_maps_to_down_and_up_events(self):
+        self.assertEqual(
+            config.BUTTON_TO_EVENTS["gesture_press"],
+            ("gesture_down", "gesture_up"),
+        )
+        self.assertEqual(
+            config.BUTTON_TO_EVENTS["gesture_release"],
+            ("gesture_click",),
+        )
+
+    def test_migrate_v9_renames_gesture_to_gesture_release_preserving_value(self):
+        legacy = {
+            "version": 9,
+            "profiles": {
+                "default": {
+                    "apps": [],
+                    "mappings": {"gesture": "browser_back"},
+                }
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertEqual(migrated["version"], 10)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture_release"],
+            "browser_back",
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture_press"], "none"
+        )
+        self.assertNotIn("gesture", migrated["profiles"]["default"]["mappings"])
+
+    def test_migrate_v9_without_gesture_key_gets_defaults(self):
+        legacy = {
+            "version": 9,
+            "profiles": {"default": {"apps": [], "mappings": {}}},
+            "settings": {},
+        }
+
+        migrated = config._migrate(legacy)
+
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture_release"], "none"
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture_press"], "none"
         )
 
     def test_get_profile_for_app_matches_aliases(self):

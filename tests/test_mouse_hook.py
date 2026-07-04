@@ -34,13 +34,15 @@ class _FakeEvdevDevice:
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 want_raw_xy=True):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
+        self.want_raw_xy = want_raw_xy
         self.connected_device = None
         self.started = False
         self.stopped = False
@@ -51,6 +53,9 @@ class _CapturingListener:
 
     def stop(self):
         self.stopped = True
+
+    def set_raw_xy_wanted(self, want_raw_xy):
+        self.want_raw_xy = bool(want_raw_xy)
 
 
 class _FakeLinuxEcodes:
@@ -135,6 +140,72 @@ class BaseMouseHookDispatchQueueTests(unittest.TestCase):
 
         hook._debug_callback.assert_called_once()
         self.assertIn("Dropped event due to full dispatch queue", hook._debug_callback.call_args[0][0])
+
+
+class BaseMouseHookGestureRawXyTests(unittest.TestCase):
+    """Tests for the "lock cursor during swipes" wiring (raw XY divert)."""
+
+    def test_wants_raw_xy_when_swipes_enabled_or_lock_cursor_disabled(self):
+        hook = BaseMouseHook()
+
+        # No swipes configured and cursor stays locked (native/frozen
+        # behavior): no need to divert raw movement data at all.
+        hook.configure_gestures(enabled=False, lock_cursor=True)
+        self.assertFalse(hook._wants_gesture_raw_xy())
+
+        # Swipes need the raw deltas to detect direction.
+        hook.configure_gestures(enabled=True, lock_cursor=True)
+        self.assertTrue(hook._wants_gesture_raw_xy())
+
+        # Cursor unlocked: raw deltas are needed to replay as synthetic
+        # movement, even with no swipe actions configured.
+        hook.configure_gestures(enabled=False, lock_cursor=False)
+        self.assertTrue(hook._wants_gesture_raw_xy())
+
+        # Both swipes and movement replay want the same raw data.
+        hook.configure_gestures(enabled=True, lock_cursor=False)
+        self.assertTrue(hook._wants_gesture_raw_xy())
+
+    def test_wants_gesture_movement_injection_mirrors_lock_cursor(self):
+        hook = BaseMouseHook()
+
+        hook.configure_gestures(enabled=True, lock_cursor=True)
+        self.assertFalse(hook._wants_gesture_movement_injection())
+
+        hook.configure_gestures(enabled=True, lock_cursor=False)
+        self.assertTrue(hook._wants_gesture_movement_injection())
+
+    def test_configure_gestures_defaults_lock_cursor_to_true(self):
+        hook = BaseMouseHook()
+        hook.configure_gestures(enabled=True)
+        self.assertTrue(hook.gesture_lock_cursor)
+        self.assertTrue(hook._wants_gesture_raw_xy())
+        self.assertFalse(hook._wants_gesture_movement_injection())
+
+    def test_configure_gestures_pushes_change_to_running_listener(self):
+        hook = BaseMouseHook()
+        hook.configure_gestures(enabled=False, lock_cursor=True)
+        fake_listener = Mock()
+        hook._hid_gesture = fake_listener
+
+        hook.configure_gestures(enabled=False, lock_cursor=False)
+
+        fake_listener.set_raw_xy_wanted.assert_called_once_with(True)
+
+    def test_start_hid_listener_passes_initial_want_raw_xy(self):
+        hook = BaseMouseHook()
+        hook.configure_gestures(enabled=False, lock_cursor=True)
+
+        class _FakePlatformModule:
+            HidGestureListener = _CapturingListener
+
+        hook.__class__._platform_module = _FakePlatformModule
+        try:
+            listener = hook._start_hid_listener()
+        finally:
+            del hook.__class__._platform_module
+
+        self.assertFalse(listener.want_raw_xy)
 
 
 class LinuxMouseHookReconnectTests(unittest.TestCase):
@@ -725,6 +796,48 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
         hook._on_hid_mode_shift_down()
 
         hook._dispatch.assert_called_once()
+
+    def test_hid_gesture_dispatches_press_release_and_tap(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook._ui_passthrough = False
+        seen = []
+        hook.register(module.MouseEvent.GESTURE_DOWN, lambda event: seen.append(event.event_type))
+        hook.register(module.MouseEvent.GESTURE_UP, lambda event: seen.append(event.event_type))
+        hook.register(module.MouseEvent.GESTURE_CLICK, lambda event: seen.append(event.event_type))
+
+        hook._on_hid_gesture_down()
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(
+            seen,
+            [
+                module.MouseEvent.GESTURE_DOWN,
+                module.MouseEvent.GESTURE_UP,
+                module.MouseEvent.GESTURE_CLICK,
+            ],
+        )
+
+    def test_hid_gesture_swipe_skips_tap_but_still_releases(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook._ui_passthrough = False
+        seen = []
+        hook.register(module.MouseEvent.GESTURE_DOWN, lambda event: seen.append(event.event_type))
+        hook.register(module.MouseEvent.GESTURE_UP, lambda event: seen.append(event.event_type))
+        hook.register(module.MouseEvent.GESTURE_CLICK, lambda event: seen.append(event.event_type))
+
+        hook._on_hid_gesture_down()
+        hook._gesture_triggered = True
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(
+            seen,
+            [
+                module.MouseEvent.GESTURE_DOWN,
+                module.MouseEvent.GESTURE_UP,
+            ],
+        )
 
     def test_gesture_click_callback_fires_again_after_reconnect(self):
         module = self._reload_for_linux()

@@ -4,6 +4,8 @@ Supports Windows (SendInput API) and macOS (Quartz CGEvent / NSEvent).
 """
 
 import os
+import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -149,6 +151,98 @@ def _parse_custom_combo(action_id, key_name_to_code):
 
 
 # ==================================================================
+# Run-command helpers (shared across platforms)
+# ==================================================================
+
+RUN_COMMAND_PREFIX = "run:"
+_RUN_COMMAND_LABEL_MAX_LEN = 40
+
+
+def is_run_command_action(action_id):
+    return isinstance(action_id, str) and action_id.startswith(RUN_COMMAND_PREFIX)
+
+
+def run_command_text(action_id):
+    """Extract the raw command line from a 'run:<command>' action id."""
+    if not is_run_command_action(action_id):
+        return ""
+    return action_id[len(RUN_COMMAND_PREFIX):]
+
+
+def run_command_label(action_id):
+    """Convert 'run:notepad.exe' -> 'Run: notepad.exe' for display."""
+    command = run_command_text(action_id).strip()
+    if not command:
+        return action_id
+    if len(command) > _RUN_COMMAND_LABEL_MAX_LEN:
+        command = command[:_RUN_COMMAND_LABEL_MAX_LEN - 1] + "\u2026"
+    return f"Run: {command}"
+
+
+def _strip_matching_quotes(token):
+    """Remove a single pair of surrounding quotes left by non-POSIX shlex."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
+
+
+def parse_run_command(command, platform_name=None):
+    """Split a run-command string into an argv list.
+
+    Windows paths use backslashes (which POSIX shlex would treat as escape
+    characters) but Windows-style quoting still needs to group multi-word
+    arguments, so Windows uses non-POSIX splitting and then strips the
+    surrounding quote characters ``shlex`` leaves behind in that mode.
+    macOS/Linux use standard POSIX shell splitting.
+    """
+    platform_name = platform_name or sys.platform
+    if platform_name == "win32":
+        tokens = shlex.split(command, posix=False)
+        return [_strip_matching_quotes(t) for t in tokens]
+    return shlex.split(command, posix=True)
+
+
+def execute_run_command(action_id):
+    """Launch a user-configured command line.
+
+    The command is split into an argv list with ``shlex`` and always
+    launched with ``shell=False`` -- it is never handed to a shell for
+    interpretation, so shell operators (``|``, ``&&``, ``>``, ...) in the
+    text are treated as literal arguments rather than executed. The
+    process is detached (no pipes to wait on) and spawned on a worker
+    thread so a slow-to-start program never blocks the mouse hook.
+    """
+    command = run_command_text(action_id).strip()
+    if not command:
+        return
+    try:
+        argv = parse_run_command(command)
+    except ValueError as exc:
+        print(f"[KeySimulator] run command '{command}' could not be parsed: {exc}")
+        return
+    if not argv:
+        return
+
+    def _launch():
+        try:
+            popen_kwargs = {}
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                **popen_kwargs,
+            )
+        except Exception as exc:
+            print(f"[KeySimulator] run command '{command}' failed: {exc}")
+
+    threading.Thread(target=_launch, daemon=True, name="RunCommand").start()
+
+
+# ==================================================================
 # Windows implementation
 # ==================================================================
 
@@ -277,6 +371,7 @@ if sys.platform == "win32":
     MOUSEEVENTF_MIDDLEUP   = 0x0040
     MOUSEEVENTF_XDOWN      = 0x0080
     MOUSEEVENTF_XUP        = 0x0100
+    MOUSEEVENTF_MOVE   = 0x0001
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
 
@@ -349,6 +444,27 @@ if sys.platform == "win32":
         arr = (INPUT * 1)(inp)
         SendInput(1, arr, sizeof(INPUT))
 
+    def inject_mouse_move(dx, dy):
+        """Inject relative cursor movement.
+
+        The gesture button on Logitech mice with a dedicated gesture sensor
+        (e.g. MX Master) suppresses normal cursor movement at the firmware
+        level while held, independent of any HID++ divert configuration.
+        The raw sensor deltas are still available over HID++ though, so we
+        replay them here as synthetic relative movement to keep the cursor
+        moving for users who don't want it to freeze during a gesture hold.
+        """
+        try:
+            inp = INPUT()
+            inp.type = INPUT_MOUSE
+            inp.union.mi.dx = int(dx)
+            inp.union.mi.dy = int(dy)
+            inp.union.mi.dwFlags = MOUSEEVENTF_MOVE
+            arr = (INPUT * 1)(inp)
+            SendInput(1, arr, sizeof(INPUT))
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_move EXCEPTION: {exc}")
+
     # VKs that require the KEYEVENTF_EXTENDEDKEY flag in SendInput
     _EXTENDED_VKS = frozenset({
         VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_BROWSER_REFRESH,
@@ -385,6 +501,24 @@ if sys.platform == "win32":
 
     def send_key_press(vk):
         send_key_combo([vk])
+
+    def send_key_down(keys):
+        """Press and hold a combination of VKs, without releasing them."""
+        inputs = [
+            _make_key_input(vk, KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0)
+            for vk in keys
+        ]
+        arr = (INPUT * len(inputs))(*inputs)
+        SendInput(len(inputs), arr, sizeof(INPUT))
+
+    def send_key_up(keys):
+        """Release a combination of VKs previously pressed with send_key_down."""
+        inputs = [
+            _make_key_input(vk, KEYEVENTF_KEYUP | (KEYEVENTF_EXTENDEDKEY if _is_extended(vk) else 0))
+            for vk in reversed(keys)
+        ]
+        arr = (INPUT * len(inputs))(*inputs)
+        SendInput(len(inputs), arr, sizeof(INPUT))
 
     def _send_phased_alt_arrow(arrow_vk, hold_ms=50):
         # Some Chromium-based browsers silently drop batched VK-only SendInput chords;
@@ -645,6 +779,44 @@ if sys.platform == "win32":
         "nexttrack": VK_MEDIA_NEXT_TRACK, "prevtrack": VK_MEDIA_PREV_TRACK,
     })
 
+    def _resolve_holdable_keys(action_id):
+        """Return the VK list for an action if it can be held down/up in
+        step with a physical button, or None if it can only be tapped
+        (e.g. multi-tap zoom, screenshots, run commands)."""
+        if action_id.startswith("custom:"):
+            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE) or None
+        if action_id in _BROWSER_NAV_ARROW:
+            return None  # phased tap sequence — browsers expect a discrete press
+        action = ACTIONS.get(action_id)
+        if action and action.get("keys"):
+            return list(action["keys"])
+        return None
+
+    def is_holdable_key_action(action_id):
+        """Whether the action is a plain key/shortcut that can be held
+        down for as long as a button stays pressed."""
+        return _resolve_holdable_keys(action_id) is not None
+
+    def press_action_down(action_id):
+        """Press and hold whatever keys the action maps to."""
+        try:
+            keys = _resolve_holdable_keys(action_id)
+            if keys:
+                print(f"[KeySimulator] press_action_down({action_id})")
+                send_key_down(keys)
+        except Exception as exc:
+            print(f"[KeySimulator] press_action_down EXCEPTION: {exc}")
+
+    def press_action_up(action_id):
+        """Release keys previously held by press_action_down for this action."""
+        try:
+            keys = _resolve_holdable_keys(action_id)
+            if keys:
+                print(f"[KeySimulator] press_action_up({action_id})")
+                send_key_up(keys)
+        except Exception as exc:
+            print(f"[KeySimulator] press_action_up EXCEPTION: {exc}")
+
     def execute_action(action_id):
         try:
             print(f"[KeySimulator] execute_action({action_id})")
@@ -652,6 +824,9 @@ if sys.platform == "win32":
                 keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
                 if keys:
                     send_key_combo(keys)
+                return
+            if is_run_command_action(action_id):
+                execute_run_command(action_id)
                 return
             if is_mouse_button_action(action_id):
                 print(f"[KeySimulator] execute_action: mouse click for {action_id}")
@@ -774,6 +949,30 @@ elif sys.platform == "darwin":
                 pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
+    def inject_mouse_move(dx, dy):
+        """Inject relative cursor movement on macOS using CGEvent.
+
+        The gesture button suppresses normal cursor movement at the
+        firmware level while held; this replays the raw sensor deltas
+        (still available over HID++) as a synthetic mouse-moved event so
+        the cursor keeps tracking.
+        """
+        if not _QUARTZ_OK:
+            return
+        try:
+            current = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+            new_point = Quartz.CGPointMake(current.x + dx, current.y + dy)
+            event = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventMouseMoved, new_point, Quartz.kCGMouseButtonLeft
+            )
+            if event:
+                Quartz.CGEventSetIntegerValueField(
+                    event, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+                )
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        except Exception as exc:
+            print(f"[KeySimulator] inject_mouse_move EXCEPTION: {exc}")
+
     # Mouse button simulation
     # CGEvent mouse button constants
     _MAC_MOUSE_ACTIONS = frozenset({
@@ -872,6 +1071,27 @@ elif sys.platform == "darwin":
 
     def send_key_press(vk):
         send_key_combo([vk])
+
+    def send_key_down(keys):
+        """Press and hold a combination of CGKeyCodes, without releasing them."""
+        if not _QUARTZ_OK:
+            return
+        flags = 0
+        for k in keys:
+            flags |= _MOD_FLAGS.get(k, 0)
+        for k in keys:
+            ev = Quartz.CGEventCreateKeyboardEvent(None, k, True)
+            if flags:
+                Quartz.CGEventSetFlags(ev, flags)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+    def send_key_up(keys):
+        """Release CGKeyCodes previously pressed with send_key_down."""
+        if not _QUARTZ_OK:
+            return
+        for k in reversed(keys):
+            ev = Quartz.CGEventCreateKeyboardEvent(None, k, False)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def _send_media_key(key_id):
         """Send a media key event via NSEvent (Fn-key based)."""
@@ -1012,6 +1232,14 @@ elif sys.platform == "darwin":
         if action_id == "space_right":
             return _post_symbolic_hotkey(_SYMBOLIC_HOTKEY_SPACE_RIGHT)
         return False
+
+    # Action ids handled specially above (multi-tap zoom, dock/space
+    # notifications) — these are discrete gestures, not something that
+    # makes sense to hold down/up.
+    _MAC_SPECIAL_ACTION_IDS = frozenset({
+        "zoom_in", "zoom_out", "mission_control", "app_expose",
+        "show_desktop", "launchpad", "space_left", "space_right",
+    })
 
     ACTIONS = {
         "alt_tab": {
@@ -1285,11 +1513,44 @@ elif sys.platform == "darwin":
         "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
     })
 
+    def _resolve_holdable_keys(action_id):
+        """Return the CGKeyCode list for an action if it can be held
+        down/up in step with a physical button, or None if it can only be
+        tapped (e.g. multi-tap zoom, dock gestures, media keys)."""
+        if action_id.startswith("custom:"):
+            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE) or None
+        if action_id in _MAC_SPECIAL_ACTION_IDS:
+            return None
+        action = ACTIONS.get(action_id)
+        if action and action.get("mac_fn") is None and action.get("keys"):
+            return list(action["keys"])
+        return None
+
+    def is_holdable_key_action(action_id):
+        """Whether the action is a plain key/shortcut that can be held
+        down for as long as a button stays pressed."""
+        return _resolve_holdable_keys(action_id) is not None
+
+    def press_action_down(action_id):
+        """Press and hold whatever keys the action maps to."""
+        keys = _resolve_holdable_keys(action_id)
+        if keys:
+            send_key_down(keys)
+
+    def press_action_up(action_id):
+        """Release keys previously held by press_action_down for this action."""
+        keys = _resolve_holdable_keys(action_id)
+        if keys:
+            send_key_up(keys)
+
     def execute_action(action_id):
         if action_id.startswith("custom:"):
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if is_run_command_action(action_id):
+            execute_run_command(action_id)
             return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
@@ -1389,6 +1650,8 @@ elif sys.platform == "linux":
 
     EV_KEY = 1
     EV_REL = 2
+    REL_X = 0
+    REL_Y = 1
     REL_WHEEL = 8
     REL_HWHEEL = 6
 
@@ -1452,6 +1715,24 @@ elif sys.platform == "linux":
     def send_key_press(vk):
         send_key_combo([vk])
 
+    def send_key_down(keys):
+        """Press and hold a combination of key codes, without releasing them."""
+        kbd = _get_virtual_kbd()
+        if not kbd:
+            return
+        for key in keys:
+            kbd.write(EV_KEY, key, 1)
+            kbd.syn()
+
+    def send_key_up(keys):
+        """Release key codes previously pressed with send_key_down."""
+        kbd = _get_virtual_kbd()
+        if not kbd:
+            return
+        for key in reversed(keys):
+            kbd.write(EV_KEY, key, 0)
+            kbd.syn()
+
     def inject_scroll(flags, delta):
         kbd = _get_virtual_kbd()
         if not kbd:
@@ -1462,6 +1743,22 @@ elif sys.platform == "linux":
         else:
             detents = delta // 120 if abs(delta) >= 120 else (1 if delta > 0 else -1)
             kbd.write(EV_REL, REL_HWHEEL, detents)
+        kbd.syn()
+
+    def inject_mouse_move(dx, dy):
+        """Inject relative cursor movement on Linux via the virtual uinput device.
+
+        The gesture button suppresses normal cursor movement at the
+        firmware level while held; this replays the raw sensor deltas
+        (still available over HID++) so the cursor keeps tracking.
+        """
+        kbd = _get_virtual_kbd()
+        if not kbd:
+            return
+        if dx:
+            kbd.write(EV_REL, REL_X, int(dx))
+        if dy:
+            kbd.write(EV_REL, REL_Y, int(dy))
         kbd.syn()
 
     def inject_mouse_down(action_id):
@@ -1729,11 +2026,41 @@ elif sys.platform == "linux":
     })
     _ALL_KEY_CODES = sorted(set(_ALL_KEY_CODES) | set(_KEY_NAME_TO_CODE.values()))
 
+    def _resolve_holdable_keys(action_id):
+        """Return the key-code list for an action if it can be held
+        down/up in step with a physical button, or None otherwise."""
+        if action_id.startswith("custom:"):
+            return _parse_custom_combo(action_id, _KEY_NAME_TO_CODE) or None
+        action = ACTIONS.get(action_id)
+        if action and action.get("keys"):
+            return list(action["keys"])
+        return None
+
+    def is_holdable_key_action(action_id):
+        """Whether the action is a plain key/shortcut that can be held
+        down for as long as a button stays pressed."""
+        return _resolve_holdable_keys(action_id) is not None
+
+    def press_action_down(action_id):
+        """Press and hold whatever keys the action maps to."""
+        keys = _resolve_holdable_keys(action_id)
+        if keys:
+            send_key_down(keys)
+
+    def press_action_up(action_id):
+        """Release keys previously held by press_action_down for this action."""
+        keys = _resolve_holdable_keys(action_id)
+        if keys:
+            send_key_up(keys)
+
     def execute_action(action_id):
         if action_id.startswith("custom:"):
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if is_run_command_action(action_id):
+            execute_run_command(action_id)
             return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
@@ -1756,8 +2083,14 @@ else:
     MOUSEEVENTF_HWHEEL = 0x01000
 
     def inject_scroll(flags, delta): pass
+    def inject_mouse_move(dx, dy): pass
     def send_key_combo(keys, hold_ms=50): pass
     def send_key_press(vk): pass
+    def send_key_down(keys): pass
+    def send_key_up(keys): pass
+    def is_holdable_key_action(action_id): return False
+    def press_action_down(action_id): pass
+    def press_action_up(action_id): pass
     def execute_action(action_id): pass
     def inject_mouse_down(action_id): pass
     def inject_mouse_up(action_id): pass

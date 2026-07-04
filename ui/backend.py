@@ -40,7 +40,11 @@ from core.logi_devices import (
 from core.key_simulator import (
     ACTIONS,
     custom_action_label,
+    is_run_command_action,
     normalize_captured_shortcut_parts,
+    parse_run_command,
+    run_command_label,
+    run_command_text,
     valid_custom_key_names,
 )
 from core.startup import (
@@ -77,6 +81,8 @@ from ui.screenshot_common import screenshot_file_path, screenshot_file_paths, sc
 def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
+    if is_run_command_action(action_id):
+        return run_command_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
 
 
@@ -419,7 +425,8 @@ class Backend(QObject):
             cats.setdefault(cat, []).append({"id": aid, "label": data["label"]})
         result = [{"category": c, "actions": a} for c, a in cats.items()]
         result.append({"category": "Custom", "actions": [
-            {"id": "__custom__", "label": "Custom Shortcut\u2026"}
+            {"id": "__custom__", "label": "Custom Shortcut\u2026"},
+            {"id": "__run_command__", "label": "Run Command\u2026"},
         ]})
         return result
 
@@ -442,6 +449,8 @@ class Backend(QObject):
             result.append({"id": aid, "label": data["label"],
                            "category": data["category"]})
         result.append({"id": "__custom__", "label": "Custom Shortcut\u2026",
+                        "category": "Custom"})
+        result.append({"id": "__run_command__", "label": "Run Command\u2026",
                         "category": "Custom"})
         return result
 
@@ -529,6 +538,16 @@ class Backend(QObject):
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
+
+    @Property(bool, notify=settingsChanged)
+    def gestureLockCursor(self):
+        """Whether the gesture button is left to freeze cursor movement
+        while held, matching the mouse's native (undiverted) behavior. When
+        False, Mouser synthesizes cursor movement from the button's raw
+        sensor data instead, since the freeze happens at the firmware level
+        regardless of any HID++ divert request. Swipe-direction detection
+        keeps working in both cases."""
+        return bool(self._cfg.get("settings", {}).get("gesture_lock_cursor", True))
 
     @Property(str, notify=settingsChanged)
     def appearanceMode(self):
@@ -1387,6 +1406,17 @@ class Backend(QObject):
             self._engine.reload_mappings()
         self.settingsChanged.emit()
 
+    @Slot(bool)
+    def setGestureLockCursor(self, value):
+        value = bool(value)
+        if self.gestureLockCursor == value:
+            return
+        self._cfg.setdefault("settings", {})["gesture_lock_cursor"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
     @Slot(str)
     def setAppearanceMode(self, mode):
         normalized = mode if mode in {"system", "light", "dark"} else "system"
@@ -1540,6 +1570,24 @@ class Backend(QObject):
     @Slot(str, result=str)
     def actionLabelFor(self, actionId):
         return _action_label(actionId)
+
+    @Slot(str, result=str)
+    def runCommandTextFor(self, actionId):
+        """Return the raw command line stored in a 'run:<command>' action id."""
+        return run_command_text(actionId)
+
+    @Slot(str, result="QVariantMap")
+    def runCommandValidationErrorInfo(self, text):
+        stripped = (text or "").strip()
+        if not stripped:
+            return {"code": "empty", "detail": ""}
+        try:
+            argv = parse_run_command(stripped, platform_name=sys.platform)
+        except ValueError as exc:
+            return {"code": "unparsable", "detail": str(exc)}
+        if not argv:
+            return {"code": "empty", "detail": ""}
+        return {}
 
     @Slot(int, int, str, result=str)
     def shortcutComboFromQtEvent(self, key, modifiers, text):

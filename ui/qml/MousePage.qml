@@ -15,6 +15,7 @@ Item {
     readonly property bool hasBlockingDialog: addAppDialog.visible
                                              || deleteDialog.visible
                                              || keyCaptureDialog.visible
+                                             || runCommandDialog.visible
     property string pendingDeleteProfile: ""
     // Reactive i18n shortcut — all s["key"] bindings update on lm.languageChanged
     property var s: lm.strings
@@ -344,11 +345,17 @@ Item {
     readonly property string hscrollRightActionLabel: selectedProfileMappingState.hscroll_right
                                                  ? selectedProfileMappingState.hscroll_right.actionLabel
                                                  : (s["mouse.do_nothing"] || "Do Nothing")
-    readonly property string gestureTapActionId: selectedProfileMappingState.gesture
-                                            ? selectedProfileMappingState.gesture.actionId
+    readonly property string gesturePressActionId: selectedProfileMappingState.gesture_press
+                                            ? selectedProfileMappingState.gesture_press.actionId
                                             : "none"
-    readonly property string gestureTapActionLabel: selectedProfileMappingState.gesture
-                                               ? selectedProfileMappingState.gesture.actionLabel
+    readonly property string gesturePressActionLabel: selectedProfileMappingState.gesture_press
+                                               ? selectedProfileMappingState.gesture_press.actionLabel
+                                               : (s["mouse.do_nothing"] || "Do Nothing")
+    readonly property string gestureReleaseActionId: selectedProfileMappingState.gesture_release
+                                            ? selectedProfileMappingState.gesture_release.actionId
+                                            : "none"
+    readonly property string gestureReleaseActionLabel: selectedProfileMappingState.gesture_release
+                                               ? selectedProfileMappingState.gesture_release.actionLabel
                                                : (s["mouse.do_nothing"] || "Do Nothing")
     readonly property string gestureLeftActionId: selectedProfileMappingState.gesture_left
                                              ? selectedProfileMappingState.gesture_left.actionId
@@ -426,8 +433,14 @@ Item {
         var actions = backend.allActions
         for (var i = 0; i < actions.length; i++)
             if (actions[i].id === actionId) return i
-        // Custom shortcut: point to the __custom__ sentinel at the end
-        if (actionId.startsWith("custom:")) return actions.length - 1
+        // Custom / run-command actions: point to their sentinel entry.
+        var sentinel = isCustomAction(actionId) ? "__custom__"
+                     : isRunCommandAction(actionId) ? "__run_command__"
+                     : ""
+        if (sentinel) {
+            for (var j = 0; j < actions.length; j++)
+                if (actions[j].id === sentinel) return j
+        }
         return 0
     }
 
@@ -440,12 +453,47 @@ Item {
         return actionId.startsWith("custom:")
     }
 
+    function runCommandLabel(actionId) {
+        if (!actionId.startsWith("run:")) return ""
+        return backend.actionLabelFor(actionId)
+    }
+
+    function isRunCommandAction(actionId) {
+        return actionId.startsWith("run:")
+    }
+
+    // Shared display helpers for action pickers (chips + combo boxes) that
+    // must special-case the "__custom__" / "__run_command__" sentinels.
+    function actionChipLabel(modelId, currentActionId, fallbackLabel) {
+        if (modelId === "__custom__" && isCustomAction(currentActionId))
+            return customLabel(currentActionId)
+        if (modelId === "__run_command__" && isRunCommandAction(currentActionId))
+            return runCommandLabel(currentActionId)
+        return (lm.strings, lm.trAction(fallbackLabel))
+    }
+
+    function actionChipIsCurrent(modelId, currentActionId) {
+        if (modelId === "__custom__") return isCustomAction(currentActionId)
+        if (modelId === "__run_command__") return isRunCommandAction(currentActionId)
+        return modelId === currentActionId
+    }
+
+    function comboDisplayLabel(currentActionId, fallbackText) {
+        if (isCustomAction(currentActionId)) return customLabel(currentActionId)
+        if (isRunCommandAction(currentActionId)) return runCommandLabel(currentActionId)
+        return (lm.strings, lm.trAction(fallbackText))
+    }
+
     function gestureSummary() {
         if (!backend.supportsGestureDirections)
-            return actionFor("gesture")
-        if (!hasGestureSwipeAction)
-            return (s["mouse.tap"] || "Tap: ") + lm.trAction(gestureTapActionLabel)
-        return (s["mouse.tap"] || "Tap: ") + lm.trAction(gestureTapActionLabel) + " | " + (s["mouse.swipes_configured"] || "Swipes configured")
+            return actionFor("gesture_release")
+        var parts = []
+        if (gesturePressActionId !== "none")
+            parts.push((s["mouse.tap_press"] || "Press: ") + lm.trAction(gesturePressActionLabel))
+        parts.push((s["mouse.tap"] || "Tap: ") + lm.trAction(gestureReleaseActionLabel))
+        if (hasGestureSwipeAction)
+            parts.push(s["mouse.swipes_configured"] || "Swipes configured")
+        return parts.join(" | ")
     }
 
     function hotspotSublabel(hotspot) {
@@ -1261,7 +1309,7 @@ Item {
                                     Text {
                                         text: selectedButton === "hscroll_left"
                                               ? s["mouse.configure_scroll_actions"]
-                                              : selectedButton === "gesture"
+                                              : selectedButton === "gesture_release"
                                                 && backend.supportsGestureDirections
                                                 ? s["mouse.configure_gesture"]
                                               : s["mouse.select_button_action"]
@@ -1291,15 +1339,15 @@ Item {
                                         model: backend.allActions
                                         delegate: ActionChip {
                                             actionId: modelData.id
-                                            actionLabel: modelData.id === "__custom__" && isCustomAction(hscrollLeftActionId)
-                                                         ? customLabel(hscrollLeftActionId)
-                                                         : (lm.strings, lm.trAction(modelData.label))
-                                            isCurrent: modelData.id === "__custom__"
-                                                       ? isCustomAction(hscrollLeftActionId)
-                                                       : modelData.id === hscrollLeftActionId
+                                            actionLabel: actionChipLabel(modelData.id, hscrollLeftActionId, modelData.label)
+                                            isCurrent: actionChipIsCurrent(modelData.id, hscrollLeftActionId)
                                             onPicked: function(aid) {
                                                 if (aid === "__custom__") {
                                                     keyCaptureDialog.open(selectedProfile, "hscroll_left")
+                                                    return
+                                                }
+                                                if (aid === "__run_command__") {
+                                                    runCommandDialog.open(selectedProfile, "hscroll_left", hscrollLeftActionId)
                                                     return
                                                 }
                                                 backend.setProfileMapping(
@@ -1324,15 +1372,15 @@ Item {
                                         model: backend.allActions
                                         delegate: ActionChip {
                                             actionId: modelData.id
-                                            actionLabel: modelData.id === "__custom__" && isCustomAction(hscrollRightActionId)
-                                                         ? customLabel(hscrollRightActionId)
-                                                         : (lm.strings, lm.trAction(modelData.label))
-                                            isCurrent: modelData.id === "__custom__"
-                                                       ? isCustomAction(hscrollRightActionId)
-                                                       : modelData.id === hscrollRightActionId
+                                            actionLabel: actionChipLabel(modelData.id, hscrollRightActionId, modelData.label)
+                                            isCurrent: actionChipIsCurrent(modelData.id, hscrollRightActionId)
                                             onPicked: function(aid) {
                                                 if (aid === "__custom__") {
                                                     keyCaptureDialog.open(selectedProfile, "hscroll_right")
+                                                    return
+                                                }
+                                                if (aid === "__run_command__") {
+                                                    runCommandDialog.open(selectedProfile, "hscroll_right", hscrollRightActionId)
                                                     return
                                                 }
                                                 backend.setProfileMapping(
@@ -1346,11 +1394,11 @@ Item {
                             Column {
                                 width: parent.width
                                 spacing: 14
-                                visible: selectedButton === "gesture"
+                                visible: selectedButton === "gesture_release"
                                          && backend.supportsGestureDirections
 
                                 Text {
-                                    text: s["mouse.tap_action"]
+                                    text: s["mouse.tap_press_action"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1363,17 +1411,58 @@ Item {
                                     delegate: actionComboDelegate
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 11 }
-                                    currentIndex: actionIndexForId(gestureTapActionId)
-                                    displayText: isCustomAction(gestureTapActionId)
-                                                 ? customLabel(gestureTapActionId)
-                                                 : (lm.strings, lm.trAction(currentText))
+                                    currentIndex: actionIndexForId(gesturePressActionId)
+                                    displayText: comboDisplayLabel(gesturePressActionId, currentText)
                                     onActivated: function(index) {
                                         var aid = backend.allActions[index].id
                                         if (aid === "__custom__") {
-                                            keyCaptureDialog.open(selectedProfile, "gesture")
+                                            keyCaptureDialog.open(selectedProfile, "gesture_press")
                                             return
                                         }
-                                        backend.setProfileMapping(selectedProfile, "gesture", aid)
+                                        if (aid === "__run_command__") {
+                                            runCommandDialog.open(selectedProfile, "gesture_press", gesturePressActionId)
+                                            return
+                                        }
+                                        backend.setProfileMapping(selectedProfile, "gesture_press", aid)
+                                        selectedActionId = aid
+                                    }
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: s["mouse.tap_press_action_desc"]
+                                    font { family: uiState.fontFamily; pixelSize: 10 }
+                                    color: theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    text: s["mouse.tap_release_action"]
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                ComboBox {
+                                    width: parent.width
+                                    model: backend.allActions
+                                    textRole: "label"
+                                    delegate: actionComboDelegate
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    currentIndex: actionIndexForId(gestureReleaseActionId)
+                                    displayText: comboDisplayLabel(gestureReleaseActionId, currentText)
+                                    onActivated: function(index) {
+                                        var aid = backend.allActions[index].id
+                                        if (aid === "__custom__") {
+                                            keyCaptureDialog.open(selectedProfile, "gesture_release")
+                                            return
+                                        }
+                                        if (aid === "__run_command__") {
+                                            runCommandDialog.open(selectedProfile, "gesture_release", gestureReleaseActionId)
+                                            return
+                                        }
+                                        backend.setProfileMapping(selectedProfile, "gesture_release", aid)
                                         selectedActionId = aid
                                     }
                                 }
@@ -1433,6 +1522,46 @@ Item {
                                         Math.round(gestureThresholdSlider.value / 5.0) * 5)
                                 }
 
+                                Rectangle {
+                                    width: parent.width
+                                    height: 1
+                                    color: theme.border
+                                }
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Switch {
+                                        id: gestureLockCursorSwitch
+                                        checked: backend.gestureLockCursor
+                                        Material.accent: theme.accent
+                                        Accessible.name: s["mouse.gesture_lock_cursor"]
+                                        onToggled: backend.setGestureLockCursor(checked)
+                                    }
+
+                                    Column {
+                                        width: parent.width - gestureLockCursorSwitch.width - 12
+                                        spacing: 2
+
+                                        Text {
+                                            width: parent.width
+                                            text: s["mouse.gesture_lock_cursor"]
+                                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                            color: theme.textPrimary
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            text: s["mouse.gesture_lock_cursor_desc"]
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textSecondary
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
                                 Text {
                                     text: s["mouse.swipe_actions"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
@@ -1459,13 +1588,15 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureLeftActionId)
-                                        displayText: isCustomAction(gestureLeftActionId)
-                                                     ? customLabel(gestureLeftActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
+                                        displayText: comboDisplayLabel(gestureLeftActionId, currentText)
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_left")
+                                                return
+                                            }
+                                            if (aid === "__run_command__") {
+                                                runCommandDialog.open(selectedProfile, "gesture_left", gestureLeftActionId)
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1493,13 +1624,15 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureRightActionId)
-                                        displayText: isCustomAction(gestureRightActionId)
-                                                     ? customLabel(gestureRightActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
+                                        displayText: comboDisplayLabel(gestureRightActionId, currentText)
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_right")
+                                                return
+                                            }
+                                            if (aid === "__run_command__") {
+                                                runCommandDialog.open(selectedProfile, "gesture_right", gestureRightActionId)
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1527,13 +1660,15 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureUpActionId)
-                                        displayText: isCustomAction(gestureUpActionId)
-                                                     ? customLabel(gestureUpActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
+                                        displayText: comboDisplayLabel(gestureUpActionId, currentText)
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_up")
+                                                return
+                                            }
+                                            if (aid === "__run_command__") {
+                                                runCommandDialog.open(selectedProfile, "gesture_up", gestureUpActionId)
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1561,13 +1696,15 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(gestureDownActionId)
-                                        displayText: isCustomAction(gestureDownActionId)
-                                                     ? customLabel(gestureDownActionId)
-                                                     : (lm.strings, lm.trAction(currentText))
+                                        displayText: comboDisplayLabel(gestureDownActionId, currentText)
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, "gesture_down")
+                                                return
+                                            }
+                                            if (aid === "__run_command__") {
+                                                runCommandDialog.open(selectedProfile, "gesture_down", gestureDownActionId)
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1583,7 +1720,7 @@ Item {
                                 spacing: 14
                                 visible: selectedButton !== ""
                                          && selectedButton !== "hscroll_left"
-                                         && !(selectedButton === "gesture"
+                                         && !(selectedButton === "gesture_release"
                                               && backend.supportsGestureDirections)
 
                                 Repeater {
@@ -1607,15 +1744,15 @@ Item {
                                                 model: modelData.actions
                                                 delegate: ActionChip {
                                                     actionId: modelData.id
-                                                    actionLabel: modelData.id === "__custom__" && isCustomAction(selectedActionId)
-                                                                 ? customLabel(selectedActionId)
-                                                                 : (lm.strings, lm.trAction(modelData.label))
-                                                    isCurrent: modelData.id === "__custom__"
-                                                               ? isCustomAction(selectedActionId)
-                                                               : modelData.id === selectedActionId
+                                                    actionLabel: actionChipLabel(modelData.id, selectedActionId, modelData.label)
+                                                    isCurrent: actionChipIsCurrent(modelData.id, selectedActionId)
                                                     onPicked: function(aid) {
                                                         if (aid === "__custom__") {
                                                             keyCaptureDialog.open(selectedProfile, selectedButton)
+                                                            return
+                                                        }
+                                                        if (aid === "__run_command__") {
+                                                            runCommandDialog.open(selectedProfile, selectedButton, selectedActionId)
                                                             return
                                                         }
                                                         backend.setProfileMapping(
@@ -2684,6 +2821,19 @@ Item {
                 "custom:" + comboString)
             refreshSelectedProfileMappings()
             selectedActionId = "custom:" + comboString
+        }
+    }
+
+    // ── Run-command dialog for CLI / terminal actions ────────
+    RunCommandDialog {
+        id: runCommandDialog
+        onCaptured: function(commandText) {
+            backend.setProfileMapping(
+                runCommandDialog.targetProfile,
+                runCommandDialog.targetButton,
+                "run:" + commandText)
+            refreshSelectedProfileMappings()
+            selectedActionId = "run:" + commandText
         }
     }
 }

@@ -1,11 +1,12 @@
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core.config import DEFAULT_CONFIG
 from core.updater import UpdateCheckState
@@ -114,8 +115,11 @@ class BackendDeviceLayoutTests(unittest.TestCase):
     def test_device_image_source_uses_encoded_file_url(self):
         backend = self._make_backend(root_dir="/tmp/Mouser Build")
 
+        # deviceImageSource resolves the path with os.path.abspath(), which on
+        # Windows qualifies a leading "/" with the current drive letter -- mirror
+        # that here so the expected value matches on every platform.
         expected = QUrl.fromLocalFile(
-            "/tmp/Mouser Build/images/icons/mouse-simple.svg"
+            os.path.abspath("/tmp/Mouser Build/images/icons/mouse-simple.svg")
         ).toString()
 
         self.assertEqual(backend.deviceImageSource, expected)
@@ -726,7 +730,7 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         button_keys = [button["key"] for button in backend.buttons]
         self.assertIn("middle", button_keys)
         self.assertIn("xbutton1", button_keys)
-        self.assertNotIn("gesture", button_keys)
+        self.assertNotIn("gesture_release", button_keys)
         self.assertNotIn("mode_shift", button_keys)
 
     def test_disconnect_clears_stale_linux_device_identity_and_layout(self):
@@ -1153,6 +1157,77 @@ class BackendDeviceLayoutTests(unittest.TestCase):
             backend.customShortcutValidationErrorInfo("Ctrl+Hyperdrive"),
             {"code": "unknown_key", "detail": "Hyperdrive"},
         )
+
+    def test_run_command_sentinel_appears_in_action_lists(self):
+        backend = self._make_backend()
+
+        all_ids = [a["id"] for a in backend.allActions]
+        self.assertIn("__run_command__", all_ids)
+
+        custom_category = next(
+            c for c in backend.actionCategories if c["category"] == "Custom"
+        )
+        category_ids = [a["id"] for a in custom_category["actions"]]
+        self.assertIn("__custom__", category_ids)
+        self.assertIn("__run_command__", category_ids)
+
+    def test_action_label_for_run_command(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.actionLabelFor("run:notepad.exe"),
+            "Run: notepad.exe",
+        )
+
+    def test_run_command_text_for_extracts_raw_command(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.runCommandTextFor("run:notepad.exe --flag"),
+            "notepad.exe --flag",
+        )
+        self.assertEqual(backend.runCommandTextFor("custom:ctrl+c"), "")
+
+    def test_run_command_validation_error_info(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.runCommandValidationErrorInfo("notepad.exe"), {}
+        )
+        self.assertEqual(
+            backend.runCommandValidationErrorInfo("   "),
+            {"code": "empty", "detail": ""},
+        )
+        info = backend.runCommandValidationErrorInfo('"unterminated quote')
+        self.assertEqual(info.get("code"), "unparsable")
+
+    def test_gesture_lock_cursor_defaults_to_true(self):
+        backend = self._make_backend()
+
+        self.assertTrue(backend.gestureLockCursor)
+
+    def test_set_gesture_lock_cursor_updates_config_and_reloads_engine(self):
+        fake_engine = _FakeEngine()
+        fake_engine.reload_mappings = Mock()
+        backend = self._make_backend(engine=fake_engine)
+
+        with patch("ui.backend.save_config") as save_config_mock:
+            backend.setGestureLockCursor(False)
+
+        self.assertFalse(backend.gestureLockCursor)
+        save_config_mock.assert_called_once()
+        fake_engine.reload_mappings.assert_called_once()
+
+    def test_set_gesture_lock_cursor_is_noop_when_unchanged(self):
+        fake_engine = _FakeEngine()
+        fake_engine.reload_mappings = Mock()
+        backend = self._make_backend(engine=fake_engine)
+
+        with patch("ui.backend.save_config") as save_config_mock:
+            backend.setGestureLockCursor(True)
+
+        save_config_mock.assert_not_called()
+        fake_engine.reload_mappings.assert_not_called()
 
     def test_add_profile_stores_catalog_id_for_linux_app(self):
         backend = self._make_backend()

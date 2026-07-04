@@ -21,6 +21,7 @@ except ImportError:
     _EVDEV_OK = False
     print("[MouseHook] python-evdev not installed — pip install evdev")
 
+from core.key_simulator import inject_mouse_move as _inject_mouse_move_impl
 from core.logi_devices import (
     build_evdev_connected_device_info,
     resolve_device as _resolve_logi_device,
@@ -430,6 +431,7 @@ class MouseHook(BaseMouseHook):
     def _on_hid_gesture_down(self):
         if self._ui_passthrough:
             return
+        dispatch_down = False
         with self._gesture_lock:
             if not self._gesture_active:
                 self._gesture_active = True
@@ -441,10 +443,14 @@ class MouseHook(BaseMouseHook):
                 else:
                     self._gesture_tracking = False
                     self._gesture_triggered = False
+                dispatch_down = True
+        if dispatch_down:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
 
     def _on_hid_gesture_up(self):
         if self._ui_passthrough:
             return
+        dispatch_up = False
         dispatch_click = False
         with self._gesture_lock:
             if self._gesture_active:
@@ -461,7 +467,10 @@ class MouseHook(BaseMouseHook):
                         "click_candidate": should_click,
                     }
                 )
+                dispatch_up = True
                 dispatch_click = should_click
+        if dispatch_up:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
         if dispatch_click:
             self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -501,6 +510,8 @@ class MouseHook(BaseMouseHook):
                 "dy": delta_y,
             }
         )
+        if self._wants_gesture_movement_injection():
+            _inject_mouse_move_impl(delta_x, delta_y)
         self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
     def _on_hid_connect(self):

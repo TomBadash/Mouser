@@ -45,6 +45,7 @@ _TRANSLATIONS = {
         "mouse.do_nothing": "Do Nothing",
         "mouse.horizontal_scroll": "Horizontal Scroll",
         "mouse.tap": "Tap: ",
+        "mouse.tap_press": "Press: ",
         "mouse.swipes_configured": "Swipes configured",
         "mouse.installed_app": "Installed app",
         "mouse.applications": "Applications",
@@ -58,7 +59,11 @@ _TRANSLATIONS = {
         "mouse.select_button_action": "Select what happens when you use this button",
         "mouse.scroll_left": "SCROLL LEFT",
         "mouse.scroll_right": "SCROLL RIGHT",
-        "mouse.tap_action": "TAP ACTION",
+        "mouse.tap_press_action": "TAP PRESS ACTION",
+        "mouse.tap_press_action_desc": "Keyboard shortcuts and mouse clicks are held down for as long as the button stays pressed (e.g. map to Ctrl to use it as a modifier) and release automatically when you let go.",
+        "mouse.tap_release_action": "TAP RELEASE ACTION",
+        "mouse.gesture_lock_cursor": "Lock cursor position while swiping",
+        "mouse.gesture_lock_cursor_desc": "The gesture button freezes the cursor in hardware while held. Turn off to have Mouser synthesize cursor movement from the sensor data instead \u2014 swipe detection keeps working either way.",
         "mouse.swipe_actions": "SWIPE ACTIONS",
         "mouse.swipe_left": "Swipe left",
         "mouse.swipe_right": "Swipe right",
@@ -200,6 +205,15 @@ _TRANSLATIONS = {
         "key_capture.cancel": "Cancel",
         "key_capture.confirm": "Confirm",
 
+        # Run-command dialog
+        "run_command.title": "Run Command",
+        "run_command.desc": "Enter a command line to launch. It runs directly (no shell), so pipes and redirects are treated as plain text.",
+        "run_command.placeholder": "e.g. notepad.exe",
+        "run_command.error.empty": "Enter a command to run.",
+        "run_command.error.unparsable": "Couldn't parse this command line: %1",
+        "run_command.cancel": "Cancel",
+        "run_command.confirm": "Save",
+
         # System tray (used from Python)
         "tray.open_settings": "Open Settings",
         "tray.disable_remapping": "Disable Remapping",
@@ -273,6 +287,7 @@ _TRANSLATIONS = {
         "mouse.do_nothing": "\u65e0\u64cd\u4f5c",
         "mouse.horizontal_scroll": "\u6c34\u5e73\u6eda\u52a8",
         "mouse.tap": "\u70b9\u51fb\uff1a",
+        "mouse.tap_press": "\u6309\u4e0b\uff1a",
         "mouse.swipes_configured": "\u5df2\u914d\u7f6e\u6ed1\u52a8",
         "mouse.installed_app": "\u5df2\u5b89\u88c5\u7684\u5e94\u7528",
         "mouse.applications": "\u5e94\u7528\u7a0b\u5e8f",
@@ -285,7 +300,11 @@ _TRANSLATIONS = {
         "mouse.select_button_action": "\u9009\u62e9\u4f7f\u7528\u6b64\u6309\u952e\u65f6\u89e6\u53d1\u7684\u52a8\u4f5c",
         "mouse.scroll_left": "\u5411\u5de6\u6eda\u52a8",
         "mouse.scroll_right": "\u5411\u53f3\u6eda\u52a8",
-        "mouse.tap_action": "\u70b9\u51fb\u52a8\u4f5c",
+        "mouse.tap_press_action": "\u70b9\u51fb\u6309\u4e0b\u52a8\u4f5c",
+        "mouse.tap_press_action_desc": "\u53ea\u8981\u6309\u94ae\u4fdd\u6301\u6309\u4e0b\uff0c\u952e\u76d8\u5feb\u6377\u952e\u548c\u9f20\u6807\u70b9\u51fb\u5c31\u4f1a\u4e00\u76f4\u88ab\u6309\u4f4f\uff08\u4f8b\u5982\u6620\u5c04\u4e3a Ctrl \u7528\u4f5c\u4fee\u9970\u952e\uff09\uff0c\u677e\u5f00\u6309\u94ae\u65f6\u4f1a\u81ea\u52a8\u91ca\u653e\u3002",
+        "mouse.tap_release_action": "\u70b9\u51fb\u91ca\u653e\u52a8\u4f5c",
+        "mouse.gesture_lock_cursor": "\u6ed1\u52a8\u65f6\u9501\u5b9a\u5149\u6807\u4f4d\u7f6e",
+        "mouse.gesture_lock_cursor_desc": "\u624b\u52bf\u6309\u94ae\u4f1a\u5728\u786c\u4ef6\u5c42\u9762\u5728\u6309\u4f4f\u671f\u95f4\u51bb\u7ed3\u5149\u6807\u3002\u5173\u95ed\u6b64\u9009\u9879\u540e\uff0cMouser \u5c06\u6839\u636e\u4f20\u611f\u5668\u6570\u636e\u6a21\u62df\u5149\u6807\u79fb\u52a8\u2014\u2014\u65e0\u8bba\u5f00\u5173\u72b6\u6001\u5982\u4f55\uff0c\u6ed1\u52a8\u65b9\u5411\u68c0\u6d4b\u90fd\u4f1a\u6b63\u5e38\u5de5\u4f5c\u3002",
         "mouse.swipe_actions": "\u6ed1\u52a8\u52a8\u4f5c",
         "mouse.swipe_left": "\u5411\u5de6\u6ed1\u52a8",
         "mouse.swipe_right": "\u5411\u53f3\u6ed1\u52a8",
@@ -422,6 +441,14 @@ _TRANSLATIONS = {
         "key_capture.cancel": "\u53d6\u6d88",
         "key_capture.confirm": "\u786e\u8ba4",
 
+        "run_command.title": "\u8fd0\u884c\u547d\u4ee4",
+        "run_command.desc": "\u8f93\u5165\u8981\u542f\u52a8\u7684\u547d\u4ee4\u884c\u3002\u5b83\u4f1a\u76f4\u63a5\u8fd0\u884c\uff08\u4e0d\u7ecf\u8fc7 Shell\uff09\uff0c\u56e0\u6b64\u7ba1\u9053\u548c\u91cd\u5b9a\u5411\u7b26\u53f7\u5c06\u88ab\u89c6\u4e3a\u666e\u901a\u6587\u672c\u3002",
+        "run_command.placeholder": "\u4f8b\u5982\uff1anotepad.exe",
+        "run_command.error.empty": "\u8bf7\u8f93\u5165\u8981\u8fd0\u884c\u7684\u547d\u4ee4\u3002",
+        "run_command.error.unparsable": "\u65e0\u6cd5\u89e3\u6790\u6b64\u547d\u4ee4\u884c\uff1a%1",
+        "run_command.cancel": "\u53d6\u6d88",
+        "run_command.confirm": "\u4fdd\u5b58",
+
         "tray.open_settings": "\u6253\u5f00\u8bbe\u7f6e",
         "tray.disable_remapping": "\u7981\u7528\u6309\u952e\u91cd\u6620\u5c04",
         "tray.enable_remapping": "\u542f\u7528\u6309\u952e\u91cd\u6620\u5c04",
@@ -489,6 +516,7 @@ _TRANSLATIONS = {
         "mouse.do_nothing": "\u7121\u52d5\u4f5c",
         "mouse.horizontal_scroll": "\u6c34\u5e73\u6372\u52d5",
         "mouse.tap": "\u9ede\u64ca\uff1a",
+        "mouse.tap_press": "\u6309\u4e0b\uff1a",
         "mouse.swipes_configured": "\u5df2\u8a2d\u5b9a\u6ed1\u52d5",
         "mouse.installed_app": "\u5df2\u5b89\u88dd\u7684\u61c9\u7528\u7a0b\u5f0f",
         "mouse.applications": "\u61c9\u7528\u7a0b\u5f0f",
@@ -501,7 +529,11 @@ _TRANSLATIONS = {
         "mouse.select_button_action": "\u9078\u64c7\u4f7f\u7528\u6b64\u6309\u9375\u6642\u89f8\u767c\u7684\u52d5\u4f5c",
         "mouse.scroll_left": "\u5411\u5de6\u6372\u52d5",
         "mouse.scroll_right": "\u5411\u53f3\u6372\u52d5",
-        "mouse.tap_action": "\u9ede\u64ca\u52d5\u4f5c",
+        "mouse.tap_press_action": "\u9ede\u64ca\u6309\u4e0b\u52d5\u4f5c",
+        "mouse.tap_press_action_desc": "\u53ea\u8981\u6309\u9215\u4fdd\u6301\u6309\u4e0b\uff0c\u9375\u76e4\u5feb\u6377\u9375\u548c\u6ed1\u9f20\u9ede\u64ca\u5c31\u6703\u4e00\u76f4\u88ab\u6309\u4f4f\uff08\u4f8b\u5982\u5c0d\u61c9\u70ba Ctrl \u7528\u4f5c\u4fee\u98fe\u9375\uff09\uff0c\u9b28\u958b\u6309\u9215\u6642\u6703\u81ea\u52d5\u91cb\u653e\u3002",
+        "mouse.tap_release_action": "\u9ede\u64ca\u91cb\u653e\u52d5\u4f5c",
+        "mouse.gesture_lock_cursor": "\u6ed1\u52d5\u6642\u9396\u5b9a\u6e38\u6a19\u4f4d\u7f6e",
+        "mouse.gesture_lock_cursor_desc": "\u624b\u52e2\u6309\u9215\u6703\u5728\u786c\u9ad4\u5c64\u9762\u5728\u6309\u4f4f\u671f\u9593\u51cd\u7d50\u6e38\u6a19\u3002\u95dc\u9589\u6b64\u9078\u9805\u5f8c\uff0cMouser \u5c07\u6839\u64da\u611f\u6e2c\u5668\u8cc7\u6599\u6a21\u64ec\u6e38\u6a19\u79fb\u52d5\u2014\u2014\u7121\u8ad6\u958b\u95dc\u72c0\u614b\u5982\u4f55\uff0c\u6ed1\u52d5\u65b9\u5411\u5075\u6e2c\u90fd\u6703\u6b63\u5e38\u904b\u4f5c\u3002",
         "mouse.swipe_actions": "\u6ed1\u52d5\u52d5\u4f5c",
         "mouse.swipe_left": "\u5411\u5de6\u6ed1\u52d5",
         "mouse.swipe_right": "\u5411\u53f3\u6ed1\u52d5",
@@ -638,6 +670,14 @@ _TRANSLATIONS = {
         "key_capture.cancel": "\u53d6\u6d88",
         "key_capture.confirm": "\u78ba\u8a8d",
 
+        "run_command.title": "\u57f7\u884c\u547d\u4ee4",
+        "run_command.desc": "\u8f38\u5165\u8981\u555f\u52d5\u7684\u547d\u4ee4\u5217\u3002\u5b83\u6703\u76f4\u63a5\u57f7\u884c\uff08\u4e0d\u7d93\u904e\u6bbb\u5c64\uff09\uff0c\u56e0\u6b64\u7ba1\u9053\u8207\u91cd\u65b0\u5c0e\u5411\u7b26\u865f\u5c07\u88ab\u8996\u70ba\u7d14\u6587\u5b57\u3002",
+        "run_command.placeholder": "\u4f8b\u5982\uff1anotepad.exe",
+        "run_command.error.empty": "\u8acb\u8f38\u5165\u8981\u57f7\u884c\u7684\u547d\u4ee4\u3002",
+        "run_command.error.unparsable": "\u7121\u6cd5\u89e3\u6790\u6b64\u547d\u4ee4\u5217\uff1a%1",
+        "run_command.cancel": "\u53d6\u6d88",
+        "run_command.confirm": "\u5132\u5b58",
+
         "tray.open_settings": "\u958b\u555f\u8a2d\u5b9a",
         "tray.disable_remapping": "\u505c\u7528\u6309\u9375\u91cd\u65b0\u5c0d\u6620",
         "tray.enable_remapping": "\u555f\u7528\u6309\u9375\u91cd\u65b0\u5c0d\u6620",
@@ -691,6 +731,7 @@ _BUTTON_TR: dict[str, dict[str, str]] = {
         "Horizontal scroll right":"\u6c34\u5e73\u53f3\u6eda",
         "Horizontal Scroll":      "\u6c34\u5e73\u6eda\u52a8",
         "Mode shift button":      "\u6a21\u5f0f\u5207\u6362\u952e",
+        "Gesture tap press":      "\u624b\u52bf\u6309\u4e0b",
         "Gesture swipe left":     "\u624b\u52bf\u5de6\u6ed1",
         "Gesture swipe right":    "\u624b\u52bf\u53f3\u6ed1",
         "Gesture swipe up":       "\u624b\u52bf\u4e0a\u6ed1",
@@ -705,6 +746,7 @@ _BUTTON_TR: dict[str, dict[str, str]] = {
         "Horizontal scroll right":"\u6c34\u5e73\u53f3\u6372",
         "Horizontal Scroll":      "\u6c34\u5e73\u6372\u52d5",
         "Mode shift button":      "\u6a21\u5f0f\u5207\u63db\u9375",
+        "Gesture tap press":      "\u624b\u52e2\u6309\u4e0b",
         "Gesture swipe left":     "\u624b\u52e2\u5de6\u6ed1",
         "Gesture swipe right":    "\u624b\u52e2\u53f3\u6ed1",
         "Gesture swipe up":       "\u624b\u52e2\u4e0a\u6ed1",
@@ -819,6 +861,7 @@ _ACTION_TR: dict[str, dict[str, str]] = {
 
         # ── Custom ────────────────────────────────────────────────────
         "Custom Shortcut\u2026": "\u81ea\u5b9a\u4e49\u5feb\u6377\u952e\u2026",
+        "Run Command\u2026": "\u8fd0\u884c\u547d\u4ee4\u2026",
     },
     "zh_TW": {
         # ── Other ─────────────────────────────────────────────────────
@@ -899,6 +942,7 @@ _ACTION_TR: dict[str, dict[str, str]] = {
 
         # ── Custom ────────────────────────────────────────────────────
         "Custom Shortcut\u2026": "\u81ea\u8a02\u5feb\u901f\u9375\u2026",
+        "Run Command\u2026": "\u57f7\u884c\u547d\u4ee4\u2026",
     },
 }
 

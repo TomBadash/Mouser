@@ -10,6 +10,7 @@ from core.mouse_hook import MouseHook, MouseEvent
 from core.key_simulator import (
     ACTIONS, execute_action, is_mouse_button_action,
     inject_mouse_down, inject_mouse_up,
+    is_holdable_key_action, press_action_down, press_action_up,
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
@@ -66,6 +67,7 @@ class Engine:
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
         self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
+        self._key_release_timers = {}     # action_id → Timer for safety auto-release
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -113,6 +115,7 @@ class Engine:
             deadzone=settings.get("gesture_deadzone", 40),
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
+            lock_cursor=settings.get("gesture_lock_cursor", True),
         )
         # Divert mode shift CID only when the device has the button and
         # at least one profile maps it to an action.  When no device is
@@ -152,6 +155,8 @@ class Engine:
                         self.hook.block(evt_type)
                         if is_mouse_button_action(action_id):
                             self.hook.register(evt_type, self._make_mouse_up_handler(action_id))
+                        elif is_holdable_key_action(action_id):
+                            self.hook.register(evt_type, self._make_key_up_handler(action_id))
                     continue
 
                 if action_id != "none":
@@ -166,6 +171,11 @@ class Engine:
                         else:
                             # Single-fire event (gesture, swipe) → full click
                             self.hook.register(evt_type, self._make_handler(action_id))
+                    elif has_up and is_holdable_key_action(action_id):
+                        # Button has a matching _up event → hold the key down
+                        # for as long as the button stays physically pressed
+                        # instead of tapping it once (e.g. holding Ctrl).
+                        self.hook.register(evt_type, self._make_key_down_handler(action_id))
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id))
 
@@ -242,6 +252,54 @@ class Engine:
                     inject_mouse_up(action_id)
             except Exception as exc:
                 print(f"[Engine] mouse_up_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _make_key_down_handler(self, action_id):
+        def _safety_release():
+            """Auto-release if the UP event never fires."""
+            try:
+                print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
+                self._key_release_timers.pop(action_id, None)
+                press_action_up(action_id)
+            except Exception as exc:
+                print(f"[Engine] _safety_release EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+
+        def handler(event):
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} (key down)"
+                    )
+                    press_action_down(action_id)
+                    # Safety: auto-release after 20s if UP event is never received
+                    old = self._key_release_timers.pop(action_id, None)
+                    if old is not None:
+                        old.cancel()
+                    t = threading.Timer(20.0, _safety_release)
+                    t.daemon = True
+                    self._key_release_timers[action_id] = t
+                    t.start()
+            except Exception as exc:
+                print(f"[Engine] key_down_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _make_key_up_handler(self, action_id):
+        def handler(event):
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} (key up)"
+                    )
+                    # Cancel safety timer
+                    old = self._key_release_timers.pop(action_id, None)
+                    if old is not None:
+                        old.cancel()
+                    press_action_up(action_id)
+            except Exception as exc:
+                print(f"[Engine] key_up_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
         return handler
 
@@ -466,7 +524,8 @@ class Engine:
         if not self._debug_events_enabled:
             return
         interesting = [
-            "gesture",
+            "gesture_release",
+            "gesture_press",
             "gesture_left",
             "gesture_right",
             "gesture_up",

@@ -24,7 +24,8 @@ DEFAULT_DPI_MAX = 8000
 
 MX_MASTER_BUTTONS = (
     "middle",
-    "gesture",
+    "gesture_release",
+    "gesture_press",
     "gesture_left",
     "gesture_right",
     "gesture_up",
@@ -40,7 +41,8 @@ MX_MASTER_BUTTONS = (
 # cataloged MX Anywhere devices provide their own button sets.
 MX_ANYWHERE_BUTTONS = (
     "middle",
-    "gesture",
+    "gesture_release",
+    "gesture_press",
     "gesture_left",
     "gesture_right",
     "gesture_up",
@@ -69,7 +71,8 @@ GENERIC_BUTTONS = (
 DEFAULT_BUTTON_LAYOUT = MX_MASTER_BUTTONS
 
 _GESTURE_BUTTON_KEYS = (
-    "gesture",
+    "gesture_release",
+    "gesture_press",
     "gesture_left",
     "gesture_right",
     "gesture_up",

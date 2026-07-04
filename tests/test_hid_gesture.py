@@ -647,7 +647,8 @@ class HidBoltReceiverTests(unittest.TestCase):
         ):
             self.assertTrue(listener._try_connect())
 
-        self.assertIn("gesture", listener.connected_device.supported_buttons)
+        self.assertIn("gesture_release", listener.connected_device.supported_buttons)
+        self.assertIn("gesture_press", listener.connected_device.supported_buttons)
         self.assertNotIn("gesture_up", listener.connected_device.supported_buttons)
         self.assertNotIn("mode_shift", listener.connected_device.supported_buttons)
 
@@ -699,7 +700,8 @@ class HidBoltReceiverTests(unittest.TestCase):
         ):
             self.assertTrue(listener._try_connect())
 
-        self.assertIn("gesture", listener.connected_device.supported_buttons)
+        self.assertIn("gesture_release", listener.connected_device.supported_buttons)
+        self.assertIn("gesture_press", listener.connected_device.supported_buttons)
         self.assertIn("gesture_up", listener.connected_device.supported_buttons)
         self.assertIn("mode_shift", listener.connected_device.supported_buttons)
 
@@ -804,6 +806,122 @@ class HidReconnectInvariantTests(unittest.TestCase):
         self.assertFalse(listener._extra_diverts[0x00C4]["held"])
         gesture_up.assert_called_once_with()
         extra_up.assert_called_once_with()
+
+
+class HidRawXyOptOutTests(unittest.TestCase):
+    """Tests for the "lock cursor during swipes" opt-out (want_raw_xy)."""
+
+    def test_default_wants_raw_xy(self):
+        listener = hid_gesture.HidGestureListener()
+        self.assertTrue(listener._want_raw_xy)
+
+    def test_constructor_accepts_want_raw_xy_false(self):
+        listener = hid_gesture.HidGestureListener(want_raw_xy=False)
+        self.assertFalse(listener._want_raw_xy)
+
+    def test_divert_skips_rawxy_attempt_when_not_wanted(self):
+        listener = hid_gesture.HidGestureListener(want_raw_xy=False)
+        listener._feat_idx = 0x09
+        listener._gesture_candidates = [0x00C3]
+        calls = []
+
+        def fake_set_cid_reporting(cid, flags):
+            calls.append((cid, flags))
+            return (0, 0, 0, 0, []) if flags == 0x03 else None
+
+        with patch.object(listener, "_set_cid_reporting", side_effect=fake_set_cid_reporting):
+            self.assertTrue(listener._divert())
+
+        # Only the plain divert (0x03) should have been attempted -- never
+        # the RawXY variant (0x33), since that's what freezes the cursor.
+        self.assertEqual(calls, [(0x00C3, 0x03)])
+        self.assertFalse(listener._rawxy_enabled)
+
+    def test_divert_attempts_rawxy_first_when_wanted(self):
+        listener = hid_gesture.HidGestureListener(want_raw_xy=True)
+        listener._feat_idx = 0x09
+        listener._gesture_candidates = [0x00C3]
+
+        with patch.object(
+            listener, "_set_cid_reporting", return_value=(0, 0, 0, 0, [])
+        ) as set_reporting:
+            self.assertTrue(listener._divert())
+
+        set_reporting.assert_called_once_with(0x00C3, 0x33)
+        self.assertTrue(listener._rawxy_enabled)
+
+    def test_set_raw_xy_wanted_noop_when_unchanged(self):
+        listener = hid_gesture.HidGestureListener(want_raw_xy=True)
+        listener._connected = True
+        listener._rawxy_enabled = True
+
+        listener.set_raw_xy_wanted(True)
+
+        self.assertFalse(listener._redivert_requested)
+        self.assertTrue(listener._want_raw_xy)
+
+    def test_set_raw_xy_wanted_requests_in_place_redivert_when_connected_and_changed(self):
+        # Re-diverting in place (instead of a full reconnect) avoids making
+        # the device appear disconnected for a few seconds every time the
+        # "lock cursor" setting is toggled.
+        listener = hid_gesture.HidGestureListener(want_raw_xy=True)
+        listener._connected = True
+        listener._rawxy_enabled = True
+
+        with patch.object(listener, "force_reconnect") as force_reconnect:
+            listener.set_raw_xy_wanted(False)
+
+        force_reconnect.assert_not_called()
+        self.assertTrue(listener._redivert_requested)
+        self.assertFalse(listener._want_raw_xy)
+
+    def test_set_raw_xy_wanted_skips_redivert_when_not_connected(self):
+        listener = hid_gesture.HidGestureListener(want_raw_xy=True)
+        listener._connected = False
+        listener._rawxy_enabled = False
+
+        listener.set_raw_xy_wanted(False)
+
+        self.assertFalse(listener._redivert_requested)
+        self.assertFalse(listener._want_raw_xy)
+
+
+class HidGestureStopTests(unittest.TestCase):
+    """stop() must restore native (non-diverted) button behaviour before
+    closing the device -- otherwise whatever divert/raw-XY state was last
+    active stays in effect on the device for the rest of its wireless
+    session even after Mouser fully quits."""
+
+    def test_stop_undiverts_before_closing_device(self):
+        listener = hid_gesture.HidGestureListener()
+        fake_dev = Mock()
+        listener._dev = fake_dev
+        calls = []
+
+        with patch.object(listener, "_undivert", side_effect=lambda: calls.append("undivert")):
+            listener.stop()
+
+        self.assertEqual(calls, ["undivert"])
+        fake_dev.close.assert_called_once_with()
+
+    def test_stop_still_closes_device_if_undivert_raises(self):
+        listener = hid_gesture.HidGestureListener()
+        fake_dev = Mock()
+        listener._dev = fake_dev
+
+        with patch.object(listener, "_undivert", side_effect=RuntimeError("boom")):
+            listener.stop()  # must not raise
+
+        fake_dev.close.assert_called_once_with()
+
+    def test_stop_skips_undivert_when_no_device(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = None
+
+        with patch.object(listener, "_undivert") as undivert:
+            listener.stop()
+
+        undivert.assert_not_called()
 
 
 if __name__ == "__main__":
