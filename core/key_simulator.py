@@ -364,10 +364,21 @@ if sys.platform == "win32":
     def _is_extended(vk):
         return vk in _EXTENDED_VKS
 
+    _MapVirtualKeyW = None
+
+    def _vk_to_scan(vk):
+        global _MapVirtualKeyW
+        if _MapVirtualKeyW is None:
+            _MapVirtualKeyW = ctypes.windll.user32.MapVirtualKeyW
+            _MapVirtualKeyW.argtypes = [c_ulong, c_ulong]
+            _MapVirtualKeyW.restype = c_ulong
+        return _MapVirtualKeyW(vk, 0)
+
     def _make_key_input(vk, flags=0):
         inp = INPUT()
         inp.type = INPUT_KEYBOARD
         inp.union.ki.wVk = vk
+        inp.union.ki.wScan = _vk_to_scan(vk)
         inp.union.ki.dwFlags = flags
         inp.union.ki.dwExtraInfo = ctypes.pointer(c_ulong(0))
         return inp
