@@ -149,6 +149,44 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
         self.assertEqual(calls, ["screenshot_region_file"])
         send_key_combo.assert_not_called()
 
+    def test_inject_mouse_move_writes_rel_x_and_rel_y(self):
+        module = self._reload_for_linux("GNOME")
+        fake_kbd = types.SimpleNamespace(write=unittest.mock.Mock(), syn=unittest.mock.Mock())
+
+        with patch.object(module, "_get_virtual_kbd", return_value=fake_kbd):
+            module.inject_mouse_move(5, -3)
+
+        fake_kbd.write.assert_any_call(module.EV_REL, module.REL_X, 5)
+        fake_kbd.write.assert_any_call(module.EV_REL, module.REL_Y, -3)
+        fake_kbd.syn.assert_called_once()
+
+    def test_inject_mouse_move_is_noop_without_virtual_keyboard(self):
+        module = self._reload_for_linux("GNOME")
+
+        with patch.object(module, "_get_virtual_kbd", return_value=None):
+            module.inject_mouse_move(5, -3)  # should not raise
+
+    def test_is_holdable_key_action_true_for_custom_and_fixed_shortcuts(self):
+        module = self._reload_for_linux("GNOME")
+        self.assertTrue(module.is_holdable_key_action("custom:ctrl"))
+        self.assertTrue(module.is_holdable_key_action("space_left"))
+
+    def test_is_holdable_key_action_false_for_non_key_actions(self):
+        module = self._reload_for_linux("GNOME")
+        for action_id in ("mouse_left_click", "run:notepad", "none"):
+            self.assertFalse(module.is_holdable_key_action(action_id), action_id)
+
+    def test_press_action_down_and_up_write_matching_key_events(self):
+        module = self._reload_for_linux("GNOME")
+        fake_kbd = types.SimpleNamespace(write=unittest.mock.Mock(), syn=unittest.mock.Mock())
+
+        with patch.object(module, "_get_virtual_kbd", return_value=fake_kbd):
+            module.press_action_down("custom:ctrl")
+            module.press_action_up("custom:ctrl")
+
+        fake_kbd.write.assert_any_call(module.EV_KEY, module.KEY_LEFTCTRL, 1)
+        fake_kbd.write.assert_any_call(module.EV_KEY, module.KEY_LEFTCTRL, 0)
+
 
 class WindowsScreenshotActionTests(unittest.TestCase):
     _ACTIONS = {
@@ -199,6 +237,93 @@ class WindowsScreenshotActionTests(unittest.TestCase):
 
         self.assertEqual(calls, ["screenshot_full_clip"])
         send_key_combo.assert_not_called()
+
+    def test_inject_mouse_move_sends_relative_move_via_sendinput(self):
+        module = self._reload_for_windows()
+        calls = []
+
+        def fake_send_input(count, arr, size):
+            calls.append((arr[0].union.mi.dx, arr[0].union.mi.dy, arr[0].union.mi.dwFlags))
+            return 1
+
+        with patch.object(module, "SendInput", fake_send_input):
+            module.inject_mouse_move(12, -7)
+
+        self.assertEqual(calls, [(12, -7, module.MOUSEEVENTF_MOVE)])
+
+    def test_inject_mouse_move_swallows_sendinput_exceptions(self):
+        module = self._reload_for_windows()
+
+        with patch.object(module, "SendInput", side_effect=OSError("boom")):
+            module.inject_mouse_move(1, 1)  # should not raise
+
+
+class WindowsHoldableKeyActionTests(unittest.TestCase):
+    """Tests for holding a mapped key/shortcut down/up with a button."""
+
+    def _reload_for_windows(self):
+        import ctypes
+
+        def fake_send_input(*_args):
+            return 1
+
+        fake_send_input.argtypes = []
+        fake_send_input.restype = 1
+        fake_windll = types.SimpleNamespace(
+            user32=types.SimpleNamespace(SendInput=fake_send_input)
+        )
+        platform_patch = patch.object(sys, "platform", "win32")
+        windll_patch = patch.object(ctypes, "windll", fake_windll, create=True)
+        platform_patch.start()
+        windll_patch.start()
+        module = importlib.reload(key_simulator)
+        self.addCleanup(importlib.reload, key_simulator)
+        self.addCleanup(platform_patch.stop)
+        self.addCleanup(windll_patch.stop)
+        return module
+
+    def test_is_holdable_key_action_true_for_fixed_shortcut(self):
+        module = self._reload_for_windows()
+        self.assertTrue(module.is_holdable_key_action("alt_tab"))
+
+    def test_is_holdable_key_action_true_for_custom_modifier_only_shortcut(self):
+        module = self._reload_for_windows()
+        self.assertTrue(module.is_holdable_key_action("custom:ctrl"))
+
+    def test_is_holdable_key_action_false_for_phased_browser_nav(self):
+        module = self._reload_for_windows()
+        self.assertFalse(module.is_holdable_key_action("browser_back"))
+
+    def test_is_holdable_key_action_false_for_non_key_actions(self):
+        module = self._reload_for_windows()
+        for action_id in ("mouse_left_click", "run:notepad.exe", "cycle_dpi", "none"):
+            self.assertFalse(module.is_holdable_key_action(action_id), action_id)
+
+    def test_press_action_down_and_up_send_matching_key_events(self):
+        module = self._reload_for_windows()
+        calls = []
+
+        def fake_send_input(count, arr, size):
+            for inp in arr:
+                calls.append((inp.union.ki.wVk, bool(inp.union.ki.dwFlags & module.KEYEVENTF_KEYUP)))
+            return 1
+
+        with patch.object(module, "SendInput", fake_send_input):
+            module.press_action_down("custom:ctrl")
+            module.press_action_up("custom:ctrl")
+
+        self.assertEqual(calls, [
+            (module.VK_CONTROL, False),
+            (module.VK_CONTROL, True),
+        ])
+
+    def test_press_action_down_is_noop_for_non_holdable_action(self):
+        module = self._reload_for_windows()
+
+        with patch.object(module, "send_key_down") as send_key_down:
+            module.press_action_down("run:notepad.exe")
+
+        send_key_down.assert_not_called()
 
 
 class MacOSZoomActionTests(unittest.TestCase):
@@ -261,6 +386,38 @@ class MacOSZoomActionTests(unittest.TestCase):
 
         send_key_combo.assert_called_once_with([module.kVK_Command, module.kVK_Tab])
 
+    def test_is_holdable_key_action_true_for_fixed_shortcut(self):
+        module = self._reload_for_macos()
+        self.assertTrue(module.is_holdable_key_action("alt_tab"))
+
+    def test_is_holdable_key_action_false_for_multi_tap_zoom(self):
+        module = self._reload_for_macos()
+        self.assertFalse(module.is_holdable_key_action("zoom_in"))
+
+    def test_press_action_down_and_up_post_matching_key_events(self):
+        module = self._reload_for_macos()
+        with patch.object(module, "_QUARTZ_OK", True), patch.object(
+            module, "Quartz",
+            types.SimpleNamespace(
+                CGEventCreateKeyboardEvent=lambda source, key, is_down: (key, is_down),
+                CGEventSetFlags=lambda ev, flags: None,
+                CGEventPost=lambda tap, ev: posted.append(ev),
+                kCGHIDEventTap=0,
+            ),
+            create=True,
+        ):
+            posted = []
+            module.press_action_down("alt_tab")
+            module.press_action_up("alt_tab")
+
+        self.assertEqual(
+            posted,
+            [
+                (module.kVK_Command, True), (module.kVK_Tab, True),
+                (module.kVK_Tab, False), (module.kVK_Command, False),
+            ],
+        )
+
     def test_macos_screenshot_actions_keep_shortcut_defaults(self):
         module = self._reload_for_macos()
 
@@ -302,6 +459,41 @@ class MacOSZoomActionTests(unittest.TestCase):
 
         self.assertEqual(calls, ["screenshot_region_file"])
         send_key_combo.assert_not_called()
+
+    def test_inject_mouse_move_posts_relative_mouse_moved_event(self):
+        module = self._reload_for_macos()
+        posted = []
+        current_point = types.SimpleNamespace(x=100.0, y=200.0)
+        fake_quartz = types.SimpleNamespace(
+            CGEventCreate=lambda source: object(),
+            CGEventGetLocation=lambda event: current_point,
+            CGPointMake=lambda x, y: (x, y),
+            CGEventCreateMouseEvent=lambda *a: {"args": a},
+            CGEventSetIntegerValueField=lambda *a: None,
+            CGEventPost=lambda tap, event: posted.append((tap, event)),
+            kCGEventMouseMoved=5,
+            kCGMouseButtonLeft=0,
+            kCGHIDEventTap=0,
+            kCGEventSourceUserData=0,
+        )
+
+        with (
+            patch.object(module, "_QUARTZ_OK", True),
+            patch.object(module, "Quartz", fake_quartz, create=True),
+        ):
+            module.inject_mouse_move(10, -20)
+
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(
+            posted[0][1]["args"][2],
+            (110.0, 180.0),
+        )
+
+    def test_inject_mouse_move_is_noop_without_quartz(self):
+        module = self._reload_for_macos()
+
+        with patch.object(module, "_QUARTZ_OK", False):
+            module.inject_mouse_move(1, 1)  # should not raise
 
 
 class CustomShortcutCaptureTests(unittest.TestCase):
@@ -425,6 +617,111 @@ class MouseButtonActionTests(unittest.TestCase):
             label = key_simulator.ACTIONS[action_id]["label"]
             self.assertIsInstance(label, str)
             self.assertTrue(len(label) > 0)
+
+
+class RunCommandActionTests(unittest.TestCase):
+    class _ImmediateThread:
+        """Fake threading.Thread that runs its target synchronously."""
+
+        def __init__(self, target=None, daemon=None, name=None):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    def test_is_run_command_action(self):
+        self.assertTrue(key_simulator.is_run_command_action("run:notepad.exe"))
+        self.assertFalse(key_simulator.is_run_command_action("custom:ctrl+c"))
+        self.assertFalse(key_simulator.is_run_command_action("none"))
+        self.assertFalse(key_simulator.is_run_command_action(None))
+
+    def test_run_command_text_extracts_raw_command(self):
+        self.assertEqual(
+            key_simulator.run_command_text("run:notepad.exe --flag"),
+            "notepad.exe --flag",
+        )
+        self.assertEqual(key_simulator.run_command_text("custom:ctrl+c"), "")
+        self.assertEqual(key_simulator.run_command_text("none"), "")
+
+    def test_run_command_label_formats_short_command(self):
+        self.assertEqual(
+            key_simulator.run_command_label("run:notepad.exe"),
+            "Run: notepad.exe",
+        )
+
+    def test_run_command_label_truncates_long_command(self):
+        long_cmd = "a" * 60
+        label = key_simulator.run_command_label("run:" + long_cmd)
+        self.assertTrue(label.startswith("Run: "))
+        self.assertTrue(label.endswith("\u2026"))
+        self.assertLessEqual(len(label) - len("Run: "), 40)
+
+    def test_parse_run_command_windows_strips_quotes_keeps_backslashes(self):
+        argv = key_simulator.parse_run_command(
+            r'"C:\Program Files\App\app.exe" --file "some file.txt"',
+            platform_name="win32",
+        )
+        self.assertEqual(
+            argv,
+            [r"C:\Program Files\App\app.exe", "--file", "some file.txt"],
+        )
+
+    def test_parse_run_command_posix_uses_shell_style_splitting(self):
+        argv = key_simulator.parse_run_command(
+            "/usr/bin/firefox --new-window 'https://example.com'",
+            platform_name="linux",
+        )
+        self.assertEqual(
+            argv,
+            ["/usr/bin/firefox", "--new-window", "https://example.com"],
+        )
+
+    def test_execute_run_command_launches_argv_without_shell(self):
+        with (
+            patch.object(key_simulator.threading, "Thread", self._ImmediateThread),
+            patch.object(key_simulator.sys, "platform", "linux"),
+            patch.object(key_simulator.subprocess, "Popen") as popen,
+        ):
+            key_simulator.execute_run_command("run:/usr/bin/notepad --flag")
+
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], ["/usr/bin/notepad", "--flag"])
+        self.assertFalse(kwargs.get("shell", True))
+
+    def test_execute_run_command_ignores_blank_command(self):
+        with patch.object(key_simulator.subprocess, "Popen") as popen:
+            key_simulator.execute_run_command("run:   ")
+        popen.assert_not_called()
+
+    def test_execute_run_command_ignores_non_run_action(self):
+        with patch.object(key_simulator.subprocess, "Popen") as popen:
+            key_simulator.execute_run_command("custom:ctrl+c")
+        popen.assert_not_called()
+
+    @unittest.skipUnless(
+        sys.platform in ("win32", "darwin", "linux"),
+        "execute_action dispatch is only defined for supported platforms",
+    )
+    def test_execute_action_dispatches_run_commands(self):
+        with (
+            patch.object(key_simulator, "execute_run_command") as exec_run,
+            patch.object(key_simulator, "send_key_combo") as send_key_combo,
+        ):
+            key_simulator.execute_action("run:notepad.exe")
+
+        exec_run.assert_called_once_with("run:notepad.exe")
+        send_key_combo.assert_not_called()
+
+    def test_execute_run_command_swallows_popen_failures(self):
+        with (
+            patch.object(key_simulator.threading, "Thread", self._ImmediateThread),
+            patch.object(key_simulator.sys, "platform", "linux"),
+            patch.object(key_simulator.subprocess, "Popen", side_effect=OSError("boom")),
+        ):
+            # Should not raise even though the launch fails.
+            key_simulator.execute_run_command("run:/does/not/exist")
 
 
 if __name__ == "__main__":

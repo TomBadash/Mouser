@@ -24,6 +24,7 @@ from ctypes import (
 )
 
 from core.key_simulator import MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL
+from core.key_simulator import inject_mouse_move as _inject_mouse_move_impl
 from core.key_simulator import inject_scroll as _inject_scroll_impl
 from core.mouse_hook_base import BaseMouseHook, HidGestureListener
 from core.mouse_hook_types import MouseEvent
@@ -562,10 +563,12 @@ class MouseHook(BaseMouseHook):
                 self._gesture_active = True
                 self._gesture_triggered = False
                 print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
+                self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
         elif not extra_now and extra_prev:
             if self._gesture_active:
                 self._gesture_active = False
                 print("[MouseHook] Gesture UP")
+                self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
                 self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
     def _setup_raw_input(self):
@@ -710,6 +713,7 @@ class MouseHook(BaseMouseHook):
             self._gesture_triggered = False
             self._emit_debug("HID gesture button down")
             self._emit_gesture_event({"type": "button_down"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
             if self._gesture_direction_enabled and not self._gesture_cooldown_active():
                 self._start_gesture_tracking()
             else:
@@ -731,6 +735,7 @@ class MouseHook(BaseMouseHook):
                     "click_candidate": should_click,
                 }
             )
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
             if should_click:
                 self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -760,6 +765,8 @@ class MouseHook(BaseMouseHook):
                 "dy": delta_y,
             }
         )
+        if self._wants_gesture_movement_injection():
+            _inject_mouse_move_impl(delta_x, delta_y)
         self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
     def start(self):

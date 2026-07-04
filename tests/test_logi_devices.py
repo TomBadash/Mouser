@@ -198,7 +198,8 @@ class LogiDeviceRegistryTests(unittest.TestCase):
             gesture_cids=(0x00C3,),
         )
 
-        self.assertIn("gesture", info.supported_buttons)
+        self.assertIn("gesture_release", info.supported_buttons)
+        self.assertIn("gesture_press", info.supported_buttons)
         self.assertNotIn("mode_shift", info.supported_buttons)
         self.assertIn("hscroll_left", info.supported_buttons)
 
@@ -299,7 +300,8 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertIn("hscroll_right", buttons)
         # No REPROG_CONTROLS_V4 on G-series onboard-profile mice, so no
         # HID++-gated buttons may be offered.
-        self.assertNotIn("gesture", buttons)
+        self.assertNotIn("gesture_release", buttons)
+        self.assertNotIn("gesture_press", buttons)
         self.assertNotIn("mode_shift", buttons)
         self.assertNotIn("dpi_switch", buttons)
 
@@ -421,7 +423,8 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
             gesture_cids=(0x00C3,),
         )
 
-        self.assertNotIn("gesture", buttons)
+        self.assertNotIn("gesture_release", buttons)
+        self.assertNotIn("gesture_press", buttons)
         self.assertNotIn("gesture_left", buttons)
         self.assertNotIn("gesture_right", buttons)
 
@@ -437,7 +440,8 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
             gesture_rawxy_enabled=True,
         )
 
-        self.assertIn("gesture", buttons)
+        self.assertIn("gesture_release", buttons)
+        self.assertIn("gesture_press", buttons)
         self.assertIn("gesture_up", buttons)
 
     def test_reprog_control_filter_removes_directional_gestures_without_rawxy(self):
@@ -452,7 +456,8 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
             gesture_rawxy_enabled=False,
         )
 
-        self.assertIn("gesture", buttons)
+        self.assertIn("gesture_release", buttons)
+        self.assertIn("gesture_press", buttons)
         self.assertNotIn("gesture_left", buttons)
         self.assertNotIn("gesture_right", buttons)
         self.assertNotIn("gesture_up", buttons)
@@ -572,7 +577,8 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
 
         self.assertEqual(info.key, "mx_anywhere_3")
         self.assertIn("mode_shift", info.supported_buttons)
-        self.assertIn("gesture", info.supported_buttons)
+        self.assertIn("gesture_release", info.supported_buttons)
+        self.assertIn("gesture_press", info.supported_buttons)
         self.assertEqual(info.capability_inventory.active_gesture_cid, 0x00D7)
         self.assertTrue(info.capability_inventory.mode_shift)
         self.assertTrue(info.capability_inventory.smart_shift)
@@ -650,7 +656,8 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertEqual(info.key, "ergo_m575_trackball")
         self.assertEqual(info.ui_layout, "generic_mouse")
         self.assertEqual(info.supported_buttons, GENERIC_BUTTONS)
-        self.assertNotIn("gesture", info.supported_buttons)
+        self.assertNotIn("gesture_release", info.supported_buttons)
+        self.assertNotIn("gesture_press", info.supported_buttons)
         self.assertNotIn("hscroll_left", info.supported_buttons)
         self.assertTrue(info.capability_inventory.gesture_click)
         self.assertTrue(info.capability_inventory.adjustable_dpi)

@@ -33,7 +33,7 @@ MX_MASTER_LAYOUT = {
             "labelOffY": -100,
         },
         {
-            "buttonKey": "gesture",
+            "buttonKey": "gesture_release",
             "label": "Gesture button",
             "summaryType": "gesture",
             "normX": 0.70,
@@ -122,7 +122,7 @@ MX_ANYWHERE_LAYOUT = {
             "labelOffY": -60,
         },
         {
-            "buttonKey": "gesture",
+            "buttonKey": "gesture_release",
             "label": "Gesture button",
             "summaryType": "gesture",
             "normX": 0.46,

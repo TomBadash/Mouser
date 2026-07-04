@@ -710,7 +710,8 @@ class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 want_raw_xy=True):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
@@ -733,6 +734,13 @@ class HidGestureListener:
         self._held      = False
         self._connected = False         # True while HID++ device is open
         self._rawxy_enabled = False
+        # Whether to divert raw XY movement (freezing OS cursor movement)
+        # while the gesture button is held so swipe direction can be
+        # computed.  When False, the button still divert presses/releases
+        # normally but movement keeps going to the OS as regular cursor
+        # input -- swipe direction detection just won't have data to work
+        # with.  See set_raw_xy_wanted().
+        self._want_raw_xy = bool(want_raw_xy)
         self._pending_dpi = None        # set by set_dpi(), applied in loop
         self._dpi_result  = None        # True/False after apply
         self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
@@ -744,6 +752,7 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        self._redivert_requested = False
         self._pending_battery = None
         self._battery_result = None
         self._last_logged_battery = None
@@ -780,6 +789,16 @@ class HidGestureListener:
         self._running = False
         d = self._dev
         if d:
+            # Best-effort: restore native (non-diverted) button behaviour
+            # before closing. Without this, whatever divert/raw-XY state was
+            # last active (e.g. from "move cursor while swiping" being on)
+            # stays in effect on the device for the rest of its wireless
+            # session even after Mouser fully quits, since the CID's
+            # reporting mode isn't reset just by us going away.
+            try:
+                self._undivert()
+            except Exception:
+                pass
             try:
                 d.close()
             except Exception:
@@ -1224,16 +1243,23 @@ class HidGestureListener:
         return ordered or list(preferred)
 
     def _divert(self):
-        """Divert the selected gesture control and enable raw XY when supported."""
+        """Divert the selected gesture control, enabling raw XY only if wanted.
+
+        Raw XY diversion is what causes the OS cursor to freeze while the
+        button is held (movement is rerouted to us instead of the OS), so we
+        only request it when swipe-direction detection actually needs it —
+        see ``_want_raw_xy`` / ``set_raw_xy_wanted()``.
+        """
         if self._feat_idx is None:
             return False
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
-            resp = self._set_cid_reporting(cid, 0x33)
-            if resp is not None:
-                self._rawxy_enabled = True
-                print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
-                return True
+            if self._want_raw_xy:
+                resp = self._set_cid_reporting(cid, 0x33)
+                if resp is not None:
+                    self._rawxy_enabled = True
+                    print(f"[HidGesture] Divert {_format_cid(cid)} with RawXY: OK")
+                    return True
             self._rawxy_enabled = False
             resp = self._set_cid_reporting(cid, 0x03)
             ok = resp is not None
@@ -1438,6 +1464,24 @@ class HidGestureListener:
         re-applying all button diverts (including CID 0x00C4).
         """
         self._reconnect_requested = True
+
+    def set_raw_xy_wanted(self, want_raw_xy):
+        """Enable/disable raw-XY gesture diversion (thread-safe).
+
+        Called whenever the "lock cursor during swipes" setting or the set
+        of mapped swipe actions changes. If the device is already connected
+        and diverted with a different raw-XY state than requested, re-sends
+        the SetCidReporting command in place on the listener thread so the
+        new divert takes effect immediately — no need to drop and
+        re-establish the whole HID++ connection (which would otherwise make
+        the device appear disconnected for a few seconds).
+        """
+        want_raw_xy = bool(want_raw_xy)
+        if want_raw_xy == self._want_raw_xy:
+            return
+        self._want_raw_xy = want_raw_xy
+        if self._connected and self._rawxy_enabled != want_raw_xy:
+            self._redivert_requested = True
 
     def read_smart_shift(self):
         """Queue a Smart Shift read.
@@ -1939,6 +1983,11 @@ class HidGestureListener:
                         print(f"[HidGesture] {self._consecutive_request_timeouts} consecutive "
                               f"request timeouts — forcing reconnect")
                         raise IOError("consecutive request timeouts — device likely asleep")
+                    # Apply a queued raw-XY divert change in place, without
+                    # dropping the connection (see set_raw_xy_wanted()).
+                    if self._redivert_requested:
+                        self._redivert_requested = False
+                        self._divert()
                     # Apply any queued DPI command
                     if self._pending_dpi is not None:
                         if self._pending_dpi == "read":
@@ -1976,6 +2025,7 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._wheel_feature_indexes = {}
+            self._redivert_requested = False
             self._pending_battery = None
             self._pending_dpi = None
             self._dpi_result = None

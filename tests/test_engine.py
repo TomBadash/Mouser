@@ -92,6 +92,184 @@ class _RecordedThread:
         return None
 
 
+class _RecordingFakeMouseHook(_FakeMouseHook):
+    def __init__(self):
+        super().__init__()
+        self.registered = {}
+        self.blocked = []
+
+    def block(self, event_type):
+        self.blocked.append(event_type)
+
+    def register(self, event_type, callback):
+        self.registered[event_type] = callback
+
+    def reset_bindings(self):
+        self.registered = {}
+        self.blocked = []
+
+
+class EngineGesturePressReleaseTests(unittest.TestCase):
+    def _make_engine(self, mappings=None):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        if mappings:
+            cfg["profiles"]["default"]["mappings"].update(mappings)
+
+        hook = _RecordingFakeMouseHook()
+        with (
+            patch("core.engine.MouseHook", return_value=hook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            Engine()
+        return hook
+
+    def test_gesture_press_mouse_action_registers_down_and_up(self):
+        hook = self._make_engine({"gesture_press": "mouse_left_click"})
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.blocked)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.blocked)
+
+    def test_gesture_press_keyboard_action_registers_down_and_up_for_hold(self):
+        # Holdable keyboard shortcuts (e.g. mapping press to Ctrl) should be
+        # held down for as long as the button is physically pressed, not
+        # tapped once on press — so both edges get wired up.
+        hook = self._make_engine({"gesture_press": "alt_tab"})
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.blocked)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.blocked)
+
+    def test_gesture_press_custom_shortcut_registers_down_and_up_for_hold(self):
+        hook = self._make_engine({"gesture_press": "custom:ctrl"})
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.registered)
+
+    def test_gesture_press_phased_browser_nav_action_registers_down_only(self):
+        # browser_back/forward use a phased tap sequence on Windows and
+        # aren't meant to be held down for the gesture's duration.
+        hook = self._make_engine({"gesture_press": "browser_back"})
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.blocked)
+        self.assertNotIn(MouseEvent.GESTURE_UP, hook.registered)
+
+    def test_gesture_press_keyboard_hold_dispatches_press_and_release(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["default"]["mappings"]["gesture_press"] = "custom:ctrl"
+
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            engine = Engine()
+
+        down_handler = engine._make_key_down_handler("custom:ctrl")
+        up_handler = engine._make_key_up_handler("custom:ctrl")
+        with (
+            patch("core.engine.press_action_down") as press_down_mock,
+            patch("core.engine.press_action_up") as press_up_mock,
+            patch("core.engine.threading.Timer") as timer_mock,
+        ):
+            down_handler(SimpleNamespace(event_type=MouseEvent.GESTURE_DOWN))
+            up_handler(SimpleNamespace(event_type=MouseEvent.GESTURE_UP))
+
+        press_down_mock.assert_called_once_with("custom:ctrl")
+        press_up_mock.assert_called_once_with("custom:ctrl")
+        # The safety-release timer started on press should be cancelled by
+        # the matching release, not left to auto-fire later.
+        timer_mock.return_value.cancel.assert_called_once()
+
+    def test_gesture_release_still_registers_click(self):
+        hook = self._make_engine({"gesture_release": "browser_back"})
+
+        self.assertIn(MouseEvent.GESTURE_CLICK, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_CLICK, hook.blocked)
+
+    def test_gesture_press_and_release_are_independent(self):
+        hook = self._make_engine({
+            "gesture_press": "alt_tab",
+            "gesture_release": "browser_back",
+        })
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_CLICK, hook.registered)
+
+    def test_gesture_press_run_command_action_registers_down_only(self):
+        # Run-command actions aren't mouse-button actions, so they follow the
+        # same fire-on-press / block-on-up path as keyboard actions.
+        hook = self._make_engine({"gesture_press": "run:notepad.exe"})
+
+        self.assertIn(MouseEvent.GESTURE_DOWN, hook.registered)
+        self.assertIn(MouseEvent.GESTURE_UP, hook.blocked)
+        self.assertNotIn(MouseEvent.GESTURE_UP, hook.registered)
+
+    def test_gesture_press_run_command_dispatches_via_execute_action(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["default"]["mappings"]["gesture_press"] = "run:notepad.exe"
+
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            engine = Engine()
+
+        handler = engine._make_handler("run:notepad.exe")
+        with patch("core.engine.execute_action") as execute_action_mock:
+            handler(SimpleNamespace(event_type=MouseEvent.GESTURE_DOWN))
+
+        execute_action_mock.assert_called_once_with("run:notepad.exe")
+
+
+class EngineGestureLockCursorTests(unittest.TestCase):
+    """Verify the "lock cursor during swipes" setting reaches the hook."""
+
+    def _make_engine(self, mappings=None, settings=None):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        if mappings:
+            cfg["profiles"]["default"]["mappings"].update(mappings)
+        if settings:
+            cfg["settings"].update(settings)
+
+        hook = _RecordingFakeMouseHook()
+        with (
+            patch("core.engine.MouseHook", return_value=hook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            Engine()
+        return hook
+
+    def test_lock_cursor_defaults_to_true(self):
+        hook = self._make_engine()
+        self.assertTrue(hook._gesture_config["lock_cursor"])
+
+    def test_lock_cursor_setting_is_forwarded(self):
+        hook = self._make_engine(settings={"gesture_lock_cursor": False})
+        self.assertFalse(hook._gesture_config["lock_cursor"])
+
+    def test_enabled_reflects_configured_swipe_actions(self):
+        hook = self._make_engine({"gesture_left": "browser_back"})
+        self.assertTrue(hook._gesture_config["enabled"])
+
+        hook_no_swipes = self._make_engine()
+        self.assertFalse(hook_no_swipes._gesture_config["enabled"])
+
+
 class EngineHorizontalScrollTests(unittest.TestCase):
     def _make_engine(self):
         from core.engine import Engine

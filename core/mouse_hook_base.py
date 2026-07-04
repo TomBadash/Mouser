@@ -30,6 +30,7 @@ class BaseMouseHook:
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
         self._gesture_direction_enabled = False
+        self.gesture_lock_cursor = True
         self._gesture_threshold = 50.0
         self._gesture_deadzone = 40.0
         self._gesture_timeout_ms = 3000
@@ -91,16 +92,47 @@ class BaseMouseHook:
         deadzone=40,
         timeout_ms=3000,
         cooldown_ms=500,
+        lock_cursor=True,
     ):
         self._gesture_direction_enabled = bool(enabled)
         self._gesture_threshold = float(max(5, threshold))
         self._gesture_deadzone = float(max(0, deadzone))
         self._gesture_timeout_ms = max(250, int(timeout_ms))
         self._gesture_cooldown_ms = max(0, int(cooldown_ms))
+        self.gesture_lock_cursor = bool(lock_cursor)
         if not self._gesture_direction_enabled:
             self._gesture_tracking = False
             self._gesture_triggered = False
             self._gesture_input_source = None
+        self._sync_gesture_raw_xy()
+
+    def _wants_gesture_raw_xy(self):
+        """Whether the gesture button should divert raw XY movement data.
+
+        Needed in two cases: swipe-direction detection requires the raw
+        deltas (and the "lock cursor" setting hasn't opted out of that), or
+        the user wants the cursor to keep moving while the button is held,
+        which requires the same raw deltas to synthetically replay as
+        cursor movement (see ``_wants_gesture_movement_injection``).  The
+        gesture button suppresses normal cursor movement at the hardware
+        level while held, regardless of any HID++ divert request, so raw
+        XY is the only way to get movement data back at all.
+        """
+        return not self.gesture_lock_cursor or self._gesture_direction_enabled
+
+    def _wants_gesture_movement_injection(self):
+        """Whether raw movement deltas should be replayed as synthetic
+        cursor movement, to compensate for the gesture button's hardware
+        freeze while held."""
+        return not self.gesture_lock_cursor
+
+    def _sync_gesture_raw_xy(self):
+        """Push the current raw-XY requirement to an already-running HID
+        listener so a settings change takes effect without reconnecting the
+        mouse."""
+        hg = self._hid_gesture
+        if hg is not None and hasattr(hg, "set_raw_xy_wanted"):
+            hg.set_raw_xy_wanted(self._wants_gesture_raw_xy())
 
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
@@ -273,6 +305,7 @@ class BaseMouseHook:
             on_connect=self._on_hid_connect,
             on_disconnect=self._on_hid_disconnect,
             extra_diverts=self._build_extra_diverts(),
+            want_raw_xy=self._wants_gesture_raw_xy(),
         )
         self._hid_gesture = listener
         if not listener.start():

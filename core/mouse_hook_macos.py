@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 
+from core.key_simulator import inject_mouse_move as _inject_mouse_move_impl
 from core.mouse_hook_base import BaseMouseHook, HidGestureListener
 from core.mouse_hook_types import MouseEvent
 
@@ -425,6 +426,7 @@ class MouseHook(BaseMouseHook):
             self._gesture_triggered = False
             self._emit_debug("HID gesture button down")
             self._emit_gesture_event({"type": "button_down"})
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_DOWN))
             if self._gesture_direction_enabled and not self._gesture_cooldown_active():
                 self._start_gesture_tracking()
             else:
@@ -446,6 +448,7 @@ class MouseHook(BaseMouseHook):
                     "click_candidate": should_click,
                 }
             )
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
             if should_click:
                 self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
 
@@ -475,6 +478,8 @@ class MouseHook(BaseMouseHook):
                 "dy": delta_y,
             }
         )
+        if self._wants_gesture_movement_injection():
+            _inject_mouse_move_impl(delta_x, delta_y)
         self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
 
     def _register_wake_observer(self):

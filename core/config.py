@@ -25,14 +25,14 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 # Which mouse events map to which friendly button names
 # Order matches the Logi Options+ diagram (top view then side view)
 BUTTON_NAMES = {
-    "middle":        "Middle button",
-    "gesture":       "Gesture button",
-    "xbutton1":      "Back button",
-    "xbutton2":      "Forward button",
-    "hscroll_left":  "Horizontal scroll left",
-    "hscroll_right": "Horizontal scroll right",
-    "mode_shift":    "Mode shift button",
-    "dpi_switch":    "DPI switch button",
+    "middle":          "Middle button",
+    "gesture_release": "Gesture button",
+    "xbutton1":        "Back button",
+    "xbutton2":        "Forward button",
+    "hscroll_left":    "Horizontal scroll left",
+    "hscroll_right":   "Horizontal scroll right",
+    "mode_shift":      "Mode shift button",
+    "dpi_switch":      "DPI switch button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -44,6 +44,7 @@ GESTURE_DIRECTION_BUTTONS = (
 
 PROFILE_BUTTON_NAMES = {
     **BUTTON_NAMES,
+    "gesture_press": "Gesture tap press",
     "gesture_left":  "Gesture swipe left",
     "gesture_right": "Gesture swipe right",
     "gesture_up":    "Gesture swipe up",
@@ -52,22 +53,23 @@ PROFILE_BUTTON_NAMES = {
 
 # Maps config button keys to the MouseEvent types they correspond to
 BUTTON_TO_EVENTS = {
-    "middle":        ("middle_down", "middle_up"),
-    "gesture":       ("gesture_click",),
-    "gesture_left":  ("gesture_swipe_left",),
-    "gesture_right": ("gesture_swipe_right",),
-    "gesture_up":    ("gesture_swipe_up",),
-    "gesture_down":  ("gesture_swipe_down",),
-    "xbutton1":      ("xbutton1_down", "xbutton1_up"),
-    "xbutton2":      ("xbutton2_down", "xbutton2_up"),
-    "hscroll_left":  ("hscroll_left",),
-    "hscroll_right": ("hscroll_right",),
-    "mode_shift":    ("mode_shift_down", "mode_shift_up"),
-    "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
+    "middle":          ("middle_down", "middle_up"),
+    "gesture_release": ("gesture_click",),
+    "gesture_press":   ("gesture_down", "gesture_up"),
+    "gesture_left":    ("gesture_swipe_left",),
+    "gesture_right":   ("gesture_swipe_right",),
+    "gesture_up":      ("gesture_swipe_up",),
+    "gesture_down":    ("gesture_swipe_down",),
+    "xbutton1":        ("xbutton1_down", "xbutton1_up"),
+    "xbutton2":        ("xbutton2_down", "xbutton2_up"),
+    "hscroll_left":    ("hscroll_left",),
+    "hscroll_right":   ("hscroll_right",),
+    "mode_shift":      ("mode_shift_down", "mode_shift_up"),
+    "dpi_switch":      ("dpi_switch_down", "dpi_switch_up"),
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -75,7 +77,8 @@ DEFAULT_CONFIG = {
             "apps": [],          # empty = all apps (fallback profile)
             "mappings": {
                 "middle": "none",
-                "gesture": "none",
+                "gesture_release": "none",
+                "gesture_press": "none",
                 "gesture_left": "none",
                 "gesture_right": "none",
                 "gesture_up": "none",
@@ -102,6 +105,7 @@ DEFAULT_CONFIG = {
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
         "gesture_cooldown_ms": 500,
+        "gesture_lock_cursor": True,
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -330,6 +334,20 @@ def _migrate(cfg):
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
 
+    if version < 10:
+        # v9 stored the gesture button's tap-on-release action under the bare
+        # "gesture" key. Rename it to "gesture_release" (preserving the user's
+        # existing action) and introduce "gesture_press" for the new
+        # tap-on-press mapping, so the two are never confused with each other
+        # or with the "gesture_up"/"gesture_down" swipe direction keys.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            if "gesture" in mappings:
+                mappings.setdefault("gesture_release", mappings.pop("gesture"))
+            mappings.setdefault("gesture_release", "none")
+            mappings.setdefault("gesture_press", "none")
+        cfg["version"] = 10
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -339,6 +357,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("gesture_lock_cursor", True)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():
