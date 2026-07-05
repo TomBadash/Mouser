@@ -50,6 +50,7 @@ class _FakeEngine:
         self.start_count = 0
         self.stop_count = 0
         self.start_error = None
+        self.reload_mappings_count = 0
 
     def set_profile_change_callback(self, cb):
         self.profile_callback = cb
@@ -82,6 +83,9 @@ class _FakeEngine:
 
     def stop(self):
         self.stop_count += 1
+
+    def reload_mappings(self):
+        self.reload_mappings_count += 1
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
@@ -1224,6 +1228,188 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         create_profile.assert_not_called()
         self.assertIn("Profile already exists", status_messages)
+
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendPerButtonGestureTests(unittest.TestCase):
+    """issue #006 -- per-button gesture toggle + namespaced binding get/set."""
+
+    def _make_backend(self, engine=None, cfg=None):
+        loaded_config = copy.deepcopy(cfg or DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=loaded_config),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=engine)
+
+    def _mx_anywhere_2s(self):
+        return SimpleNamespace(
+            key="mx_anywhere_2s",
+            display_name="MX Anywhere 2S",
+            dpi_min=200,
+            dpi_max=4000,
+            ui_layout="mx_anywhere_2s",
+            supported_buttons=(
+                "middle", "xbutton1", "xbutton2",
+                "gesture_forward_left", "gesture_forward_right",
+                "gesture_forward_up", "gesture_forward_down",
+            ),
+        )
+
+    def test_gesture_owner_for_button_maps_hotspot_keys_to_owners(self):
+        backend = self._make_backend()
+        self.assertEqual(backend.gestureOwnerForButton("xbutton1"), "back")
+        self.assertEqual(backend.gestureOwnerForButton("xbutton2"), "forward")
+        self.assertEqual(backend.gestureOwnerForButton("middle"), "middle")
+        self.assertEqual(backend.gestureOwnerForButton("hscroll_left"), "")
+
+    def test_gesture_mode_off_by_default(self):
+        backend = self._make_backend()
+        self.assertEqual(backend.gestureEnabledOwners, [])
+        bindings = backend.gestureOwnerBindings("default", "forward")
+        self.assertTrue(all(entry["actionId"] == "none" for entry in bindings))
+
+    def test_set_gesture_owner_enabled_persists_and_notifies(self):
+        backend = self._make_backend()
+        settings_changed = []
+        backend.settingsChanged.connect(lambda: settings_changed.append(True))
+
+        with patch("ui.backend.save_config") as save_mock:
+            backend.setGestureOwnerEnabled("forward", True)
+
+        save_mock.assert_called_once()
+        self.assertEqual(backend.gestureEnabledOwners, ["forward"])
+        self.assertEqual(len(settings_changed), 1)
+
+    def test_set_gesture_owner_enabled_noop_when_unchanged(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("forward", True)
+
+        with patch("ui.backend.save_config") as save_mock:
+            backend.setGestureOwnerEnabled("forward", True)
+
+        save_mock.assert_not_called()
+
+    def test_set_gesture_owner_enabled_rejects_unknown_owner(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config") as save_mock:
+            # "gesture" is the HID thumb button, not a per-button owner.
+            backend.setGestureOwnerEnabled("gesture", True)
+        save_mock.assert_not_called()
+        self.assertEqual(backend.gestureEnabledOwners, [])
+
+    def test_set_gesture_owner_enabled_reruns_engine_mapping_reload(self):
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("middle", True)
+        self.assertEqual(engine.reload_mappings_count, 1)
+
+    def test_toggle_off_does_not_clear_direction_bindings(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("back", True)
+        with patch("core.config.save_config"):
+            backend.setGestureOwnerBinding("default", "back", "up", "mission_control")
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("back", False)
+
+        self.assertEqual(backend.gestureEnabledOwners, [])
+        bindings = {
+            entry["direction"]: entry["actionId"]
+            for entry in backend.gestureOwnerBindings("default", "back")
+        }
+        self.assertEqual(bindings["up"], "mission_control")
+
+    def test_toggle_off_does_not_touch_single_action_mapping(self):
+        backend = self._make_backend()
+
+        def xbutton1_action():
+            mappings = backend.getProfileMappings("default")
+            return next(m["actionId"] for m in mappings if m["key"] == "xbutton1")
+
+        original = xbutton1_action()
+        self.assertEqual(original, "alt_tab")  # DEFAULT_CONFIG value, sanity check
+
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("back", True)
+        with patch("core.config.save_config"):
+            backend.setGestureOwnerBinding("default", "back", "left", "browser_back")
+        with patch("ui.backend.save_config"):
+            backend.setGestureOwnerEnabled("back", False)
+
+        self.assertEqual(xbutton1_action(), original)
+
+    def test_set_and_get_gesture_owner_binding_round_trip(self):
+        backend = self._make_backend()
+        with patch("core.config.save_config"):
+            backend.setGestureOwnerBinding("default", "forward", "up", "mission_control")
+
+        bindings = {
+            entry["direction"]: entry["actionId"]
+            for entry in backend.gestureOwnerBindings("default", "forward")
+        }
+        self.assertEqual(bindings["up"], "mission_control")
+        self.assertEqual(bindings["left"], "none")
+        self.assertEqual(bindings["right"], "none")
+        self.assertEqual(bindings["down"], "none")
+
+    def test_set_gesture_owner_binding_rejects_unknown_owner_or_direction(self):
+        backend = self._make_backend()
+        with patch("core.config.save_config") as save_mock:
+            backend.setGestureOwnerBinding("default", "trigger", "up", "mission_control")
+            backend.setGestureOwnerBinding("default", "back", "diagonal", "mission_control")
+        save_mock.assert_not_called()
+
+    def test_gesture_owner_bindings_unknown_owner_returns_empty(self):
+        backend = self._make_backend()
+        self.assertEqual(backend.gestureOwnerBindings("default", "trigger"), [])
+
+    def test_gesture_hold_floor_ms_default(self):
+        backend = self._make_backend()
+        self.assertEqual(backend.gestureHoldFloorMs, 80)
+
+    def test_set_gesture_hold_floor_ms_clamps_and_persists(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config") as save_mock:
+            backend.setGestureHoldFloorMs(-25)
+        save_mock.assert_called_once()
+        self.assertEqual(backend.gestureHoldFloorMs, 0)
+
+    def test_set_gesture_hold_floor_ms_noop_when_unchanged(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config"):
+            backend.setGestureHoldFloorMs(120)
+
+        with patch("ui.backend.save_config") as save_mock:
+            backend.setGestureHoldFloorMs(120)
+        save_mock.assert_not_called()
+
+    def test_gesture_eligible_owners_defaults_permissive_without_device(self):
+        backend = self._make_backend()
+        self.assertEqual(set(backend.gestureEligibleOwners), {"back", "forward", "middle"})
+
+    def test_gesture_eligible_owners_narrowed_by_device_capability(self):
+        backend = self._make_backend(
+            engine=_FakeEngine(device_connected=True, connected_device=self._mx_anywhere_2s())
+        )
+        self.assertEqual(backend.gestureEligibleOwners, ["forward"])
+
+    def test_gesture_eligible_owners_empty_when_device_lacks_capability(self):
+        device = SimpleNamespace(
+            key="mx_master_3s",
+            display_name="MX Master 3S",
+            dpi_min=200,
+            dpi_max=8000,
+            ui_layout="mx_master_3s",
+            supported_buttons=("middle", "xbutton1", "xbutton2"),
+        )
+        backend = self._make_backend(
+            engine=_FakeEngine(device_connected=True, connected_device=device)
+        )
+        self.assertEqual(backend.gestureEligibleOwners, [])
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")

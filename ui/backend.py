@@ -20,7 +20,8 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, GESTURE_OWNERS, GESTURE_DIRECTIONS,
+    GESTURE_HOLD_FLOOR_MS_DEFAULT,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -78,6 +79,12 @@ def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
+
+
+# Physical hotspot button -> the per-button gesture owner name it can host
+# (issue #001 namespaced config keys). "gesture" (the HID thumb button) isn't
+# an owner here -- it keeps its own always-on 4-direction panel.
+_GESTURE_OWNER_FOR_BUTTON = {"xbutton1": "back", "xbutton2": "forward", "middle": "middle"}
 
 
 def _qt_shortcut_modifier_name(name):
@@ -529,6 +536,30 @@ class Backend(QObject):
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
+
+    @Property(int, notify=settingsChanged)
+    def gestureHoldFloorMs(self):
+        """Min hold time (ms) before a slide arms a per-button gesture (issue #001)."""
+        return int(self._cfg.get("settings", {}).get(
+            "gesture_hold_floor_ms", GESTURE_HOLD_FLOOR_MS_DEFAULT
+        ))
+
+    @Property(list, notify=deviceLayoutChanged)
+    def gestureEligibleOwners(self):
+        """Owners (back/forward/middle) the connected device can host a per-button
+        gesture on -- mirrors the capability narrowing in core/logi_devices.py."""
+        btns = self._effective_supported_buttons
+        return [
+            owner for owner in GESTURE_OWNERS
+            if btns is None or f"gesture_{owner}_left" in btns
+        ]
+
+    @Property(list, notify=settingsChanged)
+    def gestureEnabledOwners(self):
+        """Owners with gesture mode toggled on. Persisted independently of the 4
+        direction bindings, so turning gesture mode off never drops them."""
+        flags = self._cfg.get("settings", {}).get("gesture_owner_enabled", {})
+        return [owner for owner in GESTURE_OWNERS if flags.get(owner, False)]
 
     @Property(str, notify=settingsChanged)
     def appearanceMode(self):
@@ -1386,6 +1417,64 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
         self.settingsChanged.emit()
+
+    @Slot(int)
+    def setGestureHoldFloorMs(self, value):
+        clamped = max(0, int(value))
+        if clamped == self.gestureHoldFloorMs:
+            return
+        self._cfg.setdefault("settings", {})["gesture_hold_floor_ms"] = clamped
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(str, result=str)
+    def gestureOwnerForButton(self, buttonKey):
+        """Resolve a hotspot button key (xbutton1/xbutton2/middle) to its gesture
+        owner name, or "" if that button can't own a per-button gesture."""
+        return _GESTURE_OWNER_FOR_BUTTON.get(buttonKey, "")
+
+    @Slot(str, bool)
+    def setGestureOwnerEnabled(self, owner, enabled):
+        """Toggle gesture mode for a button. Independent of the 4 direction
+        bindings -- turning it off leaves them in config untouched, and leaves
+        the button's normal single-action mapping untouched too."""
+        if owner not in GESTURE_OWNERS:
+            return
+        flags = self._cfg.setdefault("settings", {}).setdefault("gesture_owner_enabled", {})
+        enabled = bool(enabled)
+        if flags.get(owner, False) == enabled:
+            return
+        flags[owner] = enabled
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(str, str, result=list)
+    def gestureOwnerBindings(self, profileName, owner):
+        """Return the 4 direction bindings (gesture_<owner>_<dir>) for a profile."""
+        if owner not in GESTURE_OWNERS:
+            return []
+        profiles = self._cfg.get("profiles", {})
+        mappings = profiles.get(profileName, {}).get("mappings", {})
+        result = []
+        for direction in GESTURE_DIRECTIONS:
+            aid = mappings.get(f"gesture_{owner}_{direction}", "none")
+            result.append({
+                "direction": direction,
+                "actionId": aid,
+                "actionLabel": _action_label(aid),
+            })
+        return result
+
+    @Slot(str, str, str, str)
+    def setGestureOwnerBinding(self, profileName, owner, direction, actionId):
+        """Set one direction's action for a per-button gesture owner."""
+        if owner not in GESTURE_OWNERS or direction not in GESTURE_DIRECTIONS:
+            return
+        self.setProfileMapping(profileName, f"gesture_{owner}_{direction}", actionId)
 
     @Slot(str)
     def setAppearanceMode(self, mode):

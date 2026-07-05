@@ -8,7 +8,14 @@ import sys
 import threading
 import time
 
-from core.mouse_hook_base import BaseMouseHook, HidGestureListener
+from core.mouse_hook_base import (
+    CLICK,
+    GESTURE,
+    BaseMouseHook,
+    HidGestureListener,
+    decide_gesture,
+    should_arm_gesture,
+)
 from core.mouse_hook_types import MouseEvent
 
 try:
@@ -42,6 +49,8 @@ def _autoreleased(fn):
 _BTN_MIDDLE = 2
 _BTN_BACK = 3
 _BTN_FORWARD = 4
+# CGEvent button number -> per-button gesture owner name (core.config GESTURE_OWNERS).
+_BTN_TO_OWNER = {_BTN_BACK: "back", _BTN_FORWARD: "forward", _BTN_MIDDLE: "middle"}
 _SCROLL_INVERT_MARKER = 0x4D4F5553
 _INJECTED_EVENT_MARKER = 0x4D4F5554
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
@@ -66,6 +75,11 @@ class MouseHook(BaseMouseHook):
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_thread = None
         self._first_event_logged = False
+        # Active event-tap gesture (None = none). Set on an owner-button down,
+        # cleared on its up; scopes the deferred click + cursor freeze.
+        self._gesture_owner = None
+        self._gesture_owner_btn = None
+        self._gesture_press_at = 0.0
 
     def _negate_scroll_axis(self, cg_event, axis):
         for field_name in (
@@ -246,6 +260,102 @@ class MouseHook(BaseMouseHook):
             self._finish_gesture_tracking()
             return
 
+    def _reset_event_tap_gesture_state(self):
+        """Clear all armed-owner-gesture state (scopes the D8 cursor freeze
+        and the should_arm_gesture gate shared with the HID path)."""
+        self._gesture_active = False
+        self._gesture_owner = None
+        self._gesture_owner_btn = None
+        self._gesture_press_at = 0.0
+        self._gesture_triggered = False
+        self._finish_gesture_tracking()
+
+    def _abort_event_tap_gesture(self, reason):
+        """Give up an armed owner-button gesture without firing an event or
+        replaying a click. Used when the release is missed -- the move-swallow
+        timeout, a tap re-enable after CGEventTap was disabled by the system,
+        or stop() -- so the cursor freeze and should_arm_gesture never stick
+        forever (finding #2)."""
+        if self._gesture_owner is None:
+            return
+        owner = self._gesture_owner
+        self._emit_debug(f"Event-tap gesture aborted owner={owner} reason={reason}")
+        self._emit_gesture_event(
+            {"type": "aborted", "source": "event_tap", "owner": owner, "reason": reason}
+        )
+        self._reset_event_tap_gesture_state()
+
+    def _finish_event_tap_gesture(self, btn):
+        """Resolve an armed owner-button release: fire the tagged gesture event,
+        or replay the deferred normal click (dual-mode, D2/D4)."""
+        owner = self._gesture_owner
+        held_ms = (time.monotonic() - self._gesture_press_at) * 1000.0
+        decision, direction = decide_gesture(
+            held_ms,
+            self._gesture_delta_x,
+            self._gesture_delta_y,
+            self._gesture_hold_floor_ms,
+            self._gesture_threshold,
+            self._gesture_deadzone,
+        )
+        if decision == GESTURE:
+            self._gesture_triggered = True
+            # Tag the generic direction event with the active owner; issue 004
+            # routes (owner + direction) -> the namespaced gesture_<owner>_swipe_<dir>.
+            self._enqueue_dispatch_event(
+                MouseEvent(
+                    direction,
+                    {
+                        "delta_x": self._gesture_delta_x,
+                        "delta_y": self._gesture_delta_y,
+                        "source": "event_tap",
+                        "gesture_owner": owner,
+                    },
+                )
+            )
+            self._emit_debug(
+                f"Event-tap gesture fired owner={owner} dir={direction} "
+                f"held_ms={held_ms:.0f}"
+            )
+            self._emit_gesture_event(
+                {
+                    "type": "detected",
+                    "event_name": direction,
+                    "source": "event_tap",
+                    "owner": owner,
+                }
+            )
+        else:
+            self._emit_debug(f"Event-tap tap->click owner={owner} held_ms={held_ms:.0f}")
+            self._emit_gesture_event(
+                {"type": "button_up", "source": "event_tap", "owner": owner,
+                 "click_candidate": True}
+            )
+            # A tap fires the button's normal Mouser mapping (dispatch its
+            # DOWN+UP so the engine runs the mapped action), NOT a native
+            # replay -- macOS ignores raw button 4/3, so a native replay is a
+            # dead click. Falls through to nothing if the button is unmapped.
+            self._dispatch_owner_button_click(btn)
+
+        self._reset_event_tap_gesture_state()
+
+    # gesture-owner button number -> its normal (down, up) MouseEvent pair.
+    _OWNER_CLICK_EVENTS = {
+        _BTN_MIDDLE: (MouseEvent.MIDDLE_DOWN, MouseEvent.MIDDLE_UP),
+        _BTN_BACK: (MouseEvent.XBUTTON1_DOWN, MouseEvent.XBUTTON1_UP),
+        _BTN_FORWARD: (MouseEvent.XBUTTON2_DOWN, MouseEvent.XBUTTON2_UP),
+    }
+
+    def _dispatch_owner_button_click(self, btn):
+        """Tap of a gesture-owner button: dispatch its normal DOWN+UP events so
+        the engine fires the button's mapped action (dual-mode, option 1)."""
+        pair = self._OWNER_CLICK_EVENTS.get(btn)
+        if pair is None:
+            return
+        down, up = pair
+        self._enqueue_dispatch_event(MouseEvent(down))
+        self._enqueue_dispatch_event(MouseEvent(up))
+
     def _dispatch_worker(self):
         while self._running:
             try:
@@ -266,6 +376,10 @@ class MouseHook(BaseMouseHook):
                     f"(type=0x{event_type:X}), re-enabling",
                     flush=True,
                 )
+                # A pending owner-gesture release may have been dropped while
+                # the tap was disabled -- abort it rather than leave the
+                # cursor frozen (finding #2).
+                self._abort_event_tap_gesture("tap_disabled")
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 
@@ -286,12 +400,35 @@ class MouseHook(BaseMouseHook):
             mouse_event = None
             should_block = False
 
+            is_move = event_type in (
+                Quartz.kCGEventMouseMoved,
+                Quartz.kCGEventOtherMouseDragged,
+            )
+            if is_move and self._gesture_active and self._gesture_owner is not None:
+                # A missed button-up (tap disabled under load, device drops
+                # mid-hold) must not freeze the cursor forever (finding #2):
+                # abort and let this move through once the hold outlives the
+                # configured gesture timeout.
+                if (
+                    time.monotonic() - self._gesture_press_at
+                    > self._gesture_timeout_ms / 1000.0
+                ):
+                    self._abort_event_tap_gesture("timeout")
+                    # fall through -- do not swallow this move
+                else:
+                    # Event-tap owner gesture: accumulate for the on-release
+                    # decision and freeze the cursor (D8) by swallowing the
+                    # motion so no net pointer delta reaches the OS.
+                    self._gesture_delta_x += Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGMouseEventDeltaX
+                    )
+                    self._gesture_delta_y += Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGMouseEventDeltaY
+                    )
+                    return None
+
             if (
-                event_type
-                in (
-                    Quartz.kCGEventMouseMoved,
-                    Quartz.kCGEventOtherMouseDragged,
-                )
+                is_move
                 and self._gesture_direction_enabled
                 and self._gesture_active
             ):
@@ -335,6 +472,23 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseDown btn={btn}")
                     except Exception:
                         pass
+                owner = _BTN_TO_OWNER.get(btn)
+                if owner and should_arm_gesture(
+                    self._gesture_active, owner, self._gesture_owners
+                ):
+                    # Arm the gesture and DEFER this button's normal down; the
+                    # click is replayed on release iff it turns out to be a tap.
+                    self._gesture_active = True
+                    self._gesture_owner = owner
+                    self._gesture_owner_btn = btn
+                    self._gesture_triggered = False
+                    self._gesture_press_at = time.monotonic()
+                    self._start_gesture_tracking()
+                    self._emit_debug(f"Event-tap gesture armed owner={owner} btn={btn}")
+                    self._emit_gesture_event(
+                        {"type": "button_down", "source": "event_tap", "owner": owner}
+                    )
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
                     should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
@@ -354,6 +508,9 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseUp btn={btn}")
                     except Exception:
                         pass
+                if self._gesture_owner is not None and btn == self._gesture_owner_btn:
+                    self._finish_event_tap_gesture(btn)
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
                     should_block = MouseEvent.MIDDLE_UP in self._blocked_events
@@ -604,6 +761,7 @@ class MouseHook(BaseMouseHook):
     def stop(self):
         self._unregister_wake_observer()
         self._running = False
+        self._abort_event_tap_gesture("stop")
         self._stop_hid_listener()
         self._connected_device = None
 

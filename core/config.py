@@ -42,15 +42,41 @@ GESTURE_DIRECTION_BUTTONS = (
     "gesture_down",
 )
 
+# Per-button slide gestures: each non-primary button (back/forward/middle) can
+# independently own a 4-direction gesture, driven by the macOS event tap
+# rather than the HID++ thumb gesture button above. Namespaced keys keep this
+# additive to GESTURE_DIRECTION_BUTTONS, which stays wired to the HID path.
+GESTURE_OWNERS = ("back", "forward", "middle")
+GESTURE_DIRECTIONS = ("left", "right", "up", "down")
+
+_GESTURE_OWNER_LABELS = {"back": "Back", "forward": "Forward", "middle": "Middle"}
+
+_PER_BUTTON_GESTURE_LABELS = {
+    f"gesture_{owner}_{direction}": f"{_GESTURE_OWNER_LABELS[owner]} gesture swipe {direction}"
+    for owner in GESTURE_OWNERS
+    for direction in GESTURE_DIRECTIONS
+}
+
+# The 12 namespaced keys, e.g. "gesture_back_left" .. "gesture_middle_down".
+PER_BUTTON_GESTURE_KEYS = tuple(_PER_BUTTON_GESTURE_LABELS)
+
+GESTURE_HOLD_FLOOR_MS_DEFAULT = 80
+
 PROFILE_BUTTON_NAMES = {
     **BUTTON_NAMES,
     "gesture_left":  "Gesture swipe left",
     "gesture_right": "Gesture swipe right",
     "gesture_up":    "Gesture swipe up",
     "gesture_down":  "Gesture swipe down",
+    **_PER_BUTTON_GESTURE_LABELS,
 }
 
-# Maps config button keys to the MouseEvent types they correspond to
+# Maps config button keys to the MouseEvent types they correspond to.
+# NOTE: the 12 namespaced gesture_<owner>_<direction> binding keys deliberately
+# have NO entry here. The event-tap kernel emits the generic gesture_swipe_<dir>
+# event tagged with raw_data["gesture_owner"], and engine._make_owner_gesture_handler
+# routes on that tag -- a namespaced "gesture_<owner>_swipe_<dir>" string is never
+# dispatched. Resolve these bindings via gesture_bindings_for(), not this map.
 BUTTON_TO_EVENTS = {
     "middle":        ("middle_down", "middle_up"),
     "gesture":       ("gesture_click",),
@@ -80,6 +106,7 @@ DEFAULT_CONFIG = {
                 "gesture_right": "none",
                 "gesture_up": "none",
                 "gesture_down": "none",
+                **{key: "none" for key in PER_BUTTON_GESTURE_KEYS},
                 "xbutton1": "alt_tab",
                 "xbutton2": "alt_tab",
                 "hscroll_left": "browser_back",
@@ -102,6 +129,7 @@ DEFAULT_CONFIG = {
         "gesture_deadzone": 40,
         "gesture_timeout_ms": 3000,
         "gesture_cooldown_ms": 500,
+        "gesture_hold_floor_ms": GESTURE_HOLD_FLOOR_MS_DEFAULT,
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -200,6 +228,28 @@ def get_active_mappings(cfg):
     profiles = cfg.get("profiles", {})
     profile = profiles.get(profile_name, profiles.get("default", {}))
     return profile.get("mappings", DEFAULT_CONFIG["profiles"]["default"]["mappings"])
+
+
+def gesture_owners(cfg):
+    """Buttons (back/forward/middle) with >=1 per-button gesture direction bound."""
+    mappings = get_active_mappings(cfg)
+    return {
+        owner
+        for owner in GESTURE_OWNERS
+        if any(
+            mappings.get(f"gesture_{owner}_{direction}", "none") != "none"
+            for direction in GESTURE_DIRECTIONS
+        )
+    }
+
+
+def gesture_bindings_for(cfg, owner):
+    """Return {swipe_left: action_id, swipe_right: ..., swipe_up: ..., swipe_down: ...}."""
+    mappings = get_active_mappings(cfg)
+    return {
+        f"swipe_{direction}": mappings.get(f"gesture_{owner}_{direction}", "none")
+        for direction in GESTURE_DIRECTIONS
+    }
 
 
 def set_mapping(cfg, button, action_id, profile=None):
@@ -339,6 +389,10 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("gesture_hold_floor_ms", GESTURE_HOLD_FLOOR_MS_DEFAULT)
+    cfg["settings"]["gesture_hold_floor_ms"] = max(
+        0, int(cfg["settings"].get("gesture_hold_floor_ms", GESTURE_HOLD_FLOOR_MS_DEFAULT))
+    )
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():
@@ -346,6 +400,13 @@ def _migrate(cfg):
         for i, a in enumerate(apps):
             if a.lower() == "wmplayer.exe":
                 apps[i] = "Microsoft.Media.Player.exe"
+
+    # Always ensure the 12 namespaced per-button gesture keys exist ("none" =
+    # off) so pre-existing configs surface no owners without erroring.
+    for pdata in cfg.get("profiles", {}).values():
+        mappings = pdata.setdefault("mappings", {})
+        for key in PER_BUTTON_GESTURE_KEYS:
+            mappings.setdefault(key, "none")
 
     return cfg
 

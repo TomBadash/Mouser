@@ -75,6 +75,15 @@ _GESTURE_BUTTON_KEYS = (
     "gesture_up",
     "gesture_down",
 )
+# Per-button slide-gesture keys (event-tap path, issue #001/#002). Distinct
+# from the HID++ thumb-gesture keys above: gated on supports_event_tap_gestures
+# rather than a divertable RawXY control, so a mouse with no gesture button
+# (e.g. the MX Anywhere 2S) can still advertise them.
+_PER_BUTTON_GESTURE_DIRECTION_KEYS = tuple(
+    f"gesture_{owner}_{direction}"
+    for owner in ("back", "forward", "middle")
+    for direction in ("left", "right", "up", "down")
+)
 _CID_GATED_BUTTONS = {
     "mode_shift": 0x00C4,
     "dpi_switch": 0x00FD,
@@ -119,6 +128,7 @@ class LogiDeviceSpec:
     supported_buttons: tuple[str, ...] = DEFAULT_BUTTON_LAYOUT
     dpi_min: int = DEFAULT_DPI_MIN
     dpi_max: int = DEFAULT_DPI_MAX
+    supports_event_tap_gestures: bool = False
 
     def matches(self, product_id=None, product_name=None) -> bool:
         if product_id is not None and int(product_id) in self.product_ids:
@@ -286,6 +296,7 @@ class DeviceCapabilityInventory:
     divertable_gesture_cids: tuple[int, ...] = ()
     gesture_click: bool = False
     gesture_directions: bool = False
+    supports_event_tap_gestures: bool = False
     mode_shift: bool = False
     dpi_switch: bool = False
     hscroll_cids: tuple[int, ...] = ()
@@ -305,6 +316,9 @@ class DeviceCapabilityInventory:
             allowed.difference_update(
                 ("gesture_left", "gesture_right", "gesture_up", "gesture_down")
             )
+
+        if not self.supports_event_tap_gestures:
+            allowed.difference_update(_PER_BUTTON_GESTURE_DIRECTION_KEYS)
 
         if not self.mode_shift:
             allowed.discard("mode_shift")
@@ -338,6 +352,7 @@ class DeviceCapabilityInventory:
             ],
             "gesture_click": self.gesture_click,
             "gesture_directions": self.gesture_directions,
+            "supports_event_tap_gestures": self.supports_event_tap_gestures,
             "mode_shift": self.mode_shift,
             "dpi_switch": self.dpi_switch,
             "hscroll": bool(self.hscroll_cids),
@@ -671,6 +686,7 @@ def build_device_capability_inventory(
     gesture_rawxy_enabled=None,
     discovered_features=None,
     diagnostics=None,
+    supports_event_tap_gestures=False,
 ) -> DeviceCapabilityInventory:
     controls_by_cid = _control_by_cid(controls or ())
     feature_entries = _feature_entries(discovered_features)
@@ -718,6 +734,7 @@ def build_device_capability_inventory(
         divertable_gesture_cids=divertable_gesture_cids,
         gesture_click=gesture_click,
         gesture_directions=gesture_directions,
+        supports_event_tap_gestures=bool(supports_event_tap_gestures),
         mode_shift=bool(
             mode_shift_control and _control_is_divertable(mode_shift_control)
         ),
@@ -744,6 +761,7 @@ def derive_supported_buttons_from_reprog_controls(
     gesture_cids=None,
     active_gesture_cid=None,
     gesture_rawxy_enabled=None,
+    supports_event_tap_gestures=False,
 ) -> tuple[str, ...]:
     """Narrow HID++-gated buttons using discovered REPROG_V4 controls.
 
@@ -755,6 +773,7 @@ def derive_supported_buttons_from_reprog_controls(
         gesture_cids=gesture_cids,
         active_gesture_cid=active_gesture_cid,
         gesture_rawxy_enabled=gesture_rawxy_enabled,
+        supports_event_tap_gestures=supports_event_tap_gestures,
     )
     return inventory.supported_buttons(static_buttons)
 
@@ -810,6 +829,7 @@ def build_connected_device_info(
         gesture_rawxy_enabled=gesture_rawxy_enabled,
         discovered_features=discovered_features,
         diagnostics=diagnostics,
+        supports_event_tap_gestures=getattr(spec, "supports_event_tap_gestures", False),
     )
     if spec:
         resolved_gesture_cids = tuple(gesture_cids or spec.gesture_cids)

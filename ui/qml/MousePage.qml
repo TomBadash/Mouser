@@ -109,6 +109,7 @@ Item {
         selectedButton = ""
         selectedButtonName = ""
         selectedActionId = ""
+        refreshSelectedGestureBindings()
     }
 
     function appMatchesSearch(app, query) {
@@ -367,11 +368,38 @@ Item {
                                              || gestureUpActionId !== "none"
                                              || gestureDownActionId !== "none"
 
+    // ── Per-button slide gesture state (issue #006, config keys from #001) ──
+    // selectedButton is a hotspot key ("xbutton1"/"xbutton2"/"middle"/...);
+    // selectedGestureOwner is "" unless that hotspot can own a per-button gesture.
+    readonly property string selectedGestureOwner: backend.gestureOwnerForButton(selectedButton)
+    readonly property bool selectedGestureOwnerEligible: selectedGestureOwner !== ""
+                                             && backend.gestureEligibleOwners.indexOf(selectedGestureOwner) !== -1
+    readonly property bool selectedGestureOwnerEnabled: selectedGestureOwner !== ""
+                                             && backend.gestureEnabledOwners.indexOf(selectedGestureOwner) !== -1
+    property var selectedGestureBindingsState: ({})
+
+    function refreshSelectedGestureBindings() {
+        if (selectedGestureOwner === "") {
+            selectedGestureBindingsState = {}
+            return
+        }
+        var bindings = backend.gestureOwnerBindings(selectedProfile, selectedGestureOwner)
+        var state = ({})
+        for (var i = 0; i < bindings.length; i++)
+            state[bindings[i].direction] = bindings[i].actionId
+        selectedGestureBindingsState = state
+    }
+
+    function gestureBindingActionId(direction) {
+        return selectedGestureBindingsState[direction] || "none"
+    }
+
     function selectButton(key) {
         if (selectedButton === key) {
             selectedButton = ""
             selectedButtonName = ""
             selectedActionId = ""
+            refreshSelectedGestureBindings()
             return
         }
         var mapping = mappingFor(key)
@@ -379,6 +407,7 @@ Item {
             selectedButton = key
             selectedButtonName = lm.trButton(mapping.name)
             selectedActionId = mapping.actionId
+            refreshSelectedGestureBindings()
         }
     }
 
@@ -400,6 +429,7 @@ Item {
         target: backend
         function onMappingsChanged() {
             refreshSelectedProfileMappings()
+            refreshSelectedGestureBindings()
             if (selectedButton === "") return
             var mapping = mappingFor(selectedButton)
             if (mapping) {
@@ -491,6 +521,7 @@ Item {
                 selectedButton = ""
                 selectedButtonName = ""
                 selectedActionId = ""
+                refreshSelectedGestureBindings()
             }
         }
     }
@@ -1577,6 +1608,117 @@ Item {
                                 }
                             }
 
+                            // Per-button slide gesture: toggle + 4-direction panel
+                            // (issue #006). Reuses the swipe-panel layout above, but
+                            // attached to whichever eligible button (back/forward/
+                            // middle) is selected, via the namespaced gesture_<owner>_
+                            // <dir> keys (issue #001) instead of the HID gesture keys.
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedGestureOwnerEligible
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Column {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Text {
+                                            text: "Gesture mode"
+                                            font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                            color: theme.textPrimary
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: "Hold and slide for a directional action. A quick tap still runs the normal action above."
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textSecondary
+                                        }
+                                    }
+
+                                    Switch {
+                                        checked: selectedGestureOwnerEnabled
+                                        text: checked ? s["mouse.on"] : s["mouse.off"]
+                                        Material.accent: theme.accent
+                                        onToggled: backend.setGestureOwnerEnabled(selectedGestureOwner, checked)
+                                    }
+                                }
+
+                                Text {
+                                    visible: selectedGestureOwner === "middle" && selectedGestureOwnerEnabled
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: "Middle-click gets a brief hold delay while gesture mode is on, so Mouser can tell a click from a slide. If you use middle-click for paste or open-in-new-tab, expect a short delay before it fires. Middle-button drag/autoscroll is swallowed while gesture mode is on."
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 14
+                                    visible: selectedGestureOwnerEnabled
+
+                                    Rectangle {
+                                        width: parent.width
+                                        height: 1
+                                        color: theme.border
+                                    }
+
+                                    Text {
+                                        text: s["mouse.swipe_actions"]
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Repeater {
+                                        model: ["left", "right", "up", "down"]
+                                        delegate: RowLayout {
+                                            width: parent.width
+                                            spacing: 12
+
+                                            Text {
+                                                text: modelData === "left" ? s["mouse.swipe_left"]
+                                                      : modelData === "right" ? s["mouse.swipe_right"]
+                                                      : modelData === "up" ? s["mouse.swipe_up"]
+                                                      : s["mouse.swipe_down"]
+                                                Layout.preferredWidth: 100
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.textPrimary
+                                            }
+
+                                            ComboBox {
+                                                Layout.fillWidth: true
+                                                model: backend.allActions
+                                                textRole: "label"
+                                                delegate: actionComboDelegate
+                                                Material.accent: theme.accent
+                                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                                currentIndex: actionIndexForId(gestureBindingActionId(modelData))
+                                                displayText: isCustomAction(gestureBindingActionId(modelData))
+                                                             ? customLabel(gestureBindingActionId(modelData))
+                                                             : (lm.strings, lm.trAction(currentText))
+                                                onActivated: function(index) {
+                                                    var aid = backend.allActions[index].id
+                                                    if (aid === "__custom__") {
+                                                        keyCaptureDialog.open(
+                                                            selectedProfile,
+                                                            "gesture_" + selectedGestureOwner + "_" + modelData)
+                                                        return
+                                                    }
+                                                    backend.setGestureOwnerBinding(
+                                                        selectedProfile, selectedGestureOwner, modelData, aid)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Single button: categorized chips
                             Column {
                                 width: parent.width
@@ -1585,6 +1727,7 @@ Item {
                                          && selectedButton !== "hscroll_left"
                                          && !(selectedButton === "gesture"
                                               && backend.supportsGestureDirections)
+                                         && !(selectedGestureOwnerEligible && selectedGestureOwnerEnabled)
 
                                 Repeater {
                                     model: backend.actionCategories

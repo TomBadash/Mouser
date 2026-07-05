@@ -12,6 +12,59 @@ except Exception:
 
 from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
 
+# Default hold floor (ms) below which an owner-button press is a click, not a
+# gesture (D4). Mirrors core.config GESTURE_HOLD_FLOOR_MS_DEFAULT.
+_GESTURE_HOLD_FLOOR_MS_DEFAULT = 80
+
+# Release-decision outcomes for an event-tap gesture-owner button.
+CLICK = "click"
+GESTURE = "gesture"
+
+
+def _gesture_direction(dx, dy, threshold, deadzone):
+    """Cardinal swipe direction for accumulated deltas, or None if none.
+
+    Pure mirror of BaseMouseHook._detect_gesture_event so the event-tap
+    on-release decision matches the live HID detector exactly.
+    """
+    abs_x = abs(dx)
+    abs_y = abs(dy)
+    dominant = max(abs_x, abs_y)
+    if dominant < threshold:
+        return None
+    cross_limit = max(deadzone, dominant * 0.35)
+    if abs_x > abs_y:
+        if abs_y > cross_limit:
+            return None
+        return MouseEvent.GESTURE_SWIPE_RIGHT if dx > 0 else MouseEvent.GESTURE_SWIPE_LEFT
+    if abs_x > cross_limit:
+        return None
+    return MouseEvent.GESTURE_SWIPE_DOWN if dy > 0 else MouseEvent.GESTURE_SWIPE_UP
+
+
+def decide_gesture(held_ms, dx, dy, hold_floor_ms, threshold, deadzone):
+    """Classify a gesture-owner button release as a click or a directional gesture.
+
+    Returns (CLICK, None) or (GESTURE, MouseEvent.GESTURE_SWIPE_*). Objc-free so
+    the CGEventTap handler and unit tests share one decision. A release is a
+    gesture only when held >= the floor AND the slide resolves to a direction;
+    everything else replays the button's normal click (dual-mode, D2/D4).
+    """
+    if held_ms < hold_floor_ms:
+        return CLICK, None
+    direction = _gesture_direction(dx, dy, threshold, deadzone)
+    if direction is None:
+        return CLICK, None
+    return GESTURE, direction
+
+
+def should_arm_gesture(gesture_active, btn_owner, owners):
+    """First-wins arming gate: arm an event-tap gesture only for an owner button
+    while no gesture (event-tap or HID) is already active; else pass it through."""
+    if btn_owner not in owners:
+        return False
+    return not gesture_active
+
 
 class BaseMouseHook:
     def __init__(self):
@@ -42,6 +95,8 @@ class BaseMouseHook:
         self._gesture_delta_y = 0.0
         self._gesture_cooldown_until = 0.0
         self._gesture_input_source = None
+        self._gesture_owners = set()
+        self._gesture_hold_floor_ms = _GESTURE_HOLD_FLOOR_MS_DEFAULT
         self._connected_device = None
         self._dispatch_queue = None
 
@@ -91,12 +146,19 @@ class BaseMouseHook:
         deadzone=40,
         timeout_ms=3000,
         cooldown_ms=500,
+        owners=None,
+        hold_floor_ms=None,
     ):
         self._gesture_direction_enabled = bool(enabled)
         self._gesture_threshold = float(max(5, threshold))
         self._gesture_deadzone = float(max(0, deadzone))
         self._gesture_timeout_ms = max(250, int(timeout_ms))
         self._gesture_cooldown_ms = max(0, int(cooldown_ms))
+        # Per-button event-tap gesture owners are independent of the HID
+        # direction feature above; issue 004 supplies both from config.
+        self._gesture_owners = set(owners) if owners else set()
+        if hold_floor_ms is not None:
+            self._gesture_hold_floor_ms = max(0, int(hold_floor_ms))
         if not self._gesture_direction_enabled:
             self._gesture_tracking = False
             self._gesture_triggered = False

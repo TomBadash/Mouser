@@ -2,7 +2,7 @@
 Structural contract exposed by platform mouse hook implementations.
 """
 
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from core.mouse_hook_types import HidRuntimeState
 
@@ -27,6 +27,8 @@ class MouseHookLike(Protocol):
         deadzone: int = 40,
         timeout_ms: int = 3000,
         cooldown_ms: int = 500,
+        owners: Optional[set] = None,
+        hold_floor_ms: Optional[int] = None,
     ) -> None: ...
     def set_connection_change_callback(self, cb: Callable[[bool], None]) -> None: ...
     def set_debug_callback(self, callback: Callable[[str], None]) -> None: ...

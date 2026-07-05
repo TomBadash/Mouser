@@ -13,7 +13,9 @@ from core.key_simulator import (
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app,
-    BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
+    BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, GESTURE_DIRECTIONS,
+    GESTURE_HOLD_FLOOR_MS_DEFAULT, gesture_owners, gesture_bindings_for,
+    save_config,
 )
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
@@ -95,6 +97,27 @@ class Engine:
     # ------------------------------------------------------------------
     # Hook wiring
     # ------------------------------------------------------------------
+    def _active_gesture_owners(self, cfg, settings):
+        """Owners actually armed at the hook (finding #1): config-bound AND
+        the UI enable toggle (settings.gesture_owner_enabled) is on AND the
+        connected device can host a per-button gesture on that owner --
+        mirrors the capability check in ui.backend.gestureEligibleOwners.
+        Direction bindings themselves are left untouched in config; this only
+        narrows what gets passed to the hook as armed. No device connected
+        means arming is moot, so nothing is eligible."""
+        bound = gesture_owners(cfg)
+        if not bound:
+            return set()
+        device = getattr(self, "connected_device", None)
+        device_buttons = getattr(device, "supported_buttons", None) if device else None
+        if device_buttons is None:
+            return set()
+        enabled_flags = settings.get("gesture_owner_enabled", {})
+        return {
+            owner for owner in bound
+            if enabled_flags.get(owner, False) and f"gesture_{owner}_left" in device_buttons
+        }
+
     def _setup_hooks(self):
         """Register callbacks and block events for all mapped buttons."""
         mappings = get_active_mappings(self.cfg)
@@ -106,13 +129,16 @@ class Engine:
         if hasattr(self.hook, "ignore_trackpad"):
             self.hook.ignore_trackpad = settings.get("ignore_trackpad", True)
         self.hook.debug_mode = self._debug_events_enabled
+        owners = self._active_gesture_owners(self.cfg, settings)
         self.hook.configure_gestures(
-            enabled=any(mappings.get(key, "none") != "none"
-                        for key in GESTURE_DIRECTION_BUTTONS),
+            enabled=bool(owners) or any(mappings.get(key, "none") != "none"
+                                        for key in GESTURE_DIRECTION_BUTTONS),
             threshold=settings.get("gesture_threshold", 50),
             deadzone=settings.get("gesture_deadzone", 40),
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
+            owners=owners,
+            hold_floor_ms=settings.get("gesture_hold_floor_ms", GESTURE_HOLD_FLOOR_MS_DEFAULT),
         )
         # Divert mode shift CID only when the device has the button and
         # at least one profile maps it to an action.  When no device is
@@ -166,36 +192,76 @@ class Engine:
                         else:
                             # Single-fire event (gesture, swipe) → full click
                             self.hook.register(evt_type, self._make_handler(action_id))
+                    elif btn_key in GESTURE_DIRECTION_BUTTONS:
+                        self.hook.register(evt_type, self._make_hid_gesture_handler(action_id))
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id))
 
+        # Per-owner event-tap gestures (issue 004): the kernel tags the fired
+        # gesture with the active owner in raw_data rather than a namespaced
+        # event, so route (owner, direction) -> gesture_<owner>_<dir> here.
+        if owners:
+            owner_bindings = {owner: gesture_bindings_for(self.cfg, owner) for owner in owners}
+            for direction in GESTURE_DIRECTIONS:
+                self.hook.register(
+                    f"gesture_swipe_{direction}",
+                    self._make_owner_gesture_handler(owner_bindings, direction),
+                )
+
     def _make_handler(self, action_id):
         def handler(event):
-            try:
-                if self._enabled:
-                    self._emit_debug(
-                        f"Mapped {event.event_type} -> {action_id} "
-                        f"({self._action_label(action_id)})"
-                    )
-                    if event.event_type.startswith("gesture_"):
-                        self._emit_gesture_event({
-                            "type": "mapped",
-                            "event_name": event.event_type,
-                            "action_id": action_id,
-                            "action_label": self._action_label(action_id),
-                        })
-                    if action_id == "toggle_smart_shift":
-                        self._toggle_smart_shift()
-                    elif action_id == "switch_scroll_mode":
-                        self._switch_scroll_mode()
-                    elif action_id == "cycle_dpi":
-                        self._cycle_dpi()
-                    else:
-                        execute_action(action_id)
-            except Exception as exc:
-                print(f"[Engine] _make_handler EXCEPTION for {action_id}: {exc}")
-                import traceback; traceback.print_exc()
+            self._run_action(action_id, event)
         return handler
+
+    def _make_hid_gesture_handler(self, action_id):
+        """Like _make_handler, but yields to per-owner routing: a gesture_swipe_*
+        event tagged with a gesture_owner came from an event-tap owner gesture,
+        not the HID dedicated gesture button this handler is bound to."""
+        def handler(event):
+            raw = event.raw_data
+            if isinstance(raw, dict) and raw.get("gesture_owner") is not None:
+                return
+            self._run_action(action_id, event)
+        return handler
+
+    def _make_owner_gesture_handler(self, owner_bindings, direction):
+        field = f"swipe_{direction}"
+        def handler(event):
+            raw = event.raw_data
+            owner = raw.get("gesture_owner") if isinstance(raw, dict) else None
+            if owner is None:
+                return
+            action_id = owner_bindings.get(owner, {}).get(field, "none")
+            if action_id == "none":
+                return
+            self._run_action(action_id, event)
+        return handler
+
+    def _run_action(self, action_id, event):
+        try:
+            if self._enabled:
+                self._emit_debug(
+                    f"Mapped {event.event_type} -> {action_id} "
+                    f"({self._action_label(action_id)})"
+                )
+                if event.event_type.startswith("gesture_"):
+                    self._emit_gesture_event({
+                        "type": "mapped",
+                        "event_name": event.event_type,
+                        "action_id": action_id,
+                        "action_label": self._action_label(action_id),
+                    })
+                if action_id == "toggle_smart_shift":
+                    self._toggle_smart_shift()
+                elif action_id == "switch_scroll_mode":
+                    self._switch_scroll_mode()
+                elif action_id == "cycle_dpi":
+                    self._cycle_dpi()
+                else:
+                    execute_action(action_id)
+        except Exception as exc:
+            print(f"[Engine] _run_action EXCEPTION for {action_id}: {exc}")
+            import traceback; traceback.print_exc()
 
     def _make_mouse_down_handler(self, action_id):
         def _safety_release():
@@ -634,6 +700,15 @@ class Engine:
             self._battery_poll_thread.start()
         if hid_features_ready and hid_features_changed:
             self._request_saved_settings_replay()
+            # Device capabilities (supported_buttons) are only known once HID
+            # features are ready; the initial _setup_hooks ran with no device
+            # connected, so device-gated features (per-button gesture arming)
+            # computed empty. Re-wire now that the button set is known -- reset
+            # first (mirrors _switch_profile/reload_mappings) so handlers don't
+            # stack on reconnect.
+            with self._lock:
+                self.hook.reset_bindings()
+                self._setup_hooks()
 
     def _battery_poll_loop(self, stop_event):
         """Read battery and smart shift mode periodically until disconnected."""
