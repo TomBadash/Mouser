@@ -109,6 +109,8 @@ Item {
         selectedButton = ""
         selectedButtonName = ""
         selectedActionId = ""
+        refreshSelectedGestureBindings()
+        refreshTiltGestureBindings()
     }
 
     function appMatchesSearch(app, query) {
@@ -367,11 +369,68 @@ Item {
                                              || gestureUpActionId !== "none"
                                              || gestureDownActionId !== "none"
 
+    // ── Per-button slide gesture state (issue #006, config keys from #001) ──
+    // selectedButton is a hotspot key ("xbutton1"/"xbutton2"/"middle"/...);
+    // selectedGestureOwner is "" unless that hotspot can own a per-button gesture.
+    readonly property string selectedGestureOwner: backend.gestureOwnerForButton(selectedButton)
+    readonly property bool selectedGestureOwnerEligible: selectedGestureOwner !== ""
+                                             && backend.gestureEligibleOwners.indexOf(selectedGestureOwner) !== -1
+    readonly property bool selectedGestureOwnerEnabled: selectedGestureOwner !== ""
+                                             && backend.gestureEnabledOwners.indexOf(selectedGestureOwner) !== -1
+    property var selectedGestureBindingsState: ({})
+
+    function refreshSelectedGestureBindings() {
+        if (selectedGestureOwner === "") {
+            selectedGestureBindingsState = {}
+            return
+        }
+        var bindings = backend.gestureOwnerBindings(selectedProfile, selectedGestureOwner)
+        var state = ({})
+        for (var i = 0; i < bindings.length; i++)
+            state[bindings[i].direction] = bindings[i].actionId
+        selectedGestureBindingsState = state
+    }
+
+    function gestureBindingActionId(direction) {
+        return selectedGestureBindingsState[direction] || "none"
+    }
+
+    // ── Tilt (horizontal-scroll) slide gesture state ──────────────────
+    // Unlike the per-button owners above, one hotspot (selectedButton ==
+    // "hscroll_left") hosts TWO tilt owners -- tilt_left and tilt_right --
+    // each independently toggleable, so there's no single selectedGestureOwner.
+    readonly property bool tiltLeftEligible: backend.tiltGestureEligibleOwners.indexOf("tilt_left") !== -1
+    readonly property bool tiltRightEligible: backend.tiltGestureEligibleOwners.indexOf("tilt_right") !== -1
+    readonly property bool tiltLeftEnabled: backend.tiltGestureEnabledOwners.indexOf("tilt_left") !== -1
+    readonly property bool tiltRightEnabled: backend.tiltGestureEnabledOwners.indexOf("tilt_right") !== -1
+    property var tiltLeftBindingsState: ({})
+    property var tiltRightBindingsState: ({})
+
+    function refreshTiltGestureBindings() {
+        var l = backend.tiltGestureOwnerBindings(selectedProfile, "tilt_left")
+        var ls = ({})
+        for (var i = 0; i < l.length; i++)
+            ls[l[i].direction] = l[i].actionId
+        tiltLeftBindingsState = ls
+
+        var r = backend.tiltGestureOwnerBindings(selectedProfile, "tilt_right")
+        var rs = ({})
+        for (var j = 0; j < r.length; j++)
+            rs[r[j].direction] = r[j].actionId
+        tiltRightBindingsState = rs
+    }
+
+    function tiltBindingActionId(owner, direction) {
+        var state = owner === "tilt_left" ? tiltLeftBindingsState : tiltRightBindingsState
+        return state[direction] || "none"
+    }
+
     function selectButton(key) {
         if (selectedButton === key) {
             selectedButton = ""
             selectedButtonName = ""
             selectedActionId = ""
+            refreshSelectedGestureBindings()
             return
         }
         var mapping = mappingFor(key)
@@ -379,6 +438,7 @@ Item {
             selectedButton = key
             selectedButtonName = lm.trButton(mapping.name)
             selectedActionId = mapping.actionId
+            refreshSelectedGestureBindings()
         }
     }
 
@@ -400,6 +460,8 @@ Item {
         target: backend
         function onMappingsChanged() {
             refreshSelectedProfileMappings()
+            refreshSelectedGestureBindings()
+            refreshTiltGestureBindings()
             if (selectedButton === "") return
             var mapping = mappingFor(selectedButton)
             if (mapping) {
@@ -491,6 +553,7 @@ Item {
                 selectedButton = ""
                 selectedButtonName = ""
                 selectedActionId = ""
+                refreshSelectedGestureBindings()
             }
         }
     }
@@ -1343,6 +1406,224 @@ Item {
                                 }
                             }
 
+                            // Tilt-left slide gesture: toggle + 4-direction panel.
+                            // Mirrors the per-button gesture panel below, but the
+                            // hotspot is the hscroll pulse stream (tilt_left owner)
+                            // rather than a HID event-tap button, and the tap action
+                            // above (scroll left) keeps firing on a quick tap either way.
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedButton === "hscroll_left" && tiltLeftEligible
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Column {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Text {
+                                            text: "Tilt left gesture mode"
+                                            font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                            color: theme.textPrimary
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: "Hold the tilt left and slide for a directional action. A quick tap still scrolls left."
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textSecondary
+                                        }
+                                    }
+
+                                    Switch {
+                                        checked: tiltLeftEnabled
+                                        text: checked ? s["mouse.on"] : s["mouse.off"]
+                                        Material.accent: theme.accent
+                                        onToggled: backend.setTiltGestureOwnerEnabled("tilt_left", checked)
+                                    }
+                                }
+
+                                Text {
+                                    visible: tiltLeftEnabled
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: "While tilt left gesture mode is on, horizontal scroll left is suppressed on that direction -- only a quick tap still scrolls."
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 14
+                                    visible: tiltLeftEnabled
+
+                                    Rectangle {
+                                        width: parent.width
+                                        height: 1
+                                        color: theme.border
+                                    }
+
+                                    Text {
+                                        text: s["mouse.swipe_actions"]
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Repeater {
+                                        model: ["left", "right", "up", "down"]
+                                        delegate: RowLayout {
+                                            width: parent.width
+                                            spacing: 12
+
+                                            Text {
+                                                text: modelData === "left" ? s["mouse.swipe_left"]
+                                                      : modelData === "right" ? s["mouse.swipe_right"]
+                                                      : modelData === "up" ? s["mouse.swipe_up"]
+                                                      : s["mouse.swipe_down"]
+                                                Layout.preferredWidth: 100
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.textPrimary
+                                            }
+
+                                            ComboBox {
+                                                Layout.fillWidth: true
+                                                model: backend.allActions
+                                                textRole: "label"
+                                                delegate: actionComboDelegate
+                                                Material.accent: theme.accent
+                                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                                currentIndex: actionIndexForId(tiltBindingActionId("tilt_left", modelData))
+                                                displayText: isCustomAction(tiltBindingActionId("tilt_left", modelData))
+                                                             ? customLabel(tiltBindingActionId("tilt_left", modelData))
+                                                             : (lm.strings, lm.trAction(currentText))
+                                                onActivated: function(index) {
+                                                    var aid = backend.allActions[index].id
+                                                    if (aid === "__custom__") {
+                                                        keyCaptureDialog.open(
+                                                            selectedProfile,
+                                                            "gesture_tilt_left_" + modelData)
+                                                        return
+                                                    }
+                                                    backend.setTiltGestureOwnerBinding(
+                                                        selectedProfile, "tilt_left", modelData, aid)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Tilt-right slide gesture: same shape as tilt-left above.
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedButton === "hscroll_left" && tiltRightEligible
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Column {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Text {
+                                            text: "Tilt right gesture mode"
+                                            font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                            color: theme.textPrimary
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: "Hold the tilt right and slide for a directional action. A quick tap still scrolls right."
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textSecondary
+                                        }
+                                    }
+
+                                    Switch {
+                                        checked: tiltRightEnabled
+                                        text: checked ? s["mouse.on"] : s["mouse.off"]
+                                        Material.accent: theme.accent
+                                        onToggled: backend.setTiltGestureOwnerEnabled("tilt_right", checked)
+                                    }
+                                }
+
+                                Text {
+                                    visible: tiltRightEnabled
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: "While tilt right gesture mode is on, horizontal scroll right is suppressed on that direction -- only a quick tap still scrolls."
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 14
+                                    visible: tiltRightEnabled
+
+                                    Rectangle {
+                                        width: parent.width
+                                        height: 1
+                                        color: theme.border
+                                    }
+
+                                    Text {
+                                        text: s["mouse.swipe_actions"]
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Repeater {
+                                        model: ["left", "right", "up", "down"]
+                                        delegate: RowLayout {
+                                            width: parent.width
+                                            spacing: 12
+
+                                            Text {
+                                                text: modelData === "left" ? s["mouse.swipe_left"]
+                                                      : modelData === "right" ? s["mouse.swipe_right"]
+                                                      : modelData === "up" ? s["mouse.swipe_up"]
+                                                      : s["mouse.swipe_down"]
+                                                Layout.preferredWidth: 100
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.textPrimary
+                                            }
+
+                                            ComboBox {
+                                                Layout.fillWidth: true
+                                                model: backend.allActions
+                                                textRole: "label"
+                                                delegate: actionComboDelegate
+                                                Material.accent: theme.accent
+                                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                                currentIndex: actionIndexForId(tiltBindingActionId("tilt_right", modelData))
+                                                displayText: isCustomAction(tiltBindingActionId("tilt_right", modelData))
+                                                             ? customLabel(tiltBindingActionId("tilt_right", modelData))
+                                                             : (lm.strings, lm.trAction(currentText))
+                                                onActivated: function(index) {
+                                                    var aid = backend.allActions[index].id
+                                                    if (aid === "__custom__") {
+                                                        keyCaptureDialog.open(
+                                                            selectedProfile,
+                                                            "gesture_tilt_right_" + modelData)
+                                                        return
+                                                    }
+                                                    backend.setTiltGestureOwnerBinding(
+                                                        selectedProfile, "tilt_right", modelData, aid)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             Column {
                                 width: parent.width
                                 spacing: 14
@@ -1577,6 +1858,117 @@ Item {
                                 }
                             }
 
+                            // Per-button slide gesture: toggle + 4-direction panel
+                            // (issue #006). Reuses the swipe-panel layout above, but
+                            // attached to whichever eligible button (back/forward/
+                            // middle) is selected, via the namespaced gesture_<owner>_
+                            // <dir> keys (issue #001) instead of the HID gesture keys.
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: selectedGestureOwnerEligible
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 12
+
+                                    Column {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Text {
+                                            text: "Gesture mode"
+                                            font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                            color: theme.textPrimary
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: "Hold and slide for a directional action. A quick tap still runs the normal action above."
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textSecondary
+                                        }
+                                    }
+
+                                    Switch {
+                                        checked: selectedGestureOwnerEnabled
+                                        text: checked ? s["mouse.on"] : s["mouse.off"]
+                                        Material.accent: theme.accent
+                                        onToggled: backend.setGestureOwnerEnabled(selectedGestureOwner, checked)
+                                    }
+                                }
+
+                                Text {
+                                    visible: selectedGestureOwner === "middle" && selectedGestureOwnerEnabled
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: "Middle-click gets a brief hold delay while gesture mode is on, so Mouser can tell a click from a slide. If you use middle-click for paste or open-in-new-tab, expect a short delay before it fires. Middle-button drag/autoscroll is swallowed while gesture mode is on."
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 14
+                                    visible: selectedGestureOwnerEnabled
+
+                                    Rectangle {
+                                        width: parent.width
+                                        height: 1
+                                        color: theme.border
+                                    }
+
+                                    Text {
+                                        text: s["mouse.swipe_actions"]
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Repeater {
+                                        model: ["left", "right", "up", "down"]
+                                        delegate: RowLayout {
+                                            width: parent.width
+                                            spacing: 12
+
+                                            Text {
+                                                text: modelData === "left" ? s["mouse.swipe_left"]
+                                                      : modelData === "right" ? s["mouse.swipe_right"]
+                                                      : modelData === "up" ? s["mouse.swipe_up"]
+                                                      : s["mouse.swipe_down"]
+                                                Layout.preferredWidth: 100
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.textPrimary
+                                            }
+
+                                            ComboBox {
+                                                Layout.fillWidth: true
+                                                model: backend.allActions
+                                                textRole: "label"
+                                                delegate: actionComboDelegate
+                                                Material.accent: theme.accent
+                                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                                currentIndex: actionIndexForId(gestureBindingActionId(modelData))
+                                                displayText: isCustomAction(gestureBindingActionId(modelData))
+                                                             ? customLabel(gestureBindingActionId(modelData))
+                                                             : (lm.strings, lm.trAction(currentText))
+                                                onActivated: function(index) {
+                                                    var aid = backend.allActions[index].id
+                                                    if (aid === "__custom__") {
+                                                        keyCaptureDialog.open(
+                                                            selectedProfile,
+                                                            "gesture_" + selectedGestureOwner + "_" + modelData)
+                                                        return
+                                                    }
+                                                    backend.setGestureOwnerBinding(
+                                                        selectedProfile, selectedGestureOwner, modelData, aid)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Single button: categorized chips
                             Column {
                                 width: parent.width
@@ -1585,6 +1977,7 @@ Item {
                                          && selectedButton !== "hscroll_left"
                                          && !(selectedButton === "gesture"
                                               && backend.supportsGestureDirections)
+                                         && !(selectedGestureOwnerEligible && selectedGestureOwnerEnabled)
 
                                 Repeater {
                                     model: backend.actionCategories

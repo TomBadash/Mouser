@@ -148,6 +148,47 @@ class DeviceLayoutTests(unittest.TestCase):
     def test_mx_anywhere_2s_has_no_self_fallback(self):
         self.assertEqual(_FAMILY_FALLBACKS.get("mx_anywhere_2s"), "mx_anywhere")
 
+    def test_mx_anywhere_2s_exposes_per_button_gesture_keys_in_capability_model(self):
+        # Issue #005: back/forward/middle must be reachable as gesture owners
+        # once the event-tap flag (issue #002) is wired in.
+        device = next(d for d in KNOWN_LOGI_DEVICES if d.key == "mx_anywhere_2s")
+
+        self.assertTrue(device.supports_event_tap_gestures)
+        for owner in ("back", "forward", "middle"):
+            for direction in ("left", "right", "up", "down"):
+                self.assertIn(f"gesture_{owner}_{direction}", device.supported_buttons)
+
+        # No dedicated "gesture" hotspot on the 2S -- per-button gesture mode
+        # is reached via each button's own hotspot (middle/xbutton1/xbutton2),
+        # not a separate affordance (issue #005 technical decision).
+        layout = get_device_layout("mx_anywhere_2s")
+        hotspot_keys = {hotspot["buttonKey"] for hotspot in layout["hotspots"]}
+        self.assertNotIn("gesture", hotspot_keys)
+
+    def test_mx_master_layouts_untouched_by_2s_gesture_affordance_work(self):
+        # Regression guard for issue #005: MX Master family layouts and specs
+        # must be byte-identical -- this feature is 2S-only.
+        expected_hotspot_keys = {
+            "mx_master_4": ["middle", "xbutton1", "xbutton2", "gesture", "hscroll_left", "mode_shift"],
+            "mx_master_3s": ["middle", "xbutton1", "xbutton2", "gesture", "hscroll_left", "mode_shift"],
+            "mx_master_3": ["middle", "xbutton1", "xbutton2", "gesture", "hscroll_left", "mode_shift"],
+            "mx_master_2s": ["middle", "xbutton1", "xbutton2", "gesture", "hscroll_left", "mode_shift"],
+            "mx_master_classic": ["middle", "xbutton1", "xbutton2", "gesture", "hscroll_left", "mode_shift"],
+        }
+        for layout_key, expected_keys in expected_hotspot_keys.items():
+            with self.subTest(layout=layout_key):
+                layout = LOGI_DEVICE_LAYOUTS[layout_key]
+                self.assertEqual(
+                    [hotspot["buttonKey"] for hotspot in layout["hotspots"]],
+                    expected_keys,
+                )
+
+        for device in KNOWN_LOGI_DEVICES:
+            if device.key.startswith("mx_master"):
+                with self.subTest(device=device.key):
+                    self.assertFalse(device.supports_event_tap_gestures)
+                    self.assertNotIn("gesture_back_left", device.supported_buttons)
+
     def test_mx_vertical_layout_is_interactive(self):
         layout = get_device_layout("mx_vertical")
 

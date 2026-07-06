@@ -27,6 +27,37 @@ MX_ANYWHERE_SMARTSHIFT_BUTTONS = (
     "mode_shift",
 )
 
+# MX Anywhere 2S has no dedicated HID++ gesture button, so its slide gestures
+# are event-tap-driven and per-button (issue #002) rather than the shared
+# gesture/gesture_left/etc keys above. Extends (not replaces) the family
+# tuple: the legacy global gesture_* keys stay listed but remain inert at
+# runtime (narrowed away — no divertable HID gesture control on this mouse).
+MX_ANYWHERE_2S_BUTTONS = (
+    *MX_ANYWHERE_BUTTONS,
+    "gesture_back_left",
+    "gesture_back_right",
+    "gesture_back_up",
+    "gesture_back_down",
+    "gesture_forward_left",
+    "gesture_forward_right",
+    "gesture_forward_up",
+    "gesture_forward_down",
+    "gesture_middle_left",
+    "gesture_middle_right",
+    "gesture_middle_up",
+    "gesture_middle_down",
+    # Tilt (horizontal-scroll) slide gestures — armed off the hscroll pulse
+    # stream, gated on supports_tilt_gestures (mirror of the event-tap flag).
+    "gesture_tilt_left_left",
+    "gesture_tilt_left_right",
+    "gesture_tilt_left_up",
+    "gesture_tilt_left_down",
+    "gesture_tilt_right_left",
+    "gesture_tilt_right_right",
+    "gesture_tilt_right_up",
+    "gesture_tilt_right_down",
+)
+
 # G502 family (G-series gaming mice). These run onboard profiles and do not
 # expose REPROG_CONTROLS_V4 (0x1B04), so HID++ button diversion -- gesture,
 # mode_shift, dpi_switch -- is unavailable. The buttons below are the ones the
@@ -198,8 +229,13 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_anywhere_2s",
         "image_asset": "logitech-mice/mx_anywhere_2s/mouse.png",
-        "supported_buttons": MX_ANYWHERE_BUTTONS,
+        "supported_buttons": MX_ANYWHERE_2S_BUTTONS,
         "dpi_max": 4000,
+        # No hardware gesture button — gestures are event-tap-driven per
+        # button (back/forward/middle), not the HID++ RawXY path.
+        "supports_event_tap_gestures": True,
+        # Horizontal-scroll tilt slide gestures (tilt_left/tilt_right owners).
+        "supports_tilt_gestures": True,
     },
     # -- M650 Signature family ------------------------------------------------
     # Compact wireless mouse (middle, back, forward buttons). Connects via Logi

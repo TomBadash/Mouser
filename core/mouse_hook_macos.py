@@ -8,7 +8,14 @@ import sys
 import threading
 import time
 
-from core.mouse_hook_base import BaseMouseHook, HidGestureListener
+from core.mouse_hook_base import (
+    CLICK,
+    GESTURE,
+    BaseMouseHook,
+    HidGestureListener,
+    decide_gesture,
+    should_arm_gesture,
+)
 from core.mouse_hook_types import MouseEvent
 
 try:
@@ -42,6 +49,8 @@ def _autoreleased(fn):
 _BTN_MIDDLE = 2
 _BTN_BACK = 3
 _BTN_FORWARD = 4
+# CGEvent button number -> per-button gesture owner name (core.config GESTURE_OWNERS).
+_BTN_TO_OWNER = {_BTN_BACK: "back", _BTN_FORWARD: "forward", _BTN_MIDDLE: "middle"}
 _SCROLL_INVERT_MARKER = 0x4D4F5553
 _INJECTED_EVENT_MARKER = 0x4D4F5554
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
@@ -66,6 +75,22 @@ class MouseHook(BaseMouseHook):
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_thread = None
         self._first_event_logged = False
+        # Active event-tap gesture (None = none). Set on an owner-button down,
+        # cleared on its up; scopes the deferred click + cursor freeze.
+        self._gesture_owner = None
+        self._gesture_owner_btn = None
+        self._gesture_press_at = 0.0
+        # Tilt (horizontal-scroll) gesture: the tilt has no button down/up, so
+        # arm on the first hscroll pulse, stay armed while pulses stream, and
+        # release ~release_ms after the last pulse. Reuses the button-gesture
+        # fields above (one gesture active at a time). Owners come from config
+        # via configure_gestures (empty = feature off). The release timer fires
+        # on its own thread, so _tilt_lock guards arm-vs-finalize.
+        self._tilt_gesture_owners = set()
+        self._tilt_last_pulse_at = 0.0
+        self._tilt_release_timer = None
+        self._tilt_release_ms = 150
+        self._tilt_lock = threading.Lock()
 
     def _negate_scroll_axis(self, cg_event, axis):
         for field_name in (
@@ -246,6 +271,171 @@ class MouseHook(BaseMouseHook):
             self._finish_gesture_tracking()
             return
 
+    def _reset_event_tap_gesture_state(self):
+        """Clear all armed-owner-gesture state (scopes the D8 cursor freeze
+        and the should_arm_gesture gate shared with the HID path). Also cancels
+        any pending tilt release timer so an abort/reconfigure can't leave it to
+        fire a stray event later (finding #4). Timer.cancel() is thread-safe."""
+        self._gesture_active = False
+        self._gesture_owner = None
+        self._gesture_owner_btn = None
+        self._gesture_press_at = 0.0
+        self._gesture_triggered = False
+        timer = self._tilt_release_timer
+        if timer is not None:
+            timer.cancel()
+            self._tilt_release_timer = None
+        self._finish_gesture_tracking()
+
+    def _abort_event_tap_gesture(self, reason):
+        """Give up an armed owner-button gesture without firing an event or
+        replaying a click. Used when the release is missed -- the move-swallow
+        timeout, a tap re-enable after CGEventTap was disabled by the system,
+        or stop() -- so the cursor freeze and should_arm_gesture never stick
+        forever (finding #2)."""
+        if self._gesture_owner is None:
+            return
+        owner = self._gesture_owner
+        self._emit_debug(f"Event-tap gesture aborted owner={owner} reason={reason}")
+        self._emit_gesture_event(
+            {"type": "aborted", "source": "event_tap", "owner": owner, "reason": reason}
+        )
+        self._reset_event_tap_gesture_state()
+
+    def _finish_event_tap_gesture(self, btn):
+        """Resolve an armed owner-button release: fire the tagged gesture event,
+        or replay the deferred normal click (dual-mode, D2/D4)."""
+        owner = self._gesture_owner
+        held_ms = (time.monotonic() - self._gesture_press_at) * 1000.0
+        decision, direction = decide_gesture(
+            held_ms,
+            self._gesture_delta_x,
+            self._gesture_delta_y,
+            self._gesture_hold_floor_ms,
+            self._gesture_threshold,
+            self._gesture_deadzone,
+        )
+        if decision == GESTURE:
+            self._gesture_triggered = True
+            # Tag the generic direction event with the active owner; issue 004
+            # routes (owner + direction) -> the namespaced gesture_<owner>_swipe_<dir>.
+            self._enqueue_dispatch_event(
+                MouseEvent(
+                    direction,
+                    {
+                        "delta_x": self._gesture_delta_x,
+                        "delta_y": self._gesture_delta_y,
+                        "source": "event_tap",
+                        "gesture_owner": owner,
+                    },
+                )
+            )
+            self._emit_debug(
+                f"Event-tap gesture fired owner={owner} dir={direction} "
+                f"held_ms={held_ms:.0f}"
+            )
+            self._emit_gesture_event(
+                {
+                    "type": "detected",
+                    "event_name": direction,
+                    "source": "event_tap",
+                    "owner": owner,
+                }
+            )
+        else:
+            self._emit_debug(f"Event-tap tap->click owner={owner} held_ms={held_ms:.0f}")
+            self._emit_gesture_event(
+                {"type": "button_up", "source": "event_tap", "owner": owner,
+                 "click_candidate": True}
+            )
+            # A tap fires the button's normal Mouser mapping (dispatch its
+            # DOWN+UP so the engine runs the mapped action), NOT a native
+            # replay -- macOS ignores raw button 4/3, so a native replay is a
+            # dead click. Falls through to nothing if the button is unmapped.
+            self._dispatch_owner_button_click(btn)
+
+        self._reset_event_tap_gesture_state()
+
+    # gesture-owner button number -> its normal (down, up) MouseEvent pair.
+    _OWNER_CLICK_EVENTS = {
+        _BTN_MIDDLE: (MouseEvent.MIDDLE_DOWN, MouseEvent.MIDDLE_UP),
+        _BTN_BACK: (MouseEvent.XBUTTON1_DOWN, MouseEvent.XBUTTON1_UP),
+        _BTN_FORWARD: (MouseEvent.XBUTTON2_DOWN, MouseEvent.XBUTTON2_UP),
+    }
+
+    def _dispatch_owner_button_click(self, btn):
+        """Tap of a gesture-owner button: dispatch its normal DOWN+UP events so
+        the engine fires the button's mapped action (dual-mode, option 1)."""
+        pair = self._OWNER_CLICK_EVENTS.get(btn)
+        if pair is None:
+            return
+        down, up = pair
+        self._enqueue_dispatch_event(MouseEvent(down))
+        self._enqueue_dispatch_event(MouseEvent(up))
+
+    # ---- Tilt (horizontal-scroll) gesture -----------------------------------
+    def _maybe_arm_tilt_gesture(self, h_delta):
+        """A tilt pulse arrived. Arm a gesture on the first pulse of an opt-in
+        tilt direction, keep it alive while pulses stream, and (re)schedule the
+        release. Returns True if the scroll should be swallowed (gesture owns the
+        tilt now). Reuses the button-gesture fields + move accumulation."""
+        owner = "tilt_right" if h_delta > 0 else "tilt_left"
+        if owner not in self._tilt_gesture_owners:
+            return False
+        with self._tilt_lock:
+            now = time.monotonic()
+            if not self._gesture_active:
+                self._gesture_active = True
+                self._gesture_owner = owner
+                self._gesture_owner_btn = None
+                self._gesture_triggered = False
+                self._gesture_press_at = now
+                self._start_gesture_tracking()
+            elif self._gesture_owner != owner:
+                return False  # another gesture already active -- don't hijack it
+            self._tilt_last_pulse_at = now
+            self._schedule_tilt_release()
+        return True
+
+    def _schedule_tilt_release(self):
+        if self._tilt_release_timer is not None:
+            self._tilt_release_timer.cancel()
+        self._tilt_release_timer = threading.Timer(
+            self._tilt_release_ms / 1000.0, self._on_tilt_release_timeout
+        )
+        self._tilt_release_timer.daemon = True
+        self._tilt_release_timer.start()
+
+    def _on_tilt_release_timeout(self):
+        # Fired ~release_ms after a pulse; bail if a newer pulse arrived (a newer
+        # timer is pending) or the gesture was already finalized/aborted.
+        with self._tilt_lock:
+            # Guard on the tilt-owner NAMES, not the (possibly-since-cleared)
+            # enabled set: a reconfigure that drops the owner mid-tilt must still
+            # finalize+reset here, else _gesture_active stays stuck and the cursor
+            # freezes until the move-timeout abort (finding #4).
+            if not self._gesture_active or self._gesture_owner not in ("tilt_left", "tilt_right"):
+                return
+            if (time.monotonic() - self._tilt_last_pulse_at) < (self._tilt_release_ms / 1000.0 - 0.01):
+                return
+            self._finish_tilt_gesture()
+
+    def _finish_tilt_gesture(self):
+        """Resolve a released tilt gesture (called holding _tilt_lock): fire the
+        bound direction on a slide, or the tilt's normal hscroll action on a tap
+        (dual-mode; the tap fires once = the debounce)."""
+        owner = self._gesture_owner
+        # A slide already fired the gesture mid-hold (fire-on-slide-cross); the
+        # release only resolves the remaining case: no slide crossed -> a TAP,
+        # which fires the tilt's normal horizontal-scroll action once (debounce).
+        if not self._gesture_triggered:
+            hs = MouseEvent.HSCROLL_LEFT if owner == "tilt_left" else MouseEvent.HSCROLL_RIGHT
+            self._enqueue_dispatch_event(MouseEvent(hs, 1.0))
+        if self._tilt_release_timer is not None:
+            self._tilt_release_timer.cancel()
+            self._tilt_release_timer = None
+        self._reset_event_tap_gesture_state()
+
     def _dispatch_worker(self):
         while self._running:
             try:
@@ -266,6 +456,10 @@ class MouseHook(BaseMouseHook):
                     f"(type=0x{event_type:X}), re-enabling",
                     flush=True,
                 )
+                # A pending owner-gesture release may have been dropped while
+                # the tap was disabled -- abort it rather than leave the
+                # cursor frozen (finding #2).
+                self._abort_event_tap_gesture("tap_disabled")
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 
@@ -286,12 +480,60 @@ class MouseHook(BaseMouseHook):
             mouse_event = None
             should_block = False
 
+            is_move = event_type in (
+                Quartz.kCGEventMouseMoved,
+                Quartz.kCGEventOtherMouseDragged,
+            )
+            if is_move and self._gesture_active and self._gesture_owner is not None:
+                # A missed button-up (tap disabled under load, device drops
+                # mid-hold) must not freeze the cursor forever (finding #2):
+                # abort and let this move through once the hold outlives the
+                # configured gesture timeout.
+                if (
+                    time.monotonic() - self._gesture_press_at
+                    > self._gesture_timeout_ms / 1000.0
+                ):
+                    self._abort_event_tap_gesture("timeout")
+                    # fall through -- do not swallow this move
+                else:
+                    # Event-tap owner gesture: accumulate for the on-release
+                    # decision and freeze the cursor (D8) by swallowing the
+                    # motion so no net pointer delta reaches the OS.
+                    self._gesture_delta_x += Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGMouseEventDeltaX
+                    )
+                    self._gesture_delta_y += Quartz.CGEventGetIntegerValueField(
+                        cg_event, Quartz.kCGMouseEventDeltaY
+                    )
+                    # Tilt gestures fire the INSTANT the slide crosses threshold
+                    # (mid-hold), not on release: the tilt's pulse stream can
+                    # fragment (gentle holds pulse slowly), so decide-on-release
+                    # would drop them. The release timer then only fires taps.
+                    # Under _tilt_lock: the release timer (other thread) also
+                    # reads/writes _gesture_triggered in _finish_tilt_gesture, so
+                    # the check-and-set here must not race it (else tap+gesture
+                    # both fire for one engagement).
+                    if self._gesture_owner in ("tilt_left", "tilt_right"):
+                        with self._tilt_lock:
+                            if not self._gesture_triggered:
+                                decision, direction = decide_gesture(
+                                    (time.monotonic() - self._gesture_press_at) * 1000.0,
+                                    self._gesture_delta_x, self._gesture_delta_y,
+                                    self._gesture_hold_floor_ms, self._gesture_threshold,
+                                    self._gesture_deadzone,
+                                )
+                                if decision == GESTURE:
+                                    self._gesture_triggered = True
+                                    self._enqueue_dispatch_event(MouseEvent(direction, {
+                                        "delta_x": self._gesture_delta_x,
+                                        "delta_y": self._gesture_delta_y,
+                                        "source": "tilt",
+                                        "gesture_owner": self._gesture_owner,
+                                    }))
+                    return None
+
             if (
-                event_type
-                in (
-                    Quartz.kCGEventMouseMoved,
-                    Quartz.kCGEventOtherMouseDragged,
-                )
+                is_move
                 and self._gesture_direction_enabled
                 and self._gesture_active
             ):
@@ -335,6 +577,23 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseDown btn={btn}")
                     except Exception:
                         pass
+                owner = _BTN_TO_OWNER.get(btn)
+                if owner and should_arm_gesture(
+                    self._gesture_active, owner, self._gesture_owners
+                ):
+                    # Arm the gesture and DEFER this button's normal down; the
+                    # click is replayed on release iff it turns out to be a tap.
+                    self._gesture_active = True
+                    self._gesture_owner = owner
+                    self._gesture_owner_btn = btn
+                    self._gesture_triggered = False
+                    self._gesture_press_at = time.monotonic()
+                    self._start_gesture_tracking()
+                    self._emit_debug(f"Event-tap gesture armed owner={owner} btn={btn}")
+                    self._emit_gesture_event(
+                        {"type": "button_down", "source": "event_tap", "owner": owner}
+                    )
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
                     should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
@@ -354,6 +613,9 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseUp btn={btn}")
                     except Exception:
                         pass
+                if self._gesture_owner is not None and btn == self._gesture_owner_btn:
+                    self._finish_event_tap_gesture(btn)
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
                     should_block = MouseEvent.MIDDLE_UP in self._blocked_events
@@ -380,6 +642,8 @@ class MouseHook(BaseMouseHook):
                     cg_event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2
                 )
                 h_delta = h_delta / 65536.0
+                if h_delta != 0 and self._maybe_arm_tilt_gesture(h_delta):
+                    return None  # tilt gesture armed/held -- swallow the scroll
                 if self.debug_mode and self._debug_callback:
                     try:
                         v_delta = (
@@ -604,6 +868,7 @@ class MouseHook(BaseMouseHook):
     def stop(self):
         self._unregister_wake_observer()
         self._running = False
+        self._abort_event_tap_gesture("stop")
         self._stop_hid_listener()
         self._connected_device = None
 
