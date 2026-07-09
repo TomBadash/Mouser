@@ -911,7 +911,8 @@ class HidGestureListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
-                 on_thumb_button_down=None, on_thumb_button_up=None):
+                 on_thumb_button_down=None, on_thumb_button_up=None,
+                 on_thumb_button_move=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
@@ -927,6 +928,14 @@ class HidGestureListener:
         # is set AND it is NOT the active gesture CID.
         self._on_thumb_button_down = on_thumb_button_down
         self._on_thumb_button_up = on_thumb_button_up
+        # Movement callback for thumb-button swipe gestures. When enabled,
+        # holding the thumb button hands the single rawXY stream from the
+        # primary gesture CID over to the thumb CID so hold+move recognizes a
+        # direction; released on button-up. ``_rawxy_owner`` says which
+        # control the current func=1 movement reports belong to.
+        self._on_thumb_button_move = on_thumb_button_move
+        self._thumb_rawxy_enabled = False
+        self._rawxy_owner = "gesture"   # "gesture" (primary) | "thumb"
         # Static extras (mode_shift, dpi_switch). Action ring extras are
         # added DYNAMICALLY at connect time via `_install_thumb_button_extra`
         # because the choice depends on which CID `_divert` settled on.
@@ -1534,6 +1543,9 @@ class HidGestureListener:
         """
         if self._feat_idx is None:
             return False
+        # Fresh divert round — the primary gesture CID owns rawXY until a thumb
+        # hold hands it over (guards against a stuck owner across reconnects).
+        self._rawxy_owner = "gesture"
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
             button_only = cid in self._button_only_cids
@@ -1593,7 +1605,37 @@ class HidGestureListener:
             "held": False,
         }
 
+    def set_thumb_rawxy_enabled(self, enabled: bool) -> None:
+        """Enable/disable handing the rawXY stream to the thumb button while
+        held. Called by the hook when the thumb's tap action is "Do Nothing"
+        and at least one thumb swipe direction is mapped."""
+        self._thumb_rawxy_enabled = bool(enabled)
+
+    def _thumb_rawxy_acquire(self):
+        """Divert the thumb CID with rawXY so hold+move flows to the thumb
+        recognizer. Firmware streams rawXY for one control at a time, so this
+        implicitly redirects it from the primary gesture CID for the hold."""
+        cid = self._thumb_button_cid
+        if cid is None or not self._rawxy_enabled:
+            return
+        resp = self._set_cid_reporting(cid, _DIVERT_RAW_XY)
+        if resp is not None:
+            self._rawxy_owner = "thumb"
+        else:
+            print(f"[HidGesture] thumb rawXY acquire FAILED {_format_cid(cid)}")
+
+    def _thumb_rawxy_release(self):
+        """Return the thumb CID to button-only so the primary gesture CID
+        reclaims the rawXY stream and the OS cursor moves normally again."""
+        cid = self._thumb_button_cid
+        self._rawxy_owner = "gesture"
+        if cid is None:
+            return
+        self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
+
     def _fire_thumb_button_down(self):
+        if self._thumb_rawxy_enabled:
+            self._thumb_rawxy_acquire()
         cb = self._on_thumb_button_down
         if cb is None:
             return
@@ -1604,12 +1646,14 @@ class HidGestureListener:
 
     def _fire_thumb_button_up(self):
         cb = self._on_thumb_button_up
-        if cb is None:
-            return
         try:
-            cb()
+            if cb is not None:
+                cb()
         except Exception as exc:
             print(f"[HidGesture] thumb_button up callback error: {exc}")
+        finally:
+            if self._rawxy_owner == "thumb":
+                self._thumb_rawxy_release()
 
     @property
     def thumb_button_via_hid(self) -> bool:
@@ -2437,13 +2481,24 @@ class HidGestureListener:
         if func == 1:
             if not self._rawxy_enabled:
                 return
-            if not self._held:
-                return
             if len(params) < 4:
                 return
             dx = self._decode_s16(params[0], params[1])
             dy = self._decode_s16(params[2], params[3])
-            if (dx or dy) and self._on_move:
+            if not (dx or dy):
+                return
+            if self._rawxy_owner == "thumb":
+                # Movement belongs to the thumb Gesture button's swipe hold.
+                cb = self._on_thumb_button_move
+                if cb:
+                    try:
+                        cb(dx, dy)
+                    except Exception as e:
+                        print(f"[HidGesture] thumb move callback error: {e}")
+                return
+            if not self._held:
+                return
+            if self._on_move:
                 try:
                     self._on_move(dx, dy)
                 except Exception as e:

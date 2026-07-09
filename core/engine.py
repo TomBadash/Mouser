@@ -14,7 +14,7 @@ from core.key_simulator import (
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app_identity,
-    BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, GESTURE_DIRECTION_BUTTONS,
+    BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, SWIPE_SET_FOR_TAP,
     save_config, action_haptic_enabled, button_haptic_enabled,
     WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
 )
@@ -127,21 +127,66 @@ class Engine:
              if isinstance(v, str) and v == "activate_actions_ring"),
             None,
         )
-        gesture_ring_active = mappings.get("gesture") == "activate_actions_ring"
+
+        # Map the two swipe-capable tap buttons to the hook's two recognizers.
+        # The hook's *primary* recognizer is whichever control emits the
+        # device's primary gesture events: the Sense Panel ("actions_ring") on
+        # the MX Master 4, else the Gesture button ("gesture"). The MX4's thumb
+        # ("gesture") drives the *thumb* recognizer.
+        via_sense = bool(
+            getattr(self.connected_device, "gesture_via_sense_panel", False)
+        )
+        primary_tap_key = "actions_ring" if via_sense else "gesture"
+        thumb_tap_key = "gesture" if via_sense else None
+
+        g_threshold = settings.get("gesture_threshold", 25)
+        g_commit = settings.get("gesture_commit_window_ms", 400)
+        g_settle = settings.get("gesture_settle_ms", 90)
+        g_cross = settings.get("gesture_cross_ratio", 0.5)
+
+        def _swipe_enabled(tap_key):
+            # A button's swipe set is active only when its tap is "Do Nothing"
+            # and at least one direction is mapped.
+            if mappings.get(tap_key, "none") != "none":
+                return False
+            return any(mappings.get(k, "none") != "none"
+                       for k in SWIPE_SET_FOR_TAP.get(tap_key, ()))
+
+        primary_ring = mappings.get(primary_tap_key) == "activate_actions_ring"
         self.hook.configure_gestures(
-            enabled=(not gesture_ring_active
-                     and any(mappings.get(key, "none") != "none"
-                             for key in GESTURE_DIRECTION_BUTTONS)),
-            threshold=settings.get("gesture_threshold", 25),
-            commit_window_ms=settings.get("gesture_commit_window_ms", 400),
-            settle_ms=settings.get("gesture_settle_ms", 90),
-            cross_ratio=settings.get("gesture_cross_ratio", 0.5),
+            enabled=_swipe_enabled(primary_tap_key),
+            threshold=g_threshold, commit_window_ms=g_commit,
+            settle_ms=g_settle, cross_ratio=g_cross,
         )
         if hasattr(self.hook, "set_gesture_os_passthrough"):
             self.hook.set_gesture_os_passthrough(
-                gesture_ring_active,
-                move_callback=self._on_gesture_rawxy if gesture_ring_active else None,
+                primary_ring,
+                move_callback=self._on_gesture_rawxy if primary_ring else None,
             )
+
+        if thumb_tap_key and hasattr(self.hook, "configure_thumb_gestures"):
+            thumb_ring = mappings.get(thumb_tap_key) == "activate_actions_ring"
+            self.hook.configure_thumb_gestures(
+                enabled=_swipe_enabled(thumb_tap_key),
+                threshold=g_threshold, commit_window_ms=g_commit,
+                settle_ms=g_settle, cross_ratio=g_cross,
+            )
+            if hasattr(self.hook, "set_thumb_os_passthrough"):
+                self.hook.set_thumb_os_passthrough(
+                    thumb_ring,
+                    move_callback=self._on_gesture_rawxy if thumb_ring else None,
+                )
+        elif hasattr(self.hook, "configure_thumb_gestures"):
+            # No secondary control on this device — keep it disabled.
+            self.hook.configure_thumb_gestures(enabled=False)
+
+        # Swipe-direction keys whose owning tap button is set to the Actions
+        # Ring: their movement drives the ring, so the swipe events never fire
+        # and we must not block them.
+        ring_suppressed_swipes = set()
+        for tap_key, swipe_keys in SWIPE_SET_FOR_TAP.items():
+            if mappings.get(tap_key) == "activate_actions_ring":
+                ring_suppressed_swipes.update(swipe_keys)
         self._apply_wheel_invert_setting()
         # Divert mode shift CID only when the device has the button and
         # at least one profile maps it to an action.  When no device is
@@ -234,7 +279,7 @@ class Engine:
                                                lambda e, r=ring: r.on_click())
                 continue
 
-            if ring_btn_key == "gesture" and btn_key in GESTURE_DIRECTION_BUTTONS:
+            if btn_key in ring_suppressed_swipes:
                 continue
 
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
@@ -277,7 +322,7 @@ class Engine:
                         f"Mapped {event.event_type} -> {action_id} "
                         f"({self._action_label(action_id)})"
                     )
-                    if event.event_type.startswith("gesture_"):
+                    if event.event_type.startswith(("gesture_", "sense_")):
                         self._emit_gesture_event({
                             "type": "mapped",
                             "event_name": event.event_type,
@@ -288,11 +333,6 @@ class Engine:
                         if (action_haptic_enabled(self.cfg, action_id)
                                 or button_haptic_enabled(self.cfg, btn_key)):
                             self._play_haptic_async(7)  # COMPLETED
-                    elif event.event_type == "actions_ring_down":
-                        # Ring detent — gated by per-button OR per-action picker.
-                        if (button_haptic_enabled(self.cfg, btn_key)
-                                or action_haptic_enabled(self.cfg, action_id)):
-                            self._play_haptic_async(0)  # SHARP_STATE_CHANGE
                     elif not event.event_type.endswith("_up"):
                         # Regular press — fires when EITHER action OR button gate passes.
                         if (action_haptic_enabled(self.cfg, action_id)
@@ -1062,6 +1102,13 @@ class Engine:
         hid_features_changed = hid_features_ready != self._last_hid_features_ready
         if connection_changed:
             self._last_connection_state = connected
+            if connected:
+                # Re-wire hooks now that the device (and its
+                # gesture_via_sense_panel / supported_buttons) is known, so the
+                # per-device gesture recognizers and rawXY hand-off are applied.
+                with self._lock:
+                    self.hook.reset_bindings()
+                    self._setup_hooks()
             self._battery_poll_stop.set()
             if self._battery_poll_thread is not None:
                 self._battery_poll_thread.join(timeout=5)

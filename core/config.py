@@ -24,25 +24,51 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 # Which mouse events map to which friendly button names
 # Order matches the Logi Options+ diagram (top view then side view)
+# Config keys are tied to *physical buttons*, not to which control happens to
+# be the "primary" gesture surface on a given device:
+#   "gesture"      = the physical Gesture button (thumb). It is the primary
+#                    gesture control on the MX Master 3/3S/classic, and the
+#                    small thumb-area button (CID 0x00C3) on the MX Master 4.
+#   "actions_ring" = the MX Master 4 Sense Panel (CID 0x01A0), labeled
+#                    "Actions Ring". MX Master 4 only.
+# The HID layer emits a device-appropriate event family (gesture_* vs sense_*)
+# so the same key means the same physical button everywhere -- see
+# BUTTON_TO_EVENTS below and core/mouse_hook_base.py.
 BUTTON_NAMES = {
     "middle":        "Middle button",
-    "gesture":       "Actions Ring",
+    "gesture":       "Gesture button",
     "xbutton1":      "Back button",
     "xbutton2":      "Forward button",
-    "hscroll_left":  "Horizontal scroll left",
+    "hscroll_left":  "Horizontal scroll",
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
     "dpi_switch":    "DPI switch button",
-    "actions_ring":  "Gesture button",
+    "actions_ring":  "Actions Ring",
     "thumb_button":  "Thumb button",
 }
 
-GESTURE_DIRECTION_BUTTONS = (
+# Whole-mouse-movement swipe directions for the Gesture button (thumb).
+GESTURE_SWIPE_BUTTONS = (
     "gesture_left",
     "gesture_right",
     "gesture_up",
     "gesture_down",
 )
+# Swipe directions for the Sense Panel ("Actions Ring") -- MX Master 4 only.
+ACTIONS_RING_SWIPE_BUTTONS = (
+    "actions_ring_left",
+    "actions_ring_right",
+    "actions_ring_up",
+    "actions_ring_down",
+)
+# Union of both swipe sets (order: Gesture button first, then Sense Panel).
+GESTURE_DIRECTION_BUTTONS = GESTURE_SWIPE_BUTTONS + ACTIONS_RING_SWIPE_BUTTONS
+
+# Maps a swipe-set's tap button key -> its four direction keys.
+SWIPE_SET_FOR_TAP = {
+    "gesture": GESTURE_SWIPE_BUTTONS,
+    "actions_ring": ACTIONS_RING_SWIPE_BUTTONS,
+}
 
 GESTURE_SENSITIVITY_PX = (18, 25, 33, 44, 56)
 GESTURE_DEFAULT_SENSITIVITY_INDEX = 1
@@ -76,32 +102,48 @@ def coerce_wheel_divert_setting(value: object) -> str:
 
 PROFILE_BUTTON_NAMES = {
     **BUTTON_NAMES,
-    "gesture_left":  "Gesture swipe left",
-    "gesture_right": "Gesture swipe right",
-    "gesture_up":    "Gesture swipe up",
-    "gesture_down":  "Gesture swipe down",
+    "gesture_left":       "Gesture swipe left",
+    "gesture_right":      "Gesture swipe right",
+    "gesture_up":         "Gesture swipe up",
+    "gesture_down":       "Gesture swipe down",
+    "actions_ring_left":  "Actions Ring swipe left",
+    "actions_ring_right": "Actions Ring swipe right",
+    "actions_ring_up":    "Actions Ring swipe up",
+    "actions_ring_down":  "Actions Ring swipe down",
 }
 
-# Maps config button keys to the MouseEvent types they correspond to
+# Maps config button keys to the MouseEvent types they correspond to.
+# The Gesture button (thumb) uses the gesture_* family; the Sense Panel
+# ("Actions Ring", MX4 only) uses the sense_* family. See BUTTON_NAMES for
+# why the key names differ from the historical "primary gesture" wiring.
 BUTTON_TO_EVENTS = {
-    "middle":        ("middle_down", "middle_up"),
-    "gesture":       ("gesture_click",),
-    "gesture_left":  ("gesture_swipe_left",),
-    "gesture_right": ("gesture_swipe_right",),
-    "gesture_up":    ("gesture_swipe_up",),
-    "gesture_down":  ("gesture_swipe_down",),
-    "xbutton1":      ("xbutton1_down", "xbutton1_up"),
-    "xbutton2":      ("xbutton2_down", "xbutton2_up"),
-    "hscroll_left":  ("hscroll_left",),
-    "hscroll_right": ("hscroll_right",),
-    "mode_shift":    ("mode_shift_down", "mode_shift_up"),
-    "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
-    "actions_ring":  ("actions_ring_down", "actions_ring_up"),
-    "thumb_button":  ("thumb_button_down", "thumb_button_up"),
+    "middle":             ("middle_down", "middle_up"),
+    # Gesture button (thumb)
+    "gesture":            ("gesture_click",),
+    "gesture_left":       ("gesture_swipe_left",),
+    "gesture_right":      ("gesture_swipe_right",),
+    "gesture_up":         ("gesture_swipe_up",),
+    "gesture_down":       ("gesture_swipe_down",),
+    "xbutton1":           ("xbutton1_down", "xbutton1_up"),
+    "xbutton2":           ("xbutton2_down", "xbutton2_up"),
+    "hscroll_left":       ("hscroll_left",),
+    "hscroll_right":      ("hscroll_right",),
+    "mode_shift":         ("mode_shift_down", "mode_shift_up"),
+    "dpi_switch":         ("dpi_switch_down", "dpi_switch_up"),
+    # Sense Panel ("Actions Ring", MX Master 4)
+    "actions_ring":       ("sense_click",),
+    "actions_ring_left":  ("sense_swipe_left",),
+    "actions_ring_right": ("sense_swipe_right",),
+    "actions_ring_up":    ("sense_swipe_up",),
+    "actions_ring_down":  ("sense_swipe_down",),
+    "thumb_button":       ("thumb_button_down", "thumb_button_up"),
 }
 
+# Hold (press-and-hold) events, used to drive the Actions Ring overlay when a
+# button's tap action is "activate_actions_ring".
 BUTTON_HOLD_EVENTS = {
-    "gesture": ("gesture_button_down", "gesture_button_up"),
+    "gesture":      ("gesture_button_down", "gesture_button_up"),
+    "actions_ring": ("sense_button_down", "sense_button_up"),
 }
 
 DEFAULT_CONFIG = {
@@ -113,17 +155,23 @@ DEFAULT_CONFIG = {
             "apps": [],          # empty = all apps (fallback profile)
             "mappings": {
                 "middle": "none",
-                "gesture": "activate_actions_ring",
+                # Gesture button (thumb) — App Exposé by default on the MX4.
+                "gesture": "app_expose",
                 "gesture_left": "none",
                 "gesture_right": "none",
                 "gesture_up": "none",
                 "gesture_down": "none",
-                "xbutton1": "alt_tab",
-                "xbutton2": "alt_tab",
-                "hscroll_left": "browser_back",
-                "hscroll_right": "browser_forward",
+                "xbutton1": "mouse_back_click",     # Back (Mouse Button 4)
+                "xbutton2": "mouse_forward_click",  # Forward (Mouse Button 5)
+                "hscroll_left": "none",             # pass-through
+                "hscroll_right": "none",            # pass-through
                 "mode_shift": "switch_scroll_mode",
-                "actions_ring": "none",
+                # Sense Panel ("Actions Ring", MX4) — activates the ring.
+                "actions_ring": "activate_actions_ring",
+                "actions_ring_left": "none",
+                "actions_ring_right": "none",
+                "actions_ring_up": "none",
+                "actions_ring_down": "none",
                 "thumb_button": "none",
                 "actions_ring_slots": [
                     "mission_control", "play_pause",

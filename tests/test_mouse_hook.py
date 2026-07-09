@@ -42,16 +42,25 @@ class _FakeEvdevDevice:
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_thumb_button_down=None, on_thumb_button_up=None,
+                 on_thumb_button_move=None, **_kwargs):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
+        self.on_thumb_button_down = on_thumb_button_down
+        self.on_thumb_button_up = on_thumb_button_up
+        self.on_thumb_button_move = on_thumb_button_move
         self.connected_device = None
         self.started = False
         self.stopped = False
+        self.thumb_rawxy_enabled = False
+
+    def set_thumb_rawxy_enabled(self, enabled):
+        self.thumb_rawxy_enabled = bool(enabled)
 
     def start(self):
         self.started = True
@@ -1522,10 +1531,19 @@ class MacOSShiftWheelHScrollTests(unittest.TestCase):
         self.assertEqual(create_args.args[4], 1)
 
 
-class ActionsRingEventTests(unittest.TestCase):
-    def test_actions_ring_event_constants_exist(self):
-        self.assertEqual(mouse_hook.MouseEvent.ACTIONS_RING_DOWN, "actions_ring_down")
-        self.assertEqual(mouse_hook.MouseEvent.ACTIONS_RING_UP, "actions_ring_up")
+class GestureEventFamilyTests(unittest.TestCase):
+    def test_gesture_button_event_constants_exist(self):
+        # The Gesture button (thumb) uses the gesture_* family on every device.
+        self.assertEqual(mouse_hook.MouseEvent.GESTURE_CLICK, "gesture_click")
+        self.assertEqual(mouse_hook.MouseEvent.GESTURE_BUTTON_DOWN, "gesture_button_down")
+        self.assertEqual(mouse_hook.MouseEvent.GESTURE_BUTTON_UP, "gesture_button_up")
+
+    def test_sense_panel_event_constants_exist(self):
+        # The MX Master 4 Sense Panel ("Actions Ring") uses the sense_* family.
+        self.assertEqual(mouse_hook.MouseEvent.SENSE_CLICK, "sense_click")
+        self.assertEqual(mouse_hook.MouseEvent.SENSE_BUTTON_DOWN, "sense_button_down")
+        self.assertEqual(mouse_hook.MouseEvent.SENSE_BUTTON_UP, "sense_button_up")
+        self.assertEqual(mouse_hook.MouseEvent.SENSE_SWIPE_LEFT, "sense_swipe_left")
 
 
 if __name__ == "__main__":

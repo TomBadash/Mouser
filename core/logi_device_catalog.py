@@ -23,14 +23,23 @@ MX_MASTER_BUTTONS = (
     "mode_shift",
 )
 
-# MX Master 4 layout: two gesture-area buttons instead of one.
-#  - Sense Panel (CID 0x01A0): large top surface → config key "gesture".
-#    Supports swipe gestures AND tap-to-activate actions like the Actions Ring.
+# MX Master 4 layout: two gesture-capable controls, each with its own swipe
+# set (config keys are tied to the physical button — see core/config.py):
+#  - Sense Panel (CID 0x01A0): large top surface → config key "actions_ring",
+#    labeled "Actions Ring". Primary gesture control; tap can activate the
+#    Actions Ring, and (when tap = Do Nothing) it has its own swipe set
+#    "actions_ring_left/right/up/down".
 #  - Gesture button (CID 0x00C3): small thumb-area button → config key
-#    "actions_ring".  The HID layer calls this "thumb_button" internally
-#    (after its physical location); the dispatch maps it to actions_ring events.
+#    "gesture", labeled "Gesture button". Its click uses the gesture_* family
+#    and (when tap = Do Nothing) it has its own swipe set
+#    "gesture_left/right/up/down" via a rawXY hand-off while held.
 MX_MASTER_4_BUTTONS = (
     "middle",
+    "actions_ring",
+    "actions_ring_left",
+    "actions_ring_right",
+    "actions_ring_up",
+    "actions_ring_down",
     "gesture",
     "gesture_left",
     "gesture_right",
@@ -38,7 +47,6 @@ MX_MASTER_4_BUTTONS = (
     "gesture_down",
     "xbutton1",
     "xbutton2",
-    "actions_ring",
     "hscroll_left",
     "hscroll_right",
     "mode_shift",
@@ -405,7 +413,7 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=-16,
             ),
             _hotspot(
-                "gesture",
+                "actions_ring",
                 "Actions Ring",
                 "gesture",
                 0.289,
@@ -426,7 +434,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.550,
                 0.510,
@@ -446,9 +454,9 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_y=18,
             ),
             _hotspot(
-                "actions_ring",
+                "gesture",
                 "Gesture button",
-                "mapping",
+                "gesture",
                 0.403,
                 0.388,
                 label_side="left",
@@ -517,7 +525,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.55,
                 0.515,
@@ -587,7 +595,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.55,
                 0.515,
@@ -657,7 +665,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.40,
                 0.46,
@@ -727,7 +735,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.40,
                 0.46,

@@ -186,7 +186,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(loaded["settings"]["update_check_state"], {})
         self.assertEqual(loaded["profiles"]["default"]["mappings"]["middle"], "copy")
         self.assertEqual(
-            loaded["profiles"]["default"]["mappings"]["xbutton1"], "alt_tab"
+            loaded["profiles"]["default"]["mappings"]["xbutton1"], "mouse_back_click"
         )
         self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"

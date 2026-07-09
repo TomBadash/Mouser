@@ -12,12 +12,23 @@ except Exception:
 from core.gesture_recognizer import GestureRecognizer
 from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
 
-_SWIPE_EVENTS = {
+# Swipe direction -> event, per event family. The Gesture button (thumb)
+# always uses the gesture_* family; the Sense Panel (MX Master 4 primary
+# gesture control) uses the sense_* family.
+_GESTURE_SWIPE_EVENTS = {
     "left": MouseEvent.GESTURE_SWIPE_LEFT,
     "right": MouseEvent.GESTURE_SWIPE_RIGHT,
     "up": MouseEvent.GESTURE_SWIPE_UP,
     "down": MouseEvent.GESTURE_SWIPE_DOWN,
 }
+_SENSE_SWIPE_EVENTS = {
+    "left": MouseEvent.SENSE_SWIPE_LEFT,
+    "right": MouseEvent.SENSE_SWIPE_RIGHT,
+    "up": MouseEvent.SENSE_SWIPE_UP,
+    "down": MouseEvent.SENSE_SWIPE_DOWN,
+}
+# Backwards-compatible alias (primary control default family).
+_SWIPE_EVENTS = _GESTURE_SWIPE_EVENTS
 
 
 class BaseMouseHook:
@@ -40,8 +51,24 @@ class BaseMouseHook:
         self._gesture_direction_enabled = False
         self._gesture_os_passthrough = False
         self._gesture_move_callback = None
+        # Primary gesture control recognizer (thumb on MX3/3S/classic,
+        # Sense Panel on the MX Master 4).
         self._gesture_recognizer = GestureRecognizer(
             on_swipe=self._on_recognized_swipe,
+            on_debug=self._emit_gesture_event,
+        )
+        # True when the device's primary gesture control is a Sense Panel
+        # (MX Master 4). Set on connect. Governs which event family the
+        # primary control emits (sense_* vs gesture_*).
+        self._gesture_via_sense_panel = False
+        # Secondary Gesture button (thumb) on the MX Master 4 — its own
+        # movement-swipe recognizer, independent of the Sense Panel's.
+        self._thumb_active = False
+        self._thumb_direction_enabled = False
+        self._thumb_os_passthrough = False
+        self._thumb_move_callback = None
+        self._thumb_recognizer = GestureRecognizer(
+            on_swipe=self._on_thumb_recognized_swipe,
             on_debug=self._emit_gesture_event,
         )
         self._connected_device = None
@@ -103,6 +130,29 @@ class BaseMouseHook:
             cross_ratio=cross_ratio,
         )
 
+    def configure_thumb_gestures(
+        self,
+        enabled=False,
+        threshold=50,
+        commit_window_ms=400,
+        settle_ms=90,
+        cross_ratio=0.5,
+    ):
+        """Configure the MX Master 4 thumb Gesture button's swipe recognizer.
+        Also tells the HID listener whether to hand rawXY to the thumb on
+        press (so holding the thumb + moving the mouse recognizes a swipe)."""
+        self._thumb_direction_enabled = bool(enabled)
+        self._thumb_recognizer.configure(
+            enabled=bool(enabled),
+            threshold=threshold,
+            commit_window_ms=commit_window_ms,
+            settle_ms=settle_ms,
+            cross_ratio=cross_ratio,
+        )
+        hg = self._hid_gesture
+        if hg is not None and hasattr(hg, "set_thumb_rawxy_enabled"):
+            hg.set_thumb_rawxy_enabled(bool(enabled))
+
     def set_gesture_os_passthrough(self, enabled, move_callback=None):
         """When True, rawXY deltas during a gesture hold are forwarded to
         move_callback instead of being fed to the gesture recognizer.
@@ -110,6 +160,31 @@ class BaseMouseHook:
         active but the callback is not yet installed."""
         self._gesture_move_callback = move_callback
         self._gesture_os_passthrough = bool(enabled)
+
+    def set_thumb_os_passthrough(self, enabled, move_callback=None):
+        """Thumb-button counterpart of set_gesture_os_passthrough, used when
+        the thumb's tap action is the Actions Ring."""
+        self._thumb_move_callback = move_callback
+        self._thumb_os_passthrough = bool(enabled)
+
+    # ── Primary-control event family ──────────────────────────────────
+    # The primary gesture control emits sense_* on a Sense Panel device
+    # (MX Master 4) and gesture_* everywhere else.
+    def _primary_swipe_events(self):
+        return (_SENSE_SWIPE_EVENTS if self._gesture_via_sense_panel
+                else _GESTURE_SWIPE_EVENTS)
+
+    def _primary_click_event(self):
+        return (MouseEvent.SENSE_CLICK if self._gesture_via_sense_panel
+                else MouseEvent.GESTURE_CLICK)
+
+    def _primary_button_down_event(self):
+        return (MouseEvent.SENSE_BUTTON_DOWN if self._gesture_via_sense_panel
+                else MouseEvent.GESTURE_BUTTON_DOWN)
+
+    def _primary_button_up_event(self):
+        return (MouseEvent.SENSE_BUTTON_UP if self._gesture_via_sense_panel
+                else MouseEvent.GESTURE_BUTTON_UP)
 
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
@@ -207,7 +282,7 @@ class BaseMouseHook:
             f"Dispatch {event.event_type}"
             f"{format_debug_details(event.raw_data)} callbacks={len(callbacks)}"
         )
-        if event.event_type.startswith("gesture_"):
+        if event.event_type.startswith(("gesture_", "sense_")):
             self._emit_gesture_event(
                 {
                     "type": "dispatch",
@@ -217,7 +292,7 @@ class BaseMouseHook:
             )
         if not callbacks:
             self._emit_debug(f"No mapped action for {event.event_type}")
-            if event.event_type.startswith("gesture_"):
+            if event.event_type.startswith(("gesture_", "sense_")):
                 self._emit_gesture_event(
                     {
                         "type": "unmapped",
@@ -261,10 +336,14 @@ class BaseMouseHook:
             extra_diverts=self._build_extra_diverts(),
             on_thumb_button_down=self._on_hid_thumb_button_down,
             on_thumb_button_up=self._on_hid_thumb_button_up,
+            on_thumb_button_move=self._on_hid_thumb_button_move,
         )
         self._hid_gesture = listener
         if not listener.start():
             self._hid_gesture = None
+        elif hasattr(listener, "set_thumb_rawxy_enabled"):
+            # Re-apply the last thumb-swipe config to the fresh listener.
+            listener.set_thumb_rawxy_enabled(self._thumb_direction_enabled)
         return self._hid_gesture
 
     def _stop_hid_listener(self):
@@ -275,6 +354,9 @@ class BaseMouseHook:
     def _on_hid_connect(self):
         self._connected_device = (
             self._hid_gesture.connected_device if self._hid_gesture else None
+        )
+        self._gesture_via_sense_panel = bool(
+            getattr(self._connected_device, "gesture_via_sense_panel", False)
         )
         self._set_device_connected(True)
 
@@ -291,7 +373,7 @@ class BaseMouseHook:
         self._gesture_active = True
         self._emit_debug("HID gesture button down")
         self._emit_gesture_event({"type": "button_down"})
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_DOWN))
+        self._dispatch(MouseEvent(self._primary_button_down_event()))
 
     def _on_hid_gesture_up(self):
         if getattr(self, "_ui_passthrough", False):
@@ -310,9 +392,9 @@ class BaseMouseHook:
         self._emit_gesture_event(
             {"type": "button_up", "click_candidate": was_click}
         )
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_UP))
+        self._dispatch(MouseEvent(self._primary_button_up_event()))
         if was_click:
-            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+            self._dispatch(MouseEvent(self._primary_click_event()))
 
     def _on_hid_gesture_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):
@@ -331,7 +413,13 @@ class BaseMouseHook:
         self._gesture_recognizer.sample(dx, dy, "hid_rawxy")
 
     def _on_recognized_swipe(self, direction):
-        event_type = _SWIPE_EVENTS.get(direction)
+        event_type = self._primary_swipe_events().get(direction)
+        if event_type is not None:
+            self._emit_gesture_swipe(MouseEvent(event_type))
+
+    def _on_thumb_recognized_swipe(self, direction):
+        # The thumb Gesture button always emits the gesture_* family.
+        event_type = _GESTURE_SWIPE_EVENTS.get(direction)
         if event_type is not None:
             self._emit_gesture_swipe(MouseEvent(event_type))
 
@@ -360,16 +448,47 @@ class BaseMouseHook:
     def _on_hid_dpi_switch_up(self):
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
-    def _on_hid_actions_ring_down(self):
-        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_DOWN))
-
-    def _on_hid_actions_ring_up(self):
-        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_UP))
-
     def _on_hid_thumb_button_down(self):
-        # HID layer calls this "thumb_button" (physical location), but the
-        # UI/config key is "actions_ring" — dispatch the matching event type.
-        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_DOWN))
+        # The MX Master 4's small thumb-area button (CID 0x00C3) is the
+        # physical "Gesture button" — config key "gesture" — so it emits the
+        # gesture_* family (matching how the primary thumb behaves on the
+        # MX3/3S/classic). When thumb-swipe is enabled, the HID layer has
+        # handed rawXY to this CID so hold+move recognizes a direction.
+        if getattr(self, "_ui_passthrough", False):
+            return
+        if self._thumb_active:
+            return
+        self._thumb_recognizer.begin()
+        self._thumb_active = True
+        self._emit_debug("HID thumb button down")
+        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_DOWN))
 
     def _on_hid_thumb_button_up(self):
-        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_UP))
+        if getattr(self, "_ui_passthrough", False):
+            return
+        if not self._thumb_active:
+            return
+        self._thumb_active = False
+        was_click = self._thumb_recognizer.end()
+        self._emit_debug(
+            f"HID thumb button up click_candidate={str(was_click).lower()}"
+        )
+        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_UP))
+        if was_click:
+            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
+    def _on_hid_thumb_button_move(self, dx, dy):
+        if getattr(self, "_ui_passthrough", False):
+            return
+        self._emit_gesture_event(
+            {"type": "move", "source": "hid_rawxy_thumb", "dx": dx, "dy": dy}
+        )
+        if self._thumb_os_passthrough and self._thumb_active:
+            cb = self._thumb_move_callback
+            if cb:
+                try:
+                    cb(dx, dy)
+                except Exception:
+                    pass
+            return
+        self._thumb_recognizer.sample(dx, dy, "hid_rawxy")

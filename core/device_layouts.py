@@ -107,7 +107,7 @@ MX_MASTER_4_LAYOUT = {
             "labelOffY": -120,
         },
         {
-            "buttonKey": "gesture",
+            "buttonKey": "actions_ring",
             "label": "Actions Ring",
             "summaryType": "gesture",
             "normX": 0.65,
@@ -158,9 +158,9 @@ MX_MASTER_4_LAYOUT = {
             "labelOffY": -80,
         },
         {
-            "buttonKey": "actions_ring",
+            "buttonKey": "gesture",
             "label": "Gesture button",
-            "summaryType": "mapping",
+            "summaryType": "gesture",
             "normX": 0.54,
             "normY": 0.6,
             "labelSide": "left",
