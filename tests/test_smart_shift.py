@@ -600,7 +600,7 @@ class EngineToggleSmartShiftTests(unittest.TestCase):
     def test_make_handler_calls_toggle_for_toggle_action(self):
         engine = self._make_engine()
         toggle_calls = []
-        engine._toggle_smart_shift = lambda: toggle_calls.append(True)
+        engine._toggle_smart_shift = lambda btn_key="": toggle_calls.append(True)
         handler = engine._make_handler("toggle_smart_shift")
         handler(SimpleNamespace(event_type="mode_shift_down"))
         self.assertEqual(len(toggle_calls), 1)
@@ -615,7 +615,7 @@ class EngineToggleSmartShiftTests(unittest.TestCase):
     def test_make_handler_calls_switch_for_switch_action(self):
         engine = self._make_engine()
         switch_calls = []
-        engine._switch_scroll_mode = lambda: switch_calls.append(True)
+        engine._switch_scroll_mode = lambda btn_key="": switch_calls.append(True)
         handler = engine._make_handler("switch_scroll_mode")
         handler(SimpleNamespace(event_type="mode_shift_down"))
         self.assertEqual(len(switch_calls), 1)
@@ -749,7 +749,7 @@ class ConfigV7MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v6_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 13)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -811,7 +811,7 @@ class ConfigV8MigrationTests(unittest.TestCase):
     def test_version_bumped_to_current(self):
         from core.config import _migrate
         migrated = _migrate(self._v7_config())
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 13)
 
 
 class HidForceReconnectTests(unittest.TestCase):

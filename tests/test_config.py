@@ -43,7 +43,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 13)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -89,7 +89,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 13)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -132,8 +132,10 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 9)
+        self.assertEqual(loaded["version"], 13)
         self.assertEqual(loaded["settings"]["dpi"], 800)
+        self.assertEqual(loaded["settings"]["action_haptic"], [])
+        self.assertTrue(loaded["settings"]["haptic_enabled"])
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
         self.assertEqual(loaded["settings"]["appearance_mode"], "system")
@@ -160,12 +162,161 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 9)
+        self.assertEqual(migrated["version"], 13)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
         )
+
+    def test_migrate_v8_to_v9_adds_actions_ring_and_haptic(self):
+        v8_cfg = {
+            "version": 8,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {
+                        "middle": "none",
+                        "mode_shift": "switch_scroll_mode",
+                    },
+                }
+            },
+            "settings": {"dpi": 1000},
+        }
+
+        migrated = config._migrate(v8_cfg)
+
+        self.assertEqual(migrated["version"], 13)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["actions_ring"], "none"
+        )
+        self.assertEqual(migrated["settings"]["haptic_level"], 2)
+        self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
+
+    def test_migrate_v9_to_v10_adds_button_haptic(self):
+        v9_cfg = {
+            "version": 9,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {"middle": "none", "actions_ring": "none"},
+                },
+                "work": {
+                    "label": "Work",
+                    "apps": ["Code.exe"],
+                    "mappings": {"middle": "copy", "actions_ring": "none"},
+                },
+            },
+            "settings": {"dpi": 1000, "haptic_level": 2},
+        }
+
+        migrated = config._migrate(v9_cfg)
+
+        self.assertEqual(migrated["version"], 13)
+        self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
+        self.assertEqual(migrated["profiles"]["work"]["button_haptic"], {})
+
+    def test_migrate_v11_to_v12_adds_action_haptic_list(self):
+        v11_cfg = {
+            "version": 11,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {"middle": "none", "actions_ring": "none"},
+                }
+            },
+            "settings": {"dpi": 1000, "haptic_level": 2, "haptic_enabled": True},
+        }
+
+        migrated = config._migrate(v11_cfg)
+
+        self.assertEqual(migrated["version"], 13)
+        self.assertEqual(migrated["settings"]["action_haptic"], [])
+        # existing haptic settings preserved
+        self.assertTrue(migrated["settings"]["haptic_enabled"])
+        self.assertEqual(migrated["settings"]["haptic_level"], 2)
+
+    def test_action_haptic_enabled_returns_false_when_missing(self):
+        cfg = {"settings": {"action_haptic": ["cycle_dpi"]}}
+        self.assertTrue(config.action_haptic_enabled(cfg, "cycle_dpi"))
+        self.assertFalse(config.action_haptic_enabled(cfg, "alt_tab"))
+
+    def test_set_action_haptic_adds_and_removes(self):
+        cfg = {"settings": {"action_haptic": []}}
+
+        with patch.object(config, "save_config", lambda c: c):
+            cfg = config.set_action_haptic(cfg, "cycle_dpi", True)
+            self.assertEqual(cfg["settings"]["action_haptic"], ["cycle_dpi"])
+
+            # Adding the same action twice is a no-op
+            cfg = config.set_action_haptic(cfg, "cycle_dpi", True)
+            self.assertEqual(cfg["settings"]["action_haptic"], ["cycle_dpi"])
+
+            cfg = config.set_action_haptic(cfg, "volume_mute", True)
+            self.assertEqual(
+                cfg["settings"]["action_haptic"], ["cycle_dpi", "volume_mute"]
+            )
+
+            cfg = config.set_action_haptic(cfg, "cycle_dpi", False)
+            self.assertEqual(cfg["settings"]["action_haptic"], ["volume_mute"])
+
+            # Removing a non-present action is a no-op
+            cfg = config.set_action_haptic(cfg, "cycle_dpi", False)
+            self.assertEqual(cfg["settings"]["action_haptic"], ["volume_mute"])
+
+    def test_migrate_v12_to_v13_adds_button_haptic_and_dedup(self):
+        v12_cfg = {
+            "version": 12,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {"middle": "none", "actions_ring": "none"},
+                }
+            },
+            "settings": {"dpi": 1000, "haptic_level": 2, "haptic_enabled": True,
+                         "action_haptic": ["cycle_dpi"]},
+        }
+
+        migrated = config._migrate(v12_cfg)
+
+        self.assertEqual(migrated["version"], 13)
+        self.assertEqual(migrated["settings"]["button_haptic"], [])
+        self.assertTrue(migrated["settings"]["haptic_dedup"])
+        # existing settings preserved
+        self.assertEqual(migrated["settings"]["action_haptic"], ["cycle_dpi"])
+        self.assertTrue(migrated["settings"]["haptic_enabled"])
+
+    def test_button_haptic_enabled_returns_false_when_not_listed(self):
+        cfg = {"settings": {"button_haptic": ["middle"]}}
+        self.assertTrue(config.button_haptic_enabled(cfg, "middle"))
+        self.assertFalse(config.button_haptic_enabled(cfg, "gesture"))
+
+    def test_set_button_haptic_adds_and_removes(self):
+        cfg = {"settings": {"button_haptic": []}}
+
+        with patch.object(config, "save_config", lambda c: c):
+            cfg = config.set_button_haptic(cfg, "middle", True)
+            self.assertEqual(cfg["settings"]["button_haptic"], ["middle"])
+
+            cfg = config.set_button_haptic(cfg, "middle", True)   # no-op
+            self.assertEqual(cfg["settings"]["button_haptic"], ["middle"])
+
+            cfg = config.set_button_haptic(cfg, "gesture", True)
+            self.assertEqual(cfg["settings"]["button_haptic"], ["middle", "gesture"])
+
+            cfg = config.set_button_haptic(cfg, "middle", False)
+            self.assertEqual(cfg["settings"]["button_haptic"], ["gesture"])
+
+            cfg = config.set_button_haptic(cfg, "middle", False)  # no-op
+            self.assertEqual(cfg["settings"]["button_haptic"], ["gesture"])
 
     def test_get_profile_for_app_matches_aliases(self):
         cfg = {

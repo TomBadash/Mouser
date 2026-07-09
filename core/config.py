@@ -33,6 +33,7 @@ BUTTON_NAMES = {
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
     "dpi_switch":    "DPI switch button",
+    "actions_ring":  "Actions Ring button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -64,10 +65,11 @@ BUTTON_TO_EVENTS = {
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
     "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
+    "actions_ring":  ("actions_ring_down", "actions_ring_up"),
 }
 
 DEFAULT_CONFIG = {
-    "version": 9,
+    "version": 13,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -85,7 +87,9 @@ DEFAULT_CONFIG = {
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
+                "actions_ring": "none",
             },
+            "button_haptic": {},  # per-button haptic override; absent key = enabled (True)
         }
     },
     "settings": {
@@ -106,6 +110,11 @@ DEFAULT_CONFIG = {
         "debug_mode": False,
         "device_layout_overrides": {},
         "language": "en",
+        "haptic_level": 2,          # 0=subtle, 1=low, 2=medium, 3=high
+        "haptic_enabled": True,     # global haptic on/off
+        "action_haptic": [],        # action IDs that fire haptic on press; empty = opt-in
+        "button_haptic": [],        # button keys that fire haptic on press; empty = opt-in
+        "haptic_dedup": True,       # True = deduplicate pulses within 100ms window
         "ignore_trackpad": True,
         "screenshot_directory": "",
         "check_for_updates": True,
@@ -224,7 +233,62 @@ def create_profile(cfg, name, label=None, copy_from="default", apps=None):
         "label": label,
         "apps": apps if apps is not None else [],
         "mappings": dict(source.get("mappings", {})),
+        "button_haptic": dict(source.get("button_haptic", {})),
     }
+    save_config(cfg)
+    return cfg
+
+
+# Curated list of actions that may fire haptic feedback on button press.
+# Other actions (text editing, raw scroll, mouse buttons, etc.) never trigger
+# haptic regardless of mapping. Order here is the order shown in the picker UI.
+HAPTIC_ELIGIBLE_ACTIONS = [
+    "switch_scroll_mode",
+    "toggle_smart_shift",
+    "cycle_dpi",
+    "volume_mute",
+    "play_pause",
+    "next_track",
+    "prev_track",
+    "task_view",
+    "alt_tab",
+    "alt_shift_tab",
+    "win_d",
+]
+
+
+def action_haptic_enabled(cfg, action_id):
+    """True if haptic should fire when action_id executes via a button press."""
+    return action_id in cfg.get("settings", {}).get("action_haptic", [])
+
+
+def set_action_haptic(cfg, action_id, enabled):
+    """Add or remove action_id from the global per-action haptic allowlist."""
+    lst = cfg.setdefault("settings", {}).setdefault("action_haptic", [])
+    if enabled:
+        if action_id not in lst:
+            lst.append(action_id)
+    else:
+        if action_id in lst:
+            lst.remove(action_id)
+    save_config(cfg)
+    return cfg
+
+
+def button_haptic_enabled(cfg, button_key):
+    """True if haptic should fire when button_key is pressed."""
+    return button_key in cfg.get("settings", {}).get("button_haptic", [])
+
+
+def set_button_haptic(cfg, button_key, enabled):
+    """Add or remove button_key from the global per-button haptic allowlist."""
+    lst = cfg.setdefault("settings", {}).setdefault("button_haptic", [])
+    if enabled:
+        if button_key not in lst:
+            lst.append(button_key)
+    else:
+        if button_key in lst:
+            lst.remove(button_key)
     save_config(cfg)
     return cfg
 
@@ -326,9 +390,38 @@ def _migrate(cfg):
         cfg["version"] = 8
 
     if version < 9:
+        # v8 -> v9: add Actions Ring button mapping for MX Master 4,
+        # add haptic feedback level setting, and add ignore_trackpad setting.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            mappings.setdefault("actions_ring", "none")
         settings = cfg.setdefault("settings", {})
+        settings.setdefault("haptic_level", 2)
         settings.setdefault("ignore_trackpad", True)
         cfg["version"] = 9
+
+    if version < 10:
+        # v9 -> v10: add per-button haptic override dict to each profile.
+        for pdata in cfg.get("profiles", {}).values():
+            pdata.setdefault("button_haptic", {})
+        cfg["version"] = 10
+
+    if version < 11:
+        # v10 -> v11: add global haptic enabled flag.
+        cfg.setdefault("settings", {}).setdefault("haptic_enabled", True)
+        cfg["version"] = 11
+
+    if version < 12:
+        # v11 -> v12: add per-action haptic allowlist (empty = opt-in).
+        cfg.setdefault("settings", {}).setdefault("action_haptic", [])
+        cfg["version"] = 12
+
+    if version < 13:
+        # v12 -> v13: add per-button haptic allowlist and dedup flag.
+        s = cfg.setdefault("settings", {})
+        s.setdefault("button_haptic", [])
+        s.setdefault("haptic_dedup", True)
+        cfg["version"] = 13
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

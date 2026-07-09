@@ -9,6 +9,23 @@ review and maintain.
 from __future__ import annotations
 
 
+MX_MASTER_BUTTONS = (
+    "middle",
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+    "xbutton1",
+    "xbutton2",
+    "hscroll_left",
+    "hscroll_right",
+    "mode_shift",
+)
+
+# MX Master 4 adds an Actions Ring / Haptic Sense button on the thumb rest.
+MX_MASTER_4_BUTTONS = (*MX_MASTER_BUTTONS, "actions_ring")
+
 MX_ANYWHERE_BUTTONS = (
     "middle",
     "gesture",
@@ -84,6 +101,8 @@ def _layout(
     image_width: int,
     image_height: int,
     hotspots: list[dict[str, object]],
+    *,
+    manual_selectable: bool = False,
 ) -> dict[str, object]:
     return {
         "key": key,
@@ -92,7 +111,7 @@ def _layout(
         "image_width": image_width,
         "image_height": image_height,
         "interactive": True,
-        "manual_selectable": False,
+        "manual_selectable": manual_selectable,
         "note": "",
         "hotspots": hotspots,
     }
@@ -112,6 +131,7 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_4",
         "image_asset": "logitech-mice/mx_master_4/mouse.png",
+        "supported_buttons": MX_MASTER_4_BUTTONS,
     },
     {
         "key": "mx_master_3s",
@@ -404,7 +424,18 @@ LOGI_DEVICE_LAYOUTS = {
                 label_off_x=160,
                 label_off_y=60,
             ),
+            _hotspot(
+                "actions_ring",
+                "Actions Ring button",
+                "mapping",
+                0.310,
+                0.72,
+                label_side="left",
+                label_off_x=-260,
+                label_off_y=0,
+            ),
         ],
+        manual_selectable=True,
     ),
     "mx_master_3s": _layout(
         "mx_master_3s",

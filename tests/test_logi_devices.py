@@ -6,9 +6,10 @@ from core.logi_devices import (
     GENERIC_BUTTONS,
     KNOWN_LOGI_DEVICES,
     MX_MASTER_BUTTONS,
+    MX_MASTER_4_BUTTONS,
     MX_VERTICAL_BUTTONS,
-    build_device_capability_inventory,
     build_connected_device_info,
+    build_device_capability_inventory,
     clamp_dpi,
     derive_supported_buttons_from_reprog_controls,
     get_buttons_for_layout,
@@ -343,6 +344,33 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
 
+    # ── MX Master 4 specific tests ─────────────────────────────
+
+    def test_mx_master_4_has_actions_ring_button(self):
+        device = resolve_device(product_id=0xB042)
+        self.assertIn("actions_ring", device.supported_buttons)
+
+    def test_mx_master_4_buttons_superset_of_mx_master(self):
+        self.assertTrue(
+            set(MX_MASTER_BUTTONS).issubset(set(MX_MASTER_4_BUTTONS)),
+            "MX Master 4 buttons must include all MX Master buttons",
+        )
+
+    def test_mx_master_3s_lacks_actions_ring(self):
+        device = resolve_device(product_id=0xB034)
+        self.assertNotIn("actions_ring", device.supported_buttons)
+
+    def test_mx_master_4_build_info_has_actions_ring(self):
+        info = build_connected_device_info(
+            product_id=0xB042,
+            product_name="MX Master 4",
+            transport="Bluetooth Low Energy",
+            source="hidapi-enumerate",
+        )
+        self.assertIn("actions_ring", info.supported_buttons)
+        self.assertEqual(info.image_asset, "logitech-mice/mx_master_4/mouse.png")
+        self.assertEqual(info.ui_layout, "mx_master_4")
+
     def test_mx_anywhere_2s_supported_buttons_include_middle_and_hscroll(self):
         device = resolve_device(product_id=0xB01A)
 
@@ -404,10 +432,12 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertTrue(inventory.smart_shift)
         self.assertTrue(inventory.adjustable_dpi)
         self.assertTrue(inventory.battery)
-        self.assertEqual(
-            inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
-        )
+        # 0x01A0 is the Actions Ring / haptic CID; it is now a supported button
+        # (actions_ring) on MX Master 4 and does not appear as unsupported.
+        unsupported_cids = [
+            c["cid"] for c in inventory.to_dict()["known_unsupported_controls"]
+        ]
+        self.assertNotIn("0x01A0", unsupported_cids)
 
     def test_reprog_control_filter_removes_missing_gesture_group(self):
         buttons = derive_supported_buttons_from_reprog_controls(
@@ -696,10 +726,12 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertIn("gesture_down", info.supported_buttons)
         self.assertNotIn("action_ring", info.supported_buttons)
         self.assertNotIn("haptic", info.supported_buttons)
-        self.assertEqual(
-            info.capability_inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
-        )
+        # 0x01A0 is the Actions Ring CID; it is now a supported button
+        # (actions_ring) on MX Master 4 and does not appear as unsupported.
+        unsupported_cids = [
+            c["cid"] for c in info.capability_inventory.to_dict()["known_unsupported_controls"]
+        ]
+        self.assertNotIn("0x01A0", unsupported_cids)
 
 
 if __name__ == "__main__":

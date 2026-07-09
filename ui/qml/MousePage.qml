@@ -1238,18 +1238,20 @@ Item {
                             }
                             spacing: 16
 
-                            Row {
+                            RowLayout {
+                                width: parent.width
                                 spacing: 12
 
                                 Rectangle {
                                     width: 6; height: pickerTitleCol.height
                                     radius: 3; color: theme.accent
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.alignment: Qt.AlignVCenter
                                 }
 
                                 Column {
                                     id: pickerTitleCol
                                     spacing: 2
+                                    Layout.fillWidth: true
 
                                     Text {
                                         text: selectedButtonName
@@ -1270,6 +1272,7 @@ Item {
                                         visible: selectedButton !== ""
                                     }
                                 }
+
                             }
 
                             // Horizontal scroll: left + right rows

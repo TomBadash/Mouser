@@ -36,6 +36,9 @@ MX_MASTER_BUTTONS = (
     "mode_shift",
 )
 
+# MX Master 4 adds an Actions Ring / Haptic Sense button on the thumb rest.
+MX_MASTER_4_BUTTONS = MX_MASTER_BUTTONS + ("actions_ring",)
+
 # Conservative fallback for generic MX Anywhere-family overrides. Exact
 # cataloged MX Anywhere devices provide their own button sets.
 MX_ANYWHERE_BUTTONS = (
@@ -82,7 +85,6 @@ _CID_GATED_BUTTONS = {
 _HSCROLL_CIDS = (0x005B, 0x005D)
 _KNOWN_UNSUPPORTED_CONTROLS = {
     0x00ED: "precision_mode",
-    0x01A0: "haptic",
 }
 _KEY_FLAG_DIVERTABLE = 0x0020
 _KEY_FLAG_RAW_XY = 0x0100
@@ -763,6 +765,7 @@ def derive_supported_buttons_from_reprog_controls(
 # resolve buttons even when individual devices use per-device ui_layout keys.
 _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
+    "mx_master_4": MX_MASTER_4_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,

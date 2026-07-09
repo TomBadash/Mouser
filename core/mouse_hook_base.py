@@ -29,6 +29,7 @@ class BaseMouseHook:
         self._connection_change_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
+        self.divert_actions_ring = False
         self._gesture_direction_enabled = False
         self._gesture_threshold = 50.0
         self._gesture_deadzone = 40.0
@@ -259,6 +260,11 @@ class BaseMouseHook:
                 "on_down": self._on_hid_dpi_switch_down,
                 "on_up": self._on_hid_dpi_switch_up,
             }
+        if self.divert_actions_ring:
+            extra[0x01A0] = {
+                "on_down": self._on_hid_actions_ring_down,
+                "on_up": self._on_hid_actions_ring_up,
+            }
         return extra
 
     def _start_hid_listener(self):
@@ -314,3 +320,9 @@ class BaseMouseHook:
 
     def _on_hid_dpi_switch_up(self):
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
+    def _on_hid_actions_ring_down(self):
+        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_DOWN))
+
+    def _on_hid_actions_ring_up(self):
+        self._dispatch(MouseEvent(MouseEvent.ACTIONS_RING_UP))

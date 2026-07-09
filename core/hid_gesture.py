@@ -616,6 +616,8 @@ FEAT_THUMB_WHEEL          = 0x2150
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
+FEAT_HAPTIC         = 0x19B0      # Haptic Feedback (MX Master 4)
+FEAT_FORCE_SENSING  = 0x19C0      # Force Sensing Button (MX Master 4)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
@@ -637,6 +639,7 @@ KNOWN_CID_NAMES = {
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
     0x00FD: "DPI Switch",
+    0x01A0: "Actions Ring",
 }
 
 KEY_FLAG_BITS = (
@@ -750,6 +753,11 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        self._haptic_idx = None             # feature index of HAPTIC (0x19B0)
+        self._force_sensing_idx = None      # feature index of FORCE_SENSING (0x19C0)
+        self._pending_haptic = None
+        self._haptic_result = None
+        self._haptic_capabilities = None    # raw bytes from getCapabilities
 
     # ── public API ────────────────────────────────────────────────
 
@@ -858,6 +866,10 @@ class HidGestureListener:
             feat_name = (f"0x{self._battery_feature_id:04X}"
                          if self._battery_feature_id else "unknown")
             features[f"BATTERY ({feat_name})"] = f"index 0x{self._battery_idx:02X}"
+        if self._haptic_idx is not None:
+            features["HAPTIC (0x19B0)"] = f"index 0x{self._haptic_idx:02X}"
+        if self._force_sensing_idx is not None:
+            features["FORCE_SENSING (0x19C0)"] = f"index 0x{self._force_sensing_idx:02X}"
         for feature_id, index in sorted(self._wheel_feature_indexes.items()):
             features[f"WHEEL (0x{feature_id:04X})"] = f"index 0x{index:02X}"
 
@@ -1504,6 +1516,158 @@ class HidGestureListener:
             print("[HidGesture] Smart Shift read FAILED")
             self._finish_pending_smart_shift(None)
 
+    # ── Haptic Feedback control (0x19B0) ─────────────────────────
+    #
+    # The HAPTIC feature on MX Master 4 supports vibration level
+    # control and waveform playback.  Protocol details:
+    #   Function 0: getCapabilities -- returns capability bitmask
+    #   Function 1: getState        -- returns current level/mode
+    #   Function 2: setState        -- sets haptic level
+    #   Function 3: playWaveform    -- triggers a haptic effect
+    #
+    # Level values observed: 0=subtle, 1=low, 2=medium, 3=high.
+    # Waveform IDs are partially unknown; 0 = default click pulse.
+    #
+    # Fully supported now: feature discovery, level get/set, waveform play.
+    # Partial: exact payload semantics for functions 0-3.
+    # TODO for future: per-event haptic routing, waveform enumeration,
+    #                   Force Sensing Button (0x19C0) integration.
+
+    HAPTIC_LEVEL_SUBTLE = 0
+    HAPTIC_LEVEL_LOW    = 1
+    HAPTIC_LEVEL_MEDIUM = 2
+    HAPTIC_LEVEL_HIGH   = 3
+    HAPTIC_WAVEFORM_DEFAULT = 0
+
+    # Maps UI levels (0-3) to the device's 0-100 intensity scale.
+    # Derived from Solaar's HapticLevel implementation (feature 0x19B0):
+    # Off=0, Low=25, Medium=50, High=75, Maximum=100.
+    HAPTIC_DEVICE_LEVELS = {0: 25, 1: 50, 2: 75, 3: 100}
+
+    @property
+    def haptic_supported(self):
+        return self._haptic_idx is not None
+
+    @property
+    def force_sensing_detected(self):
+        return self._force_sensing_idx is not None
+
+    def get_haptic_state(self):
+        """Queue a haptic state read.  Returns dict or None."""
+        self._haptic_result = None
+        self._pending_haptic = "read_state"
+        for _ in range(30):
+            if self._pending_haptic is None:
+                return self._haptic_result
+            time.sleep(0.1)
+        print("[HidGesture] Haptic state read timed out")
+        self._pending_haptic = None
+        return None
+
+    def set_haptic_level(self, level):
+        """Queue a haptic level change (0-3).  Returns True on success."""
+        level = max(0, min(3, int(level)))
+        self._haptic_result = None
+        self._pending_haptic = ("set_level", level)
+        for _ in range(30):
+            if self._pending_haptic is None:
+                return self._haptic_result is True
+            time.sleep(0.1)
+        print("[HidGesture] Haptic set level timed out")
+        self._pending_haptic = None
+        return False
+
+    def play_haptic_waveform(self, waveform_id=0):
+        """Queue a haptic waveform play command.  Returns True on success."""
+        self._haptic_result = None
+        self._pending_haptic = ("play", int(waveform_id))
+        for _ in range(30):
+            if self._pending_haptic is None:
+                return self._haptic_result is True
+            time.sleep(0.1)
+        print("[HidGesture] Haptic play timed out")
+        self._pending_haptic = None
+        return False
+
+    def queue_haptic_waveform(self, waveform_id=0):
+        """Set the pending haptic command without blocking.
+
+        Safe to call from the listener thread itself (e.g. from inside an
+        event callback).  The listener loop will pick it up at the top of
+        the next iteration, before the next _rx() call, so the pulse fires
+        with minimal latency.  Does not wait for a result."""
+        if self._haptic_idx is not None and self._dev is not None:
+            self._pending_haptic = ("play", int(waveform_id))
+
+    def _apply_pending_haptic(self):
+        """Process queued haptic commands on the listener thread."""
+        cmd = self._pending_haptic
+        if cmd is None:
+            return
+        if self._haptic_idx is None or self._dev is None:
+            print("[HidGesture] Cannot process haptic -- not connected or unsupported")
+            self._haptic_result = None if isinstance(cmd, str) else False
+            self._pending_haptic = None
+            return
+
+        try:
+            if cmd == "read_state":
+                resp = self._request(self._haptic_idx, 1, [])
+                if resp:
+                    _, _, _, _, p = resp
+                    # Byte 0: enable flag (bit 0 = enabled/disabled).
+                    # Byte 1: device-scale level (0-100).
+                    enabled = bool(p[0] & 0x01) if p else False
+                    device_level = p[1] if len(p) > 1 else 0
+                    # Reverse-map device level to UI level (closest match).
+                    ui_level = min(
+                        self.HAPTIC_DEVICE_LEVELS,
+                        key=lambda k: abs(self.HAPTIC_DEVICE_LEVELS[k] - device_level),
+                    )
+                    self._haptic_result = {
+                        "raw": list(p),
+                        "enabled": enabled,
+                        "device_level": device_level,
+                        "level": ui_level,
+                    }
+                    print(f"[HidGesture] Haptic state: [{_hex_bytes(p)}] "
+                          f"enabled={enabled} device_level={device_level} "
+                          f"ui_level={ui_level}")
+                else:
+                    self._haptic_result = None
+                    print("[HidGesture] Haptic state read FAILED")
+            elif isinstance(cmd, tuple) and cmd[0] == "set_level":
+                level = cmd[1]
+                # Function 2: setState.
+                # Byte 0: enable flag (0x01 = on).
+                # Byte 1: intensity on the 0-100 device scale.
+                device_level = self.HAPTIC_DEVICE_LEVELS.get(level, 50)
+                resp = self._request(self._haptic_idx, 2, [0x01, device_level])
+                self._haptic_result = resp is not None
+                print(f"[HidGesture] Haptic set level={level} "
+                      f"(device={device_level}): "
+                      f"{'OK' if self._haptic_result else 'FAILED'}")
+                if resp:
+                    _, _, _, _, p = resp
+                    print(f"[HidGesture] Haptic set response: [{_hex_bytes(p)}]")
+            elif isinstance(cmd, tuple) and cmd[0] == "play":
+                waveform = cmd[1]
+                # Function 4: playWaveform.  Byte 0 = waveform ID.
+                resp = self._request(self._haptic_idx, 4, [waveform])
+                self._haptic_result = resp is not None
+                print(f"[HidGesture] Haptic play waveform={waveform}: "
+                      f"{'OK' if self._haptic_result else 'FAILED'}")
+                if resp:
+                    _, _, _, _, p = resp
+                    print(f"[HidGesture] Haptic play response: [{_hex_bytes(p)}]")
+            else:
+                print(f"[HidGesture] Unknown haptic command: {cmd}")
+                self._haptic_result = False
+        except Exception as exc:
+            print(f"[HidGesture] Haptic command error: {exc}")
+            self._haptic_result = False
+        self._pending_haptic = None
+
     def read_battery(self):
         """Queue a battery read and wait for the listener thread result."""
         self._battery_result = None
@@ -1710,6 +1874,9 @@ class HidGestureListener:
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._haptic_idx = None
+            self._force_sensing_idx = None
+            self._haptic_capabilities = None
             self._wheel_feature_indexes = {}
             self._gesture_cid = DEFAULT_GESTURE_CID
             self._gesture_candidates = list(
@@ -1855,6 +2022,27 @@ class HidGestureListener:
                             self._battery_idx = batt_fi
                             self._battery_feature_id = FEAT_BATTERY_STATUS
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
+                    # Haptic Feedback (MX Master 4)
+                    haptic_fi = self._find_feature(FEAT_HAPTIC)
+                    if haptic_fi:
+                        self._haptic_idx = haptic_fi
+                        print(f"[HidGesture] Found HAPTIC @0x{haptic_fi:02X}")
+                        try:
+                            cap_resp = self._request(haptic_fi, 0, [])
+                            if cap_resp:
+                                _, _, _, _, cap_params = cap_resp
+                                self._haptic_capabilities = bytes(cap_params)
+                                print(f"[HidGesture] Haptic capabilities: "
+                                      f"[{_hex_bytes(cap_params)}]")
+                        except Exception as exc:
+                            print(f"[HidGesture] Haptic capabilities probe "
+                                  f"failed: {exc}")
+                    # Force Sensing Button (MX Master 4, placeholder)
+                    fs_fi = self._find_feature(FEAT_FORCE_SENSING)
+                    if fs_fi:
+                        self._force_sensing_idx = fs_fi
+                        print(f"[HidGesture] Found FORCE_SENSING @0x{fs_fi:02X} "
+                              f"(detected but not configurable)")
                     if self._divert():
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
@@ -1949,6 +2137,8 @@ class HidGestureListener:
                         self._apply_pending_smart_shift()
                     if self._pending_battery is not None:
                         self._apply_pending_read_battery()
+                    if self._pending_haptic is not None:
+                        self._apply_pending_haptic()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
@@ -1982,6 +2172,10 @@ class HidGestureListener:
             self._abort_pending_smart_shift()
             self._last_logged_battery = None
             self._consecutive_request_timeouts = 0
+            self._haptic_idx = None
+            self._force_sensing_idx = None
+            self._haptic_capabilities = None
+            self._pending_haptic = None
             if self._held:
                 self._held = False
                 print("[HidGesture] Gesture force-released on disconnect")
