@@ -4,6 +4,8 @@ import math
 import threading
 
 DEAD_ZONE_RADIUS = 30
+RING_REPEAT_INITIAL_DELAY_S = 0.25
+RING_REPEAT_INTERVAL_S = 0.12
 
 
 class ActionsRingController:
@@ -26,7 +28,10 @@ class ActionsRingController:
                  execute_cb, play_haptic_cb,
                  show_ring_cb, hide_ring_cb,
                  get_cursor_pos_cb=None,
-                 move_cb=None):
+                 move_cb=None,
+                 repeatable_action_cb=None,
+                 repeat_initial_delay_s=RING_REPEAT_INITIAL_DELAY_S,
+                 repeat_interval_s=RING_REPEAT_INTERVAL_S):
         self._slots = list(slots)
         self._hold_ms = hold_ms
         self._execute_cb = execute_cb
@@ -35,12 +40,19 @@ class ActionsRingController:
         self._hide_ring_cb = hide_ring_cb
         self._get_cursor_pos_cb = get_cursor_pos_cb
         self._move_cb = move_cb
+        self._repeatable_action_cb = repeatable_action_cb or (lambda _action: False)
+        self._repeat_initial_delay_s = repeat_initial_delay_s
+        self._repeat_interval_s = repeat_interval_s
 
         self._lock = threading.Lock()
         self._state = self.IDLE
         self._timer = None
         self._anchor_pos = None
         self._current_sector = -1
+        self._repeat_timer = None
+        self._repeat_action = None
+        self._repeat_generation = 0
+        self._repeat_fired = False
 
     @property
     def state(self) -> str:
@@ -71,6 +83,7 @@ class ActionsRingController:
                 self._timer = timer
                 timer_to_start = timer
             elif self._state == self.SHOWING_TOGGLE:
+                self._cancel_repeat_locked()
                 self._state = self.IDLE
                 self._anchor_pos = None
                 self._current_sector = -1
@@ -92,14 +105,18 @@ class ActionsRingController:
         do_hide = False
         do_show_toggle = False
         action_to_execute = None
+        repeat_fired = False
         with self._lock:
             if self._state == self.WAITING:
                 self._cancel_timer()
+                self._cancel_repeat_locked()
                 self._state = self.SHOWING_TOGGLE
                 do_show_toggle = True
             elif self._state == self.SHOWING_HELD:
                 sector = (sector_override if sector_override is not None
                           else self._current_sector)
+                repeat_fired = self._repeat_fired
+                self._cancel_repeat_locked()
                 self._state = self.IDLE
                 self._anchor_pos = None
                 self._current_sector = -1
@@ -117,7 +134,9 @@ class ActionsRingController:
             self._show_ring_cb(list(self._slots), True)
         elif do_hide:
             self._hide_ring_cb()
-            if action_to_execute is not None:
+            if (action_to_execute is not None
+                    and not (repeat_fired
+                             and self._repeatable_action_cb(action_to_execute))):
                 self._execute_cb(action_to_execute)
                 self._play_haptic_cb(7)
 
@@ -133,6 +152,7 @@ class ActionsRingController:
                 self._state = self.SHOWING_TOGGLE
                 do_show = True
             elif self._state == self.SHOWING_TOGGLE:
+                self._cancel_repeat_locked()
                 self._state = self.IDLE
                 self._anchor_pos = None
                 self._current_sector = -1
@@ -152,6 +172,7 @@ class ActionsRingController:
         with self._lock:
             if self._state != self.SHOWING_TOGGLE:
                 return
+            self._cancel_repeat_locked()
             self._state = self.IDLE
             self._anchor_pos = None
             self._current_sector = -1
@@ -170,6 +191,7 @@ class ActionsRingController:
         with self._lock:
             if self._state != self.SHOWING_TOGGLE:
                 return
+            self._cancel_repeat_locked()
             self._state = self.IDLE
             self._anchor_pos = None
             self._current_sector = -1
@@ -187,7 +209,20 @@ class ActionsRingController:
 
     def set_current_sector(self, sector):
         """Update the current sector (called from overlay's cursor poll)."""
-        self._current_sector = sector
+        with self._lock:
+            self._current_sector = sector
+            action = (
+                self._slots[sector]
+                if (
+                    self._state == self.SHOWING_HELD
+                    and 0 <= sector < len(self._slots)
+                )
+                else None
+            )
+            if action is not None and self._repeatable_action_cb(action):
+                self._start_repeat_locked(action)
+            else:
+                self._cancel_repeat_locked()
 
     def _on_hold_triggered(self):
         """Timer callback — transition WAITING -> SHOWING_HELD."""
@@ -221,6 +256,7 @@ class ActionsRingController:
         hide = False
         with self._lock:
             self._cancel_timer()
+            self._cancel_repeat_locked()
             if self._state in (self.SHOWING_HELD, self.SHOWING_TOGGLE):
                 hide = True
             self._state = self.IDLE
@@ -234,6 +270,47 @@ class ActionsRingController:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+
+    def _start_repeat_locked(self, action):
+        """Start repeating a held-mode sector action (must hold lock)."""
+        if self._repeat_action == action and self._repeat_timer is not None:
+            return
+        self._cancel_repeat_locked()
+        self._repeat_action = action
+        self._repeat_fired = False
+        self._repeat_generation += 1
+        self._schedule_repeat_locked(self._repeat_initial_delay_s)
+
+    def _schedule_repeat_locked(self, delay_s):
+        generation = self._repeat_generation
+        timer = threading.Timer(delay_s, self._on_repeat_timer, (generation,))
+        timer.daemon = True
+        self._repeat_timer = timer
+        timer.start()
+
+    def _cancel_repeat_locked(self):
+        """Cancel and discard the repeat timer (must hold lock)."""
+        if self._repeat_timer is not None:
+            self._repeat_timer.cancel()
+            self._repeat_timer = None
+        self._repeat_action = None
+        self._repeat_fired = False
+        self._repeat_generation += 1
+
+    def _on_repeat_timer(self, generation):
+        action = None
+        with self._lock:
+            if (
+                self._state != self.SHOWING_HELD
+                or generation != self._repeat_generation
+                or self._repeat_action is None
+                or not self._repeatable_action_cb(self._repeat_action)
+            ):
+                return
+            action = self._repeat_action
+            self._repeat_fired = True
+            self._schedule_repeat_locked(self._repeat_interval_s)
+        self._execute_cb(action)
 
 
 def angle_to_sector(dx, dy, num_sectors) -> int:

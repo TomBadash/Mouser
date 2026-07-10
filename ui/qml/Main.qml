@@ -34,6 +34,7 @@ ApplicationWindow {
     property real hoveredNavCenterX: 0
     property real hoveredNavCenterY: 0
     readonly property bool shortcutsBlocked: aboutDialog.visible
+                                            || closeConfirmDialog.visible
                                             || mousePageView.hasBlockingDialog
 
     property var navModel: {
@@ -655,10 +656,9 @@ ApplicationWindow {
         }
     }
 
-    // Hide-to-tray: every "close window" idiom on every supported platform routes through
-    // dismiss() so the engine and tray icon keep running. macOS LSUIElement bundles depend
-    // on this because the Dock close button never terminates the process; Linux and Windows
-    // tray builds inherit the same behavior for consistency.
+    // dismiss() hides the window to the system tray without touching the
+    // engine or tray icon — used by the explicit dismiss shortcuts (Ctrl+M,
+    // Ctrl+W, Esc), macOS's red close button, and "Minimize to Tray" below.
     function dismiss() {
         if (!root.visible) {
             return
@@ -666,9 +666,97 @@ ApplicationWindow {
         root.hide()
     }
 
+    // The window-manager close ("X") button on Linux/Windows asks the user
+    // whether they meant to quit or just minimize to the tray, and can
+    // remember that choice via backend.closeAction ("ask" | "quit" |
+    // "minimize"). macOS keeps its existing menu-bar convention where the
+    // red close button always hides to the tray.
     onClosing: function(close) {
         close.accepted = false
-        root.dismiss()
+        if (backend.isMacOS) {
+            root.dismiss()
+            return
+        }
+        switch (backend.closeAction) {
+        case "quit":
+            backend.quitApplication()
+            break
+        case "minimize":
+            root.dismiss()
+            break
+        default:
+            closeConfirmDialog.open()
+        }
+    }
+
+    // The native OS minimize button is left alone (normal minimized taskbar
+    // entry) — Wayland's xdg-shell protocol has no "you were minimized"
+    // notification from compositor to client, so there's no reliable way to
+    // intercept it and convert it into a tray-only hide. Use Ctrl/Cmd+M, the
+    // tray icon, or "Minimize to Tray" in the close dialog above to actually
+    // drop the window out of the taskbar and into the tray.
+
+    Dialog {
+        id: closeConfirmDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        title: s["close_dialog.title"] || "Quit or minimize Mouser?"
+        width: 380
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+
+        onOpened: rememberChoiceCheck.checked = false
+
+        background: Rectangle {
+            radius: 16
+            color: theme.bgElevated
+            border.width: 1
+            border.color: theme.border
+        }
+
+        contentItem: Column {
+            width: closeConfirmDialog.availableWidth
+            spacing: 14
+
+            Text {
+                width: parent.width
+                text: s["close_dialog.desc"]
+                      || "Quitting stops Mouser's button remapping until you reopen it. Minimizing keeps it running in the system tray."
+                font { family: uiState.fontFamily; pixelSize: 12 }
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
+            }
+
+            CheckBox {
+                id: rememberChoiceCheck
+                text: s["close_dialog.remember"] || "Remember my choice"
+                Material.foreground: theme.textPrimary
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: s["close_dialog.minimize"] || "Minimize to Tray"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                onClicked: {
+                    if (rememberChoiceCheck.checked)
+                        backend.setCloseAction("minimize")
+                    closeConfirmDialog.close()
+                    root.dismiss()
+                }
+            }
+            Button {
+                text: s["close_dialog.quit"] || "Quit"
+                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+                onClicked: {
+                    if (rememberChoiceCheck.checked)
+                        backend.setCloseAction("quit")
+                    closeConfirmDialog.close()
+                    backend.quitApplication()
+                }
+            }
+        }
     }
 
     // LSUIElement apps have no platform menu bar binding StandardKey.Close to Cmd-W, and

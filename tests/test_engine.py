@@ -1,4 +1,5 @@
 import copy
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -19,6 +20,12 @@ class _FakeMouseHook:
         self.start_called = False
         self.stop_called = False
         self.wheel_native_invert_active = False
+        self.gesture_configs = []
+        self.thumb_gesture_configs = []
+        self.os_passthrough = []
+        self.thumb_os_passthrough = []
+        self.blocked_events = []
+        self.registered_events = []
         # Back-compat alias mirrored on the real BaseMouseHook for callers
         # from the divert+inject build of the test fixtures.
         self.wheel_divert_active = False
@@ -37,6 +44,17 @@ class _FakeMouseHook:
 
     def configure_gestures(self, **kwargs):
         self._gesture_config = kwargs
+        self.gesture_configs.append(kwargs)
+
+    def configure_thumb_gestures(self, **kwargs):
+        self._thumb_gesture_config = kwargs
+        self.thumb_gesture_configs.append(kwargs)
+
+    def set_gesture_os_passthrough(self, enabled, move_callback=None):
+        self.os_passthrough.append((bool(enabled), move_callback))
+
+    def set_thumb_os_passthrough(self, enabled, move_callback=None):
+        self.thumb_os_passthrough.append((bool(enabled), move_callback))
 
     def configure_wheel_multipliers(self, vertical, horizontal):
         # Retained for shape compatibility; real BaseMouseHook accepts but
@@ -44,13 +62,14 @@ class _FakeMouseHook:
         return None
 
     def block(self, event_type):
-        pass
+        self.blocked_events.append(event_type)
 
     def register(self, event_type, callback):
-        pass
+        self.registered_events.append(event_type)
 
     def reset_bindings(self):
-        pass
+        self.blocked_events.clear()
+        self.registered_events.clear()
 
     def start(self):
         self.start_called = True
@@ -283,6 +302,122 @@ class EngineHorizontalScrollTests(unittest.TestCase):
         self.assertEqual(seen, [expected])
         self.assertTrue(engine.hook.start_called)
         self.assertTrue(engine._app_detector.start_called)
+
+
+class EngineContinuousActionTests(unittest.TestCase):
+    def _make_engine(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_continuous_action_repeats_until_up(self):
+        engine = self._make_engine()
+        down = engine._make_continuous_down_handler(
+            "volume_down_continuous",
+            "middle",
+        )
+        up = engine._make_continuous_up_handler("middle")
+
+        with (
+            patch("core.engine.CONTINUOUS_REPEAT_INITIAL_DELAY_S", 0.01),
+            patch("core.engine.CONTINUOUS_REPEAT_INTERVAL_S", 0.01),
+            patch("core.engine.execute_action") as execute_action_mock,
+        ):
+            down(SimpleNamespace(event_type=MouseEvent.MIDDLE_DOWN))
+            time.sleep(0.035)
+            up(SimpleNamespace(event_type=MouseEvent.MIDDLE_UP))
+            count_at_release = execute_action_mock.call_count
+            time.sleep(0.03)
+
+        self.assertGreaterEqual(count_at_release, 2)
+        self.assertEqual(execute_action_mock.call_count, count_at_release)
+        engine.stop()
+
+    def test_stop_cancels_continuous_action_repeat(self):
+        engine = self._make_engine()
+        down = engine._make_continuous_down_handler(
+            "volume_up_continuous",
+            "middle",
+        )
+
+        with (
+            patch("core.engine.CONTINUOUS_REPEAT_INITIAL_DELAY_S", 0.01),
+            patch("core.engine.CONTINUOUS_REPEAT_INTERVAL_S", 0.01),
+            patch("core.engine.execute_action") as execute_action_mock,
+        ):
+            down(SimpleNamespace(event_type=MouseEvent.MIDDLE_DOWN))
+            engine.stop()
+            count_at_stop = execute_action_mock.call_count
+            time.sleep(0.03)
+
+        self.assertEqual(execute_action_mock.call_count, count_at_stop)
+
+    def test_ring_sector_update_forwards_to_controller(self):
+        engine = self._make_engine()
+        engine._ring = Mock()
+
+        engine.ring_set_current_sector(3)
+
+        engine._ring.set_current_sector.assert_called_once_with(3)
+
+
+class EngineGestureCoexistenceTests(unittest.TestCase):
+    def _make_engine(self, mappings):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["default"]["mappings"].update(mappings)
+
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            engine = Engine()
+
+        engine.hook.connected_device = SimpleNamespace(
+            gesture_via_sense_panel=True,
+            supported_buttons=("gesture", "gesture_left", "gesture_right"),
+        )
+        engine._setup_hooks()
+        return engine
+
+    def test_thumb_swipes_enable_with_mapped_click_action(self):
+        engine = self._make_engine({
+            "gesture": "app_expose",
+            "gesture_left": "space_left",
+            "gesture_right": "space_right",
+            "gesture_up": "none",
+            "gesture_down": "none",
+            "middle": "none",
+        })
+
+        self.assertTrue(engine.hook.thumb_gesture_configs[-1]["enabled"])
+        self.assertIn(MouseEvent.GESTURE_CLICK, engine.hook.blocked_events)
+        self.assertIn(MouseEvent.GESTURE_SWIPE_LEFT, engine.hook.blocked_events)
+        self.assertIn(MouseEvent.GESTURE_SWIPE_RIGHT, engine.hook.blocked_events)
+        self.assertNotIn(MouseEvent.MIDDLE_DOWN, engine.hook.blocked_events)
+
+    def test_thumb_swipes_stay_disabled_without_direction_mappings(self):
+        engine = self._make_engine({
+            "gesture": "app_expose",
+            "gesture_left": "none",
+            "gesture_right": "none",
+            "gesture_up": "none",
+            "gesture_down": "none",
+            "middle": "none",
+        })
+
+        self.assertFalse(engine.hook.thumb_gesture_configs[-1]["enabled"])
+        self.assertIn(MouseEvent.GESTURE_CLICK, engine.hook.blocked_events)
+        self.assertNotIn(MouseEvent.GESTURE_SWIPE_LEFT, engine.hook.blocked_events)
+        self.assertNotIn(MouseEvent.GESTURE_SWIPE_RIGHT, engine.hook.blocked_events)
 
 
 class EngineReplayPhaseOneTests(unittest.TestCase):

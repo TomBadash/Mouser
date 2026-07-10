@@ -10,7 +10,7 @@ import time
 from core.mouse_hook import MouseHook, MouseEvent
 from core.key_simulator import (
     ACTIONS, execute_action, is_mouse_button_action,
-    inject_mouse_down, inject_mouse_up,
+    inject_mouse_down, inject_mouse_up, is_continuous_action,
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app_identity,
@@ -31,6 +31,8 @@ from core.actions_ring import ActionsRingController
 HSCROLL_ACTION_COOLDOWN_S = 0.35
 HSCROLL_VOLUME_COOLDOWN_S = 0.06
 _VOLUME_ACTIONS = {"volume_up", "volume_down"}
+CONTINUOUS_REPEAT_INITIAL_DELAY_S = 0.25
+CONTINUOUS_REPEAT_INTERVAL_S = 0.12
 
 
 class Engine:
@@ -77,6 +79,8 @@ class Engine:
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
         self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
+        self._continuous_repeat_timers = {}
+        self._continuous_repeat_lock = threading.Lock()
         self._ring = None                 # ActionsRingController (created in _setup_hooks)
         self._ring_show_cb = None         # UI callback for showing ring overlay
         self._ring_hide_cb = None         # UI callback for hiding ring overlay
@@ -113,6 +117,7 @@ class Engine:
     # ------------------------------------------------------------------
     def _setup_hooks(self):
         """Register callbacks and block events for all mapped buttons."""
+        self._stop_all_continuous_repeats()
         mappings = get_active_mappings(self.cfg)
 
         # Apply scroll inversion settings to the hook
@@ -145,10 +150,9 @@ class Engine:
         g_cross = settings.get("gesture_cross_ratio", 0.5)
 
         def _swipe_enabled(tap_key):
-            # A button's swipe set is active only when its tap is "Do Nothing"
-            # and at least one direction is mapped.
-            if mappings.get(tap_key, "none") != "none":
-                return False
+            # A button's swipe set is active when at least one direction is
+            # mapped. The recognizer emits the tap click on release only if no
+            # swipe fired, so tap actions and hold+move gestures can coexist.
             return any(mappings.get(k, "none") != "none"
                        for k in SWIPE_SET_FOR_TAP.get(tap_key, ()))
 
@@ -238,6 +242,7 @@ class Engine:
                 show_ring_cb=self._on_ring_show,
                 hide_ring_cb=self._on_ring_hide,
                 move_cb=self._on_ring_move,
+                repeatable_action_cb=is_continuous_action,
             )
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
@@ -290,7 +295,12 @@ class Engine:
                 if has_paired_down and evt_type.endswith("_up"):
                     if action_id != "none":
                         self.hook.block(evt_type)
-                        if is_mouse_button_action(action_id):
+                        if is_continuous_action(action_id):
+                            self.hook.register(
+                                evt_type,
+                                self._make_continuous_up_handler(btn_key),
+                            )
+                        elif is_mouse_button_action(action_id):
                             self.hook.register(evt_type, self._make_mouse_up_handler(action_id))
                     continue
 
@@ -306,6 +316,11 @@ class Engine:
                         else:
                             # Single-fire event (gesture, swipe) → full click
                             self.hook.register(evt_type, self._make_handler(action_id, btn_key))
+                    elif is_continuous_action(action_id) and has_up:
+                        self.hook.register(
+                            evt_type,
+                            self._make_continuous_down_handler(action_id, btn_key),
+                        )
                     else:
                         self.hook.register(evt_type, self._make_handler(action_id, btn_key))
                 elif (not evt_type.endswith("_up")
@@ -342,6 +357,86 @@ class Engine:
                     self._dispatch_action(action_id, btn_key)
             except Exception as exc:
                 print(f"[Engine] _make_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _continuous_repeat_key(self, btn_key):
+        return btn_key or ""
+
+    def _schedule_continuous_repeat(self, repeat_key, action_id, delay_s):
+        timer = threading.Timer(
+            delay_s,
+            self._continuous_repeat_tick,
+            args=(repeat_key, action_id),
+        )
+        timer.daemon = True
+        self._continuous_repeat_timers[repeat_key] = timer
+        timer.start()
+
+    def _continuous_repeat_tick(self, repeat_key, action_id):
+        with self._continuous_repeat_lock:
+            if repeat_key not in self._continuous_repeat_timers:
+                return
+        if self._enabled:
+            self._dispatch_action(action_id, str(repeat_key))
+        with self._continuous_repeat_lock:
+            if repeat_key in self._continuous_repeat_timers:
+                self._schedule_continuous_repeat(
+                    repeat_key,
+                    action_id,
+                    CONTINUOUS_REPEAT_INTERVAL_S,
+                )
+
+    def _start_continuous_repeat(self, repeat_key, action_id):
+        with self._continuous_repeat_lock:
+            self._stop_continuous_repeat_locked(repeat_key)
+            self._schedule_continuous_repeat(
+                repeat_key,
+                action_id,
+                CONTINUOUS_REPEAT_INITIAL_DELAY_S,
+            )
+        self._dispatch_action(action_id, str(repeat_key))
+
+    def _stop_continuous_repeat_locked(self, repeat_key):
+        old = self._continuous_repeat_timers.pop(repeat_key, None)
+        if old is not None:
+            old.cancel()
+
+    def _stop_continuous_repeat(self, repeat_key):
+        with self._continuous_repeat_lock:
+            self._stop_continuous_repeat_locked(repeat_key)
+
+    def _stop_all_continuous_repeats(self):
+        with self._continuous_repeat_lock:
+            for timer in self._continuous_repeat_timers.values():
+                timer.cancel()
+            self._continuous_repeat_timers.clear()
+
+    def _make_continuous_down_handler(self, action_id, btn_key=""):
+        repeat_key = self._continuous_repeat_key(btn_key)
+
+        def handler(event):
+            try:
+                if self._enabled:
+                    self._emit_debug(
+                        f"Mapped {event.event_type} -> {action_id} "
+                        f"(continuous down)"
+                    )
+                    self._start_continuous_repeat(repeat_key, action_id)
+            except Exception as exc:
+                print(f"[Engine] continuous_down_handler EXCEPTION for {action_id}: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _make_continuous_up_handler(self, btn_key=""):
+        repeat_key = self._continuous_repeat_key(btn_key)
+
+        def handler(event):
+            try:
+                self._emit_debug(f"Continuous action stop for {event.event_type}")
+                self._stop_continuous_repeat(repeat_key)
+            except Exception as exc:
+                print(f"[Engine] continuous_up_handler EXCEPTION: {exc}")
                 import traceback; traceback.print_exc()
         return handler
 
@@ -856,6 +951,11 @@ class Engine:
         if self._ring:
             self._ring.on_toggle_select(sector)
 
+    def ring_set_current_sector(self, sector):
+        """Called from the UI when the held ring highlight changes."""
+        if self._ring:
+            self._ring.set_current_sector(sector)
+
     def ring_toggle_dismiss(self):
         """Called from the UI when user clicks center X or outside in toggle mode."""
         if self._ring:
@@ -1363,6 +1463,7 @@ class Engine:
         self._smart_shift_read_cb = cb
 
     def stop(self):
+        self._stop_all_continuous_repeats()
         if self._ring:
             self._ring.shutdown()
             self._ring = None

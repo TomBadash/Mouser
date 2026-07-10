@@ -1192,6 +1192,61 @@ class HidReconnectInvariantTests(unittest.TestCase):
         extra_up.assert_called_once_with()
 
 
+class HidReportDiagnosticsTests(unittest.TestCase):
+    def test_force_sensing_report_is_logged_without_clicking(self):
+        gesture_down = Mock()
+        listener = hid_gesture.HidGestureListener(on_down=gesture_down)
+        listener._feat_idx = 0x0D
+        listener._force_sensing_idx = 0x0C
+
+        with patch("builtins.print") as print_mock:
+            listener._on_report([
+                hid_gesture.LONG_ID,
+                0x02,
+                0x0C,
+                0x40,
+                0x00,
+                0x01,
+                0x15,
+                0xC7,
+            ])
+            listener._on_report([
+                hid_gesture.LONG_ID,
+                0x02,
+                0x0C,
+                0x40,
+                0x00,
+                0x01,
+                0x15,
+                0xC7,
+            ])
+
+        gesture_down.assert_not_called()
+        print_mock.assert_called_once()
+        self.assertIn("Force sensing report", print_mock.call_args.args[0])
+        self.assertIn("feat=0x0C", print_mock.call_args.args[0])
+
+    def test_unexpected_reprog_report_is_logged_without_clicking(self):
+        gesture_down = Mock()
+        listener = hid_gesture.HidGestureListener(on_down=gesture_down)
+        listener._feat_idx = 0x0D
+        listener._gesture_cid = 0x01A0
+
+        with patch("builtins.print") as print_mock:
+            listener._on_report([
+                hid_gesture.LONG_ID,
+                0x02,
+                0x0D,
+                0x20,
+                0x01,
+                0xA0,
+            ])
+
+        gesture_down.assert_not_called()
+        print_mock.assert_called_once()
+        self.assertIn("REPROG_V4 ignored report", print_mock.call_args.args[0])
+
+
 class MxMaster4ConstantTests(unittest.TestCase):
     def test_sense_panel_cid_named(self):
         self.assertIn(0x01A0, hid_gesture.KNOWN_CID_NAMES)

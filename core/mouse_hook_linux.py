@@ -297,6 +297,9 @@ class MouseHook(BaseMouseHook):
         if next_device is None:
             next_device = self._evdev_connected_device
         self._connected_device = next_device
+        self._gesture_via_sense_panel = self._uses_sense_panel_event_family(
+            next_device
+        )
 
         prev_source = getattr(previous, "source", None) if previous is not None else None
         next_source = getattr(next_device, "source", None) if next_device is not None else None

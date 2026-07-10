@@ -1,8 +1,10 @@
 import importlib
 import os
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import call, patch
 
 from core import key_simulator
@@ -24,6 +26,21 @@ class KeySimulatorActionTests(unittest.TestCase):
         self.assertEqual(key_simulator.ACTIONS["prev_tab"]["category"], "Browser")
         self.assertTrue(len(key_simulator.ACTIONS["next_tab"]["keys"]) > 0)
         self.assertTrue(len(key_simulator.ACTIONS["prev_tab"]["keys"]) > 0)
+
+    def test_continuous_media_actions_exist(self):
+        expected = {
+            "volume_up_continuous": "volume_up",
+            "volume_down_continuous": "volume_down",
+            "brightness_up_continuous": "brightness_up",
+            "brightness_down_continuous": "brightness_down",
+        }
+        for action_id, base_id in expected.items():
+            self.assertIn(base_id, key_simulator.ACTIONS)
+            self.assertIn(action_id, key_simulator.ACTIONS)
+            self.assertTrue(key_simulator.is_continuous_action(action_id))
+            self.assertEqual(key_simulator.continuous_action_base(action_id), base_id)
+            self.assertIn("(Continuous)", key_simulator.ACTIONS[action_id]["label"])
+            self.assertEqual(key_simulator.ACTIONS[action_id]["category"], "Media")
 
 
 class CustomShortcutParsingTests(unittest.TestCase):
@@ -115,6 +132,79 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
         self.assertEqual(
             module.ACTIONS["space_right"]["keys"],
             [module.KEY_LEFTCTRL, module.KEY_LEFTMETA, module.KEY_RIGHT],
+        )
+
+    def test_kde_app_expose_uses_plasma_overview_shortcut(self):
+        module = self._reload_for_linux("KDE")
+
+        self.assertEqual(
+            module.ACTIONS["app_expose"]["keys"],
+            [module.KEY_LEFTMETA, module.KEY_W],
+        )
+        self.assertEqual(module.ACTIONS["app_expose"]["category"], "Navigation")
+
+    def test_kde_shortcuts_follow_user_kglobalshortcuts_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "kglobalshortcutsrc"
+            cfg_path.write_text(
+                "\n".join((
+                    "[kwin]",
+                    "Overview=Meta+G,Meta+W,Toggle Overview",
+                    "Switch One Desktop to the Left=Alt+Left,Meta+Ctrl+Left,Switch One Desktop to the Left",
+                    "Switch One Desktop to the Right=Alt+Right,Meta+Ctrl+Right,Switch One Desktop to the Right",
+                )),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}, clear=False):
+                module = self._reload_for_linux("KDE")
+
+        self.assertEqual(
+            module.ACTIONS["app_expose"]["keys"],
+            [module.KEY_LEFTMETA, module.KEY_G],
+        )
+        self.assertEqual(
+            module.ACTIONS["space_left"]["keys"],
+            [module.KEY_LEFTALT, module.KEY_LEFT],
+        )
+        self.assertEqual(
+            module.ACTIONS["space_right"]["keys"],
+            [module.KEY_LEFTALT, module.KEY_RIGHT],
+        )
+
+    def test_kde_shortcuts_refresh_on_execute_without_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "kglobalshortcutsrc"
+            cfg_path.write_text(
+                "\n".join((
+                    "[kwin]",
+                    "Overview=Meta+G,Meta+W,Toggle Overview",
+                )),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}, clear=False):
+                module = self._reload_for_linux("KDE")
+
+                # ACTIONS was populated at import time using the config above.
+                self.assertEqual(
+                    module.ACTIONS["app_expose"]["keys"],
+                    [module.KEY_LEFTMETA, module.KEY_G],
+                )
+
+                # User rebinds Overview in KDE System Settings while Mouser
+                # keeps running, with no restart in between.
+                cfg_path.write_text(
+                    "\n".join((
+                        "[kwin]",
+                        "Overview=Meta+Tab,Meta+W,Toggle Overview",
+                    )),
+                    encoding="utf-8",
+                )
+
+                with patch.object(module, "send_key_combo") as send_key_combo:
+                    module.execute_action("app_expose")
+
+        send_key_combo.assert_called_once_with(
+            [module.KEY_LEFTMETA, module.KEY_TAB]
         )
 
     def test_linux_custom_shortcuts_include_digit_keys_and_aliases(self):

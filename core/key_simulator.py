@@ -50,11 +50,36 @@ SCREENSHOT_ACTIONS = frozenset({
     "screenshot_full_file",
 })
 
+CONTINUOUS_ACTION_BASE = {
+    "volume_up_continuous": "volume_up",
+    "volume_down_continuous": "volume_down",
+    "brightness_up_continuous": "brightness_up",
+    "brightness_down_continuous": "brightness_down",
+}
+
 _screenshot_action_handler = None
 
 
 def is_screenshot_action(action_id):
     return action_id in SCREENSHOT_ACTIONS
+
+
+def is_continuous_action(action_id):
+    return action_id in CONTINUOUS_ACTION_BASE
+
+
+def continuous_action_base(action_id):
+    return CONTINUOUS_ACTION_BASE.get(action_id, action_id)
+
+
+def _add_continuous_action_entries(actions):
+    for action_id, base_id in CONTINUOUS_ACTION_BASE.items():
+        base = actions.get(base_id)
+        if not base or action_id in actions:
+            continue
+        entry = dict(base)
+        entry["label"] = f"{base.get('label', base_id)} (Continuous)"
+        actions[action_id] = entry
 
 
 def set_screenshot_action_handler(handler):
@@ -517,6 +542,16 @@ if sys.platform == "win32":
             "keys": [VK_VOLUME_DOWN],
             "category": "Media",
         },
+        "brightness_up": {
+            "label": "Brightness Up",
+            "keys": [],
+            "category": "Media",
+        },
+        "brightness_down": {
+            "label": "Brightness Down",
+            "keys": [],
+            "category": "Media",
+        },
         "volume_mute": {
             "label": "Volume Mute",
             "keys": [VK_VOLUME_MUTE],
@@ -628,6 +663,7 @@ if sys.platform == "win32":
             "category": "Other",
         },
     }
+    _add_continuous_action_entries(ACTIONS)
 
     _KEY_NAME_TO_CODE = _build_custom_key_name_map({
         "ctrl": VK_CONTROL, "shift": VK_SHIFT, "alt": VK_MENU,
@@ -658,6 +694,7 @@ if sys.platform == "win32":
                 if keys:
                     send_key_combo(keys)
                 return
+            action_id = continuous_action_base(action_id)
             if is_mouse_button_action(action_id):
                 print(f"[KeySimulator] execute_action: mouse click for {action_id}")
                 inject_mouse_down(action_id)
@@ -901,6 +938,8 @@ elif sys.platform == "darwin":
     _NX_MUTE = 7
     _NX_VOL_UP = 0
     _NX_VOL_DOWN = 1
+    _NX_BRIGHTNESS_UP = 2
+    _NX_BRIGHTNESS_DOWN = 3
 
     _KCFSTRING_ENCODING_UTF8 = 0x08000100
     _MAC_ACTION_FALLBACKS = {
@@ -1151,6 +1190,18 @@ elif sys.platform == "darwin":
             "mac_fn": _NX_VOL_DOWN,
             "category": "Media",
         },
+        "brightness_up": {
+            "label": "Brightness Up",
+            "keys": [],
+            "mac_fn": _NX_BRIGHTNESS_UP,
+            "category": "Media",
+        },
+        "brightness_down": {
+            "label": "Brightness Down",
+            "keys": [],
+            "mac_fn": _NX_BRIGHTNESS_DOWN,
+            "category": "Media",
+        },
         "volume_mute": {
             "label": "Volume Mute",
             "keys": [],
@@ -1276,6 +1327,7 @@ elif sys.platform == "darwin":
             "category": "Other",
         },
     }
+    _add_continuous_action_entries(ACTIONS)
 
     _KEY_NAME_TO_CODE = _build_custom_key_name_map({
         "ctrl": kVK_Control, "shift": kVK_Shift, "alt": kVK_Option,
@@ -1306,6 +1358,7 @@ elif sys.platform == "darwin":
             if keys:
                 send_key_combo(keys)
             return
+        action_id = continuous_action_base(action_id)
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
@@ -1367,6 +1420,8 @@ elif sys.platform == "linux":
     KEY_FORWARD = 159
     KEY_VOLUMEUP = 115
     KEY_VOLUMEDOWN = 114
+    KEY_BRIGHTNESSDOWN = 224
+    KEY_BRIGHTNESSUP = 225
     KEY_MUTE = 113
     KEY_PLAYPAUSE = 164
     KEY_NEXTSONG = 163
@@ -1396,7 +1451,8 @@ elif sys.platform == "linux":
         KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
         KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
         KEY_BACK, KEY_FORWARD,
-        KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_MUTE,
+        KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_BRIGHTNESSUP, KEY_BRIGHTNESSDOWN,
+        KEY_MUTE,
         KEY_PLAYPAUSE, KEY_NEXTSONG, KEY_PREVIOUSSONG,
         KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
         KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
@@ -1501,8 +1557,97 @@ elif sys.platform == "linux":
         return action_id in _LINUX_MOUSE_BUTTON_MAP
 
     _LINUX_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    _KEY_NAME_TO_CODE = _build_custom_key_name_map({
+        "ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT,
+        "super": KEY_LEFTMETA, "tab": KEY_TAB, "space": KEY_SPACE,
+        "enter": KEY_ENTER, "esc": KEY_ESC, "backspace": KEY_BACKSPACE,
+        "delete": KEY_DELETE, "left": KEY_LEFT, "right": KEY_RIGHT,
+        "up": KEY_UP, "down": KEY_DOWN,
+        "pageup": KEY_PAGEUP, "pagedown": KEY_PAGEDOWN,
+        "home": KEY_HOME, "end": KEY_END,
+        "0": KEY_0, "1": KEY_1, "2": KEY_2, "3": KEY_3, "4": KEY_4,
+        "5": KEY_5, "6": KEY_6, "7": KEY_7, "8": KEY_8, "9": KEY_9,
+        "a": KEY_A, "b": KEY_B, "c": KEY_C, "d": KEY_D, "e": KEY_E,
+        "f": KEY_F, "g": KEY_G, "h": KEY_H, "i": KEY_I, "j": KEY_J,
+        "k": KEY_K, "l": KEY_L, "m": KEY_M, "n": KEY_N, "o": KEY_O,
+        "p": KEY_P, "q": KEY_Q, "r": KEY_R, "s": KEY_S, "t": KEY_T,
+        "u": KEY_U, "v": KEY_V, "w": KEY_W, "x": KEY_X, "y": KEY_Y,
+        "z": KEY_Z,
+        "f1": KEY_F1, "f2": KEY_F2, "f3": KEY_F3, "f4": KEY_F4,
+        "f5": KEY_F5, "f6": KEY_F6, "f7": KEY_F7, "f8": KEY_F8,
+        "f9": KEY_F9, "f10": KEY_F10, "f11": KEY_F11, "f12": KEY_F12,
+        "volumeup": KEY_VOLUMEUP, "volumedown": KEY_VOLUMEDOWN,
+        "brightnessup": KEY_BRIGHTNESSUP, "brightnessdown": KEY_BRIGHTNESSDOWN,
+        "mute": KEY_MUTE, "playpause": KEY_PLAYPAUSE,
+        "nexttrack": KEY_NEXTSONG, "prevtrack": KEY_PREVIOUSSONG,
+    })
+    _ALL_KEY_CODES = sorted(set(_ALL_KEY_CODES) | set(_KEY_NAME_TO_CODE.values()))
+
+    def _kde_shortcuts_path():
+        config_home = os.environ.get("XDG_CONFIG_HOME")
+        if not config_home:
+            config_home = os.path.join(os.path.expanduser("~"), ".config")
+        return os.path.join(config_home, "kglobalshortcutsrc")
+
+    def _split_kde_shortcut_field(value):
+        field = value.split(",", 1)[0].strip()
+        if not field or field.lower() == "none":
+            return []
+        return [part.strip() for part in field.split("\t") if part.strip()]
+
+    def _parse_kde_shortcut(shortcut):
+        # Only PgUp/PgDown need rewriting before the final .lower() below —
+        # everything else in KDE's vocabulary (Ctrl, Shift, Alt, Meta, Left,
+        # W, ...) already matches a _KEY_NAME_TO_CODE entry once lowercased.
+        normalized = shortcut.replace("Meta", "super").replace("Win", "super")
+        normalized = normalized.replace("PgUp", "pageup").replace("PgDown", "pagedown")
+        return _parse_custom_combo(f"custom:{normalized.lower()}", _KEY_NAME_TO_CODE)
+
+    def _read_kde_kwin_shortcut(action_name):
+        if "KDE" not in _LINUX_DESKTOP:
+            return None
+        path = _kde_shortcuts_path()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                in_kwin = False
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line or line.startswith(("#", ";")):
+                        continue
+                    if line.startswith("[") and line.endswith("]"):
+                        in_kwin = line[1:-1] == "kwin"
+                        continue
+                    if not in_kwin or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if key.strip() != action_name:
+                        continue
+                    for shortcut in _split_kde_shortcut_field(value):
+                        keys = _parse_kde_shortcut(shortcut)
+                        if keys:
+                            return keys
+                    return None
+        except OSError:
+            return None
+        return None
+
+    def _linux_overview_keys():
+        if "KDE" in _LINUX_DESKTOP:
+            configured = _read_kde_kwin_shortcut("Overview")
+            if configured:
+                return configured
+        return [KEY_LEFTMETA, KEY_W]
 
     def _linux_workspace_keys(direction: str):
+        if "KDE" in _LINUX_DESKTOP:
+            action_name = (
+                "Switch One Desktop to the Left"
+                if direction == "left"
+                else "Switch One Desktop to the Right"
+            )
+            configured = _read_kde_kwin_shortcut(action_name)
+            if configured:
+                return configured
         if "GNOME" in _LINUX_DESKTOP:
             return (
                 [KEY_LEFTMETA, KEY_PAGEUP]
@@ -1592,6 +1737,11 @@ elif sys.platform == "linux":
             "keys": [KEY_LEFTMETA],
             "category": "Navigation",
         },
+        "app_expose": {
+            "label": "Overview",
+            "keys": _linux_overview_keys(),
+            "category": "Navigation",
+        },
         "space_left": {
             "label": "Previous Desktop",
             "keys": _linux_workspace_keys("left"),
@@ -1610,6 +1760,16 @@ elif sys.platform == "linux":
         "volume_down": {
             "label": "Volume Down",
             "keys": [KEY_VOLUMEDOWN],
+            "category": "Media",
+        },
+        "brightness_up": {
+            "label": "Brightness Up",
+            "keys": [KEY_BRIGHTNESSUP],
+            "category": "Media",
+        },
+        "brightness_down": {
+            "label": "Brightness Down",
+            "keys": [KEY_BRIGHTNESSDOWN],
             "category": "Media",
         },
         "volume_mute": {
@@ -1723,31 +1883,25 @@ elif sys.platform == "linux":
             "category": "Other",
         },
     }
+    _add_continuous_action_entries(ACTIONS)
 
-    _KEY_NAME_TO_CODE = _build_custom_key_name_map({
-        "ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT,
-        "super": KEY_LEFTMETA, "tab": KEY_TAB, "space": KEY_SPACE,
-        "enter": KEY_ENTER, "esc": KEY_ESC, "backspace": KEY_BACKSPACE,
-        "delete": KEY_DELETE, "left": KEY_LEFT, "right": KEY_RIGHT,
-        "up": KEY_UP, "down": KEY_DOWN,
-        "pageup": KEY_PAGEUP, "pagedown": KEY_PAGEDOWN,
-        "home": KEY_HOME, "end": KEY_END,
-        "0": KEY_0, "1": KEY_1, "2": KEY_2, "3": KEY_3, "4": KEY_4,
-        "5": KEY_5, "6": KEY_6, "7": KEY_7, "8": KEY_8, "9": KEY_9,
-        "a": KEY_A, "b": KEY_B, "c": KEY_C, "d": KEY_D, "e": KEY_E,
-        "f": KEY_F, "g": KEY_G, "h": KEY_H, "i": KEY_I, "j": KEY_J,
-        "k": KEY_K, "l": KEY_L, "m": KEY_M, "n": KEY_N, "o": KEY_O,
-        "p": KEY_P, "q": KEY_Q, "r": KEY_R, "s": KEY_S, "t": KEY_T,
-        "u": KEY_U, "v": KEY_V, "w": KEY_W, "x": KEY_X, "y": KEY_Y,
-        "z": KEY_Z,
-        "f1": KEY_F1, "f2": KEY_F2, "f3": KEY_F3, "f4": KEY_F4,
-        "f5": KEY_F5, "f6": KEY_F6, "f7": KEY_F7, "f8": KEY_F8,
-        "f9": KEY_F9, "f10": KEY_F10, "f11": KEY_F11, "f12": KEY_F12,
-        "volumeup": KEY_VOLUMEUP, "volumedown": KEY_VOLUMEDOWN,
-        "mute": KEY_MUTE, "playpause": KEY_PLAYPAUSE,
-        "nexttrack": KEY_NEXTSONG, "prevtrack": KEY_PREVIOUSSONG,
-    })
-    _ALL_KEY_CODES = sorted(set(_ALL_KEY_CODES) | set(_KEY_NAME_TO_CODE.values()))
+    # Overview/desktop-switch bindings are read from kglobalshortcutsrc once
+    # at import time to populate ACTIONS, so they'd otherwise go stale for
+    # the rest of the process if the user rebinds them in KDE System Settings
+    # afterward. Re-resolve them at execute time instead, so a rebind takes
+    # effect on the very next button press without an app restart.
+    _KDE_DYNAMIC_ACTION_KEYS = {
+        "app_expose": _linux_overview_keys,
+        "space_left": lambda: _linux_workspace_keys("left"),
+        "space_right": lambda: _linux_workspace_keys("right"),
+    }
+
+    def _resolve_action_keys(action_id, action):
+        if "KDE" in _LINUX_DESKTOP:
+            resolver = _KDE_DYNAMIC_ACTION_KEYS.get(action_id)
+            if resolver is not None:
+                return resolver()
+        return action["keys"]
 
     def execute_action(action_id):
         if action_id.startswith("custom:"):
@@ -1755,6 +1909,7 @@ elif sys.platform == "linux":
             if keys:
                 send_key_combo(keys)
             return
+        action_id = continuous_action_base(action_id)
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
@@ -1762,9 +1917,12 @@ elif sys.platform == "linux":
         if request_screenshot_action(action_id):
             return
         action = ACTIONS.get(action_id)
-        if not action or not action["keys"]:
+        if not action:
             return
-        send_key_combo(action["keys"])
+        keys = _resolve_action_keys(action_id, action)
+        if not keys:
+            return
+        send_key_combo(keys)
 
 
 # ==================================================================

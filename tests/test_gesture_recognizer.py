@@ -160,6 +160,12 @@ class ClickVsSwipeTests(unittest.TestCase):
         feed(rec, FLICK_LEFT, t=0.0)
         self.assertFalse(rec.end())
 
+    def test_hold_with_a_right_swipe_is_not_a_click(self):
+        rec = make()
+        rec.begin()
+        feed(rec, FLICK_RIGHT, t=0.0)
+        self.assertFalse(rec.end())
+
 
 class EnableAndSourceTests(unittest.TestCase):
     def test_disabled_recognizer_emits_nothing(self):

@@ -245,6 +245,43 @@ class ControllerStateMachineTests(unittest.TestCase):
 
         self.execute_cb.assert_called_once_with("action_3")
 
+    def test_held_repeatable_sector_repeats_until_release(self):
+        """Held mode repeats selected continuous actions while the sector stays active."""
+        ctrl = self._make_controller(
+            slots=["volume_down_continuous", "action_1"],
+            hold_ms=20,
+        )
+        ctrl._repeatable_action_cb = lambda action: action.endswith("_continuous")
+        ctrl._repeat_initial_delay_s = 0.01
+        ctrl._repeat_interval_s = 0.01
+
+        ctrl.on_button_down()
+        time.sleep(0.04)
+        self.assertEqual(ctrl.state, ActionsRingController.SHOWING_HELD)
+        ctrl.set_current_sector(0)
+        time.sleep(0.035)
+        ctrl.on_button_up()
+        count_at_release = self.execute_cb.call_count
+        time.sleep(0.03)
+
+        self.assertGreaterEqual(count_at_release, 2)
+        self.assertEqual(self.execute_cb.call_count, count_at_release)
+
+    def test_held_repeatable_sector_release_before_repeat_executes_once(self):
+        ctrl = self._make_controller(
+            slots=["volume_down_continuous", "action_1"],
+            hold_ms=20,
+        )
+        ctrl._repeatable_action_cb = lambda action: action.endswith("_continuous")
+        ctrl._repeat_initial_delay_s = 0.1
+
+        ctrl.on_button_down()
+        time.sleep(0.04)
+        ctrl.set_current_sector(0)
+        ctrl.on_button_up()
+
+        self.execute_cb.assert_called_once_with("volume_down_continuous")
+
     # -- set_current_sector ------------------------------------------------
 
     def test_set_current_sector_updates_sector(self):

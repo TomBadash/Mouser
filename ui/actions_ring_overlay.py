@@ -25,6 +25,12 @@ RING_LABEL_MAP: dict[str, str] = {
     "prev_track":           "Prev Track",
     "volume_up":            "Volume Up",
     "volume_down":          "Volume Down",
+    "volume_up_continuous": "Vol Up Hold",
+    "volume_down_continuous": "Vol Down Hold",
+    "brightness_up":        "Bright Up",
+    "brightness_down":      "Bright Down",
+    "brightness_up_continuous": "Bright Up Hold",
+    "brightness_down_continuous": "Bright Down Hold",
     "volume_mute":          "Mute",
     "browser_back":         "Back",
     "browser_forward":      "Forward",
@@ -119,6 +125,7 @@ class ActionsRingOverlay(QWidget):
 
     action_selected = Signal(int)
     cancelled = Signal()
+    sector_changed = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -468,6 +475,7 @@ class ActionsRingOverlay(QWidget):
             sector = self._cursor_to_sector(QCursor.pos())
         if sector != self._target_sector:
             self._target_sector = sector
+            self.sector_changed.emit(sector)
 
         # appear scale
         if self._appear_progress < 1.0:

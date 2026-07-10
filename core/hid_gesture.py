@@ -1014,6 +1014,7 @@ class HidGestureListener:
         self._force_sensing_result = None
         self._force_sensing_event = threading.Event()
         self._force_sensing_range = None    # (min_val, max_val, default_val) after probe
+        self._diagnostic_report_shapes = set()
 
     # ── public API ────────────────────────────────────────────────
 
@@ -2468,14 +2469,29 @@ class HidGestureListener:
                     except Exception:
                         pass
 
+    def _log_diagnostic_report(self, label, feat, func, sw, params):
+        """Log ignored report shapes once so new controls can be decoded."""
+        key = (label, feat, func, sw, bytes(params[:8]))
+        if key in self._diagnostic_report_shapes:
+            return
+        self._diagnostic_report_shapes.add(key)
+        print(
+            f"[HidGesture] {label} report feat=0x{feat:02X} "
+            f"func=0x{func:X} sw=0x{sw:X} params=[{_hex_bytes(params)}]"
+        )
+
     def _on_report(self, raw):
         """Inspect an incoming HID++ report for diverted button / raw XY events."""
         msg = _parse(raw)
         if msg is None:
             return
-        _, feat, func, _sw, params = msg
+        _, feat, func, sw, params = msg
 
         if feat != self._feat_idx:
+            if feat == self._force_sensing_idx:
+                self._log_diagnostic_report(
+                    "Force sensing", feat, func, sw, params
+                )
             return
 
         if func == 1:
@@ -2506,6 +2522,7 @@ class HidGestureListener:
             return
 
         if func != 0:
+            self._log_diagnostic_report("REPROG_V4 ignored", feat, func, sw, params)
             return
 
         # Params: sequential CID pairs terminated by 0x0000
@@ -2945,6 +2962,11 @@ class HidGestureListener:
                             hires_wheel_active=False,
                             thumbwheel_active=False,
                             thumb_button_via_hid=self.thumb_button_via_hid,
+                        )
+                        print(
+                            "[HidGesture] Active gesture CID "
+                            f"{_format_cid(self._gesture_cid)} "
+                            f"rawXY={'on' if self._rawxy_enabled else 'off'}"
                         )
                         # Replay the last desired native-invert state on
                         # reconnect; listener loop drains this next iter.

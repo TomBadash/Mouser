@@ -21,7 +21,7 @@ from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
     get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
-    set_button_haptic,
+    set_button_haptic, SWIPE_SET_FOR_TAP,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -79,6 +79,17 @@ def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
+
+
+GESTURE_PRESETS = {
+    "window_navigation": {
+        "tap": "app_expose",
+        "left": "space_left",
+        "right": "space_right",
+        "up": "none",
+        "down": "none",
+    },
+}
 
 
 def _qt_shortcut_modifier_name(name):
@@ -746,6 +757,10 @@ class Backend(QObject):
     def startMinimized(self):
         return bool(self._cfg.get("settings", {}).get("start_minimized", True))
 
+    @Property(str, notify=settingsChanged)
+    def closeAction(self):
+        return self._cfg.get("settings", {}).get("close_action", "ask")
+
     @Property(bool, notify=settingsChanged)
     def startAtLogin(self):
         return bool(self._cfg.get("settings", {}).get("start_at_login", False))
@@ -1399,6 +1414,26 @@ class Backend(QObject):
         self.mappingsChanged.emit()
         self.statusMessage.emit("Saved")
 
+    @Slot(str, str, str)
+    def applyGesturePreset(self, profileName, button, presetId):
+        """Apply a gesture preset to a tap button and its swipe directions."""
+        preset = GESTURE_PRESETS.get(presetId)
+        swipe_keys = SWIPE_SET_FOR_TAP.get(button)
+        if not preset or not swipe_keys:
+            return
+        profiles = self._cfg.setdefault("profiles", {})
+        pdata = profiles.setdefault(profileName, {})
+        mappings = pdata.setdefault("mappings", {})
+        mappings[button] = preset["tap"]
+        for direction, key in zip(("left", "right", "up", "down"), swipe_keys):
+            mappings[key] = preset[direction]
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.profilesChanged.emit()
+        self.mappingsChanged.emit()
+        self.statusMessage.emit("Saved")
+
     @Slot(bool)
     def setStartMinimized(self, value):
         hidden = bool(value)
@@ -1464,6 +1499,19 @@ class Backend(QObject):
             f"https://github.com/{DEFAULT_RELEASE_REPO}/releases/latest"
         )
         _open_url(url)
+
+    @Slot()
+    def quitApplication(self):
+        QCoreApplication.quit()
+
+    @Slot(str)
+    def setCloseAction(self, value):
+        action = value if value in ("ask", "quit", "minimize") else "ask"
+        if self.closeAction == action:
+            return
+        self._cfg.setdefault("settings", {})["close_action"] = action
+        save_config(self._cfg)
+        self.settingsChanged.emit()
 
     @Slot()
     def prepareLatestUpdate(self):
@@ -2074,6 +2122,7 @@ class Backend(QObject):
             self._ring_overlay = ActionsRingOverlay()
             self._ring_overlay.action_selected.connect(self._onRingActionSelected)
             self._ring_overlay.cancelled.connect(self._onRingCancelled)
+            self._ring_overlay.sector_changed.connect(self._onRingSectorChanged)
         pos = QCursor.pos()
         self._ring_overlay.show_ring(pos.x(), pos.y(), labels, interactive=interactive)
         self._ring_visible = True
@@ -2090,6 +2139,12 @@ class Backend(QObject):
         """Overlay click on a sector in toggle mode."""
         if self._engine:
             self._engine.ring_toggle_select(sector)
+
+    @Slot(int)
+    def _onRingSectorChanged(self, sector):
+        """Overlay highlighted sector changed while the ring is visible."""
+        if self._engine:
+            self._engine.ring_set_current_sector(sector)
 
     @Slot()
     def _onRingCancelled(self):

@@ -800,6 +800,33 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             [module.MouseEvent.GESTURE_CLICK, module.MouseEvent.GESTURE_CLICK],
         )
 
+    def test_linux_active_sense_panel_cid_uses_sense_event_family(self):
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(
+                source="hid++",
+                gesture_via_sense_panel=False,
+                active_gesture_cid=0x01A0,
+            ),
+            extra_held_during_gesture=False,
+        )
+        seen = []
+        hook.register(
+            module.MouseEvent.SENSE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+        hook.register(
+            module.MouseEvent.GESTURE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+
+        hook._on_hid_connect()
+        hook._on_hid_gesture_down()
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(seen, [module.MouseEvent.SENSE_CLICK])
+
     def test_ui_passthrough_does_not_mirror_ungrabbed_events(self):
         module = self._reload_for_linux()
         hook = module.MouseHook()
@@ -1544,6 +1571,56 @@ class GestureEventFamilyTests(unittest.TestCase):
         self.assertEqual(mouse_hook.MouseEvent.SENSE_BUTTON_DOWN, "sense_button_down")
         self.assertEqual(mouse_hook.MouseEvent.SENSE_BUTTON_UP, "sense_button_up")
         self.assertEqual(mouse_hook.MouseEvent.SENSE_SWIPE_LEFT, "sense_swipe_left")
+
+    def test_active_sense_panel_cid_forces_sense_event_family(self):
+        hook = BaseMouseHook()
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(
+                gesture_via_sense_panel=False,
+                active_gesture_cid=0x01A0,
+            ),
+            extra_held_during_gesture=False,
+        )
+        seen = []
+        hook.register(
+            mouse_hook.MouseEvent.SENSE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+        hook.register(
+            mouse_hook.MouseEvent.GESTURE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+
+        hook._on_hid_connect()
+        hook._on_hid_gesture_down()
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(seen, [mouse_hook.MouseEvent.SENSE_CLICK])
+
+    def test_front_gesture_cid_keeps_gesture_event_family(self):
+        hook = BaseMouseHook()
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(
+                gesture_via_sense_panel=False,
+                active_gesture_cid=0x00C3,
+            ),
+            extra_held_during_gesture=False,
+        )
+        seen = []
+        hook.register(
+            mouse_hook.MouseEvent.SENSE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+        hook.register(
+            mouse_hook.MouseEvent.GESTURE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+
+        hook._on_hid_connect()
+        hook._on_hid_gesture_down()
+        hook._on_hid_gesture_up()
+
+        self.assertEqual(seen, [mouse_hook.MouseEvent.GESTURE_CLICK])
 
 
 if __name__ == "__main__":

@@ -1000,6 +1000,14 @@ def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
     QTimer.singleShot(400, _tray_minimized_notice)
 
 
+def _quit_from_tray(app, tray, quit_filter=None) -> None:
+    """Request tray-menu quit before device teardown can block the UI."""
+    if quit_filter is not None:
+        quit_filter.allow_quit()
+    tray.hide()
+    app.quit()
+
+
 def main():
     # Re-exec through a `Mouser`-named symlink BEFORE anything Qt or
     # AppKit related runs. Necessary because macOS reads the Dock label /
@@ -1272,11 +1280,7 @@ def main():
     quit_action = QAction(locale_mgr.tr("tray.quit"), tray_menu)
 
     def quit_app():
-        if _MACOS_QUIT_FILTER is not None:
-            _MACOS_QUIT_FILTER.allow_quit()
-        engine.stop()
-        tray.hide()
-        app.quit()
+        _quit_from_tray(app, tray, _MACOS_QUIT_FILTER)
 
     quit_action.triggered.connect(quit_app)
     tray_menu.addAction(quit_action)

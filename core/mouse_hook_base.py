@@ -186,6 +186,18 @@ class BaseMouseHook:
         return (MouseEvent.SENSE_BUTTON_UP if self._gesture_via_sense_panel
                 else MouseEvent.GESTURE_BUTTON_UP)
 
+    def _uses_sense_panel_event_family(self, connected_device):
+        active_cid = getattr(connected_device, "active_gesture_cid", None)
+        if isinstance(active_cid, str):
+            try:
+                active_cid = int(active_cid, 0)
+            except ValueError:
+                active_cid = None
+        return (
+            bool(getattr(connected_device, "gesture_via_sense_panel", False))
+            or active_cid == 0x01A0
+        )
+
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
 
@@ -355,8 +367,8 @@ class BaseMouseHook:
         self._connected_device = (
             self._hid_gesture.connected_device if self._hid_gesture else None
         )
-        self._gesture_via_sense_panel = bool(
-            getattr(self._connected_device, "gesture_via_sense_panel", False)
+        self._gesture_via_sense_panel = self._uses_sense_panel_event_family(
+            self._connected_device
         )
         self._set_device_connected(True)
 

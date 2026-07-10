@@ -53,6 +53,11 @@ Item {
         { label: s["scroll.light"],  value: "light"  },
         { label: s["scroll.dark"],   value: "dark"   }
     ]
+    readonly property var closeActionOptions: [
+        { label: s["scroll.close_ask"]      || "Ask Each Time",     value: "ask"      },
+        { label: s["scroll.close_minimize"] || "Minimize to Tray",  value: "minimize" },
+        { label: s["scroll.close_quit"]     || "Quit",              value: "quit"     }
+    ]
     readonly property var allDpiPresets: [400, 800, 1000, 1600, 2400, 4000, 6000, 8000]
     readonly property var dpiPresets: {
         var presets = []
@@ -934,6 +939,105 @@ Item {
                 width: 1
                 height: backend.supportsStartAtLogin ? 16 : 0
             }
+
+            // ── Close Button Behavior ───────────────────────────────
+            Rectangle {
+                visible: !backend.isMacOS
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: closeActionContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: closeActionContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.close_action"] || "Close Button Behavior"
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["scroll.close_action_desc"]
+                              || "Choose what the window's close button does. Checking “Remember my choice” in the close prompt updates this too."
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    Row {
+                        width: parent.width
+                        spacing: 10
+
+                        Repeater {
+                            model: scrollPage.closeActionOptions
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: Math.max(96, optionText.implicitWidth + 28)
+                                height: 38
+                                radius: 10
+                                color: backend.closeAction === modelData.value
+                                       ? scrollPage.theme.accent
+                                       : optionMouse.containsMouse
+                                         ? scrollPage.theme.bgCardHover
+                                         : scrollPage.theme.bgSubtle
+                                border.width: 1
+                                border.color: backend.closeAction === modelData.value
+                                              ? scrollPage.theme.accent
+                                              : scrollPage.theme.border
+
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData.label
+
+                                Behavior on color { ColorAnimation { duration: 120 } }
+
+                                Text {
+                                    id: optionText
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 12
+                                        bold: backend.closeAction === modelData.value
+                                    }
+                                    color: backend.closeAction === modelData.value
+                                           ? scrollPage.theme.bgSidebar
+                                           : scrollPage.theme.textPrimary
+                                }
+
+                                MouseArea {
+                                    id: optionMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: backend.setCloseAction(modelData.value)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
 
             // ── Screenshots ───────────────────────────────────────
             Rectangle {

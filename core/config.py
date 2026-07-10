@@ -147,7 +147,7 @@ BUTTON_HOLD_EVENTS = {
 }
 
 DEFAULT_CONFIG = {
-    "version": 20,
+    "version": 21,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -211,6 +211,7 @@ DEFAULT_CONFIG = {
         "update_check_state": {},
         "force_sensitivity": None,
         "actions_ring_hold_ms": 250,
+        "close_action": "ask",      # "ask" | "quit" | "minimize" — window close-button behavior
     },
 }
 
@@ -346,6 +347,14 @@ HAPTIC_ELIGIBLE_ACTIONS = [
     "switch_scroll_mode",
     "toggle_smart_shift",
     "cycle_dpi",
+    "volume_up",
+    "volume_down",
+    "volume_up_continuous",
+    "volume_down_continuous",
+    "brightness_up",
+    "brightness_down",
+    "brightness_up_continuous",
+    "brightness_down_continuous",
     "volume_mute",
     "play_pause",
     "next_track",
@@ -630,15 +639,21 @@ def _migrate(cfg):
         cfg["version"] = 19
 
     if version < 20:
-        # v19 -> v20: move default actions ring activation from thumb button
-        # (config key "actions_ring") to sense panel (config key "gesture").
+        # v19 -> v20: dual gesture-swipe sets. Config keys now track physical
+        # buttons, so no mapping move is required here.
+        cfg["version"] = 20
+
+    if version < 21:
+        # v20 briefly migrated the MX4 Sense Panel's default Actions Ring
+        # action onto "gesture". Move only that legacy default back to the
+        # physical "actions_ring" key; leave custom mappings alone.
         for prof in cfg.get("profiles", {}).values():
             m = prof.get("mappings", {})
-            if (m.get("actions_ring") == "activate_actions_ring"
-                    and m.get("gesture", "none") == "none"):
-                m["gesture"] = "activate_actions_ring"
-                m["actions_ring"] = "none"
-        cfg["version"] = 20
+            if (m.get("gesture") == "activate_actions_ring"
+                    and m.get("actions_ring", "none") == "none"):
+                m["actions_ring"] = "activate_actions_ring"
+                m["gesture"] = "none"
+        cfg["version"] = 21
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
@@ -649,12 +664,28 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("close_action", "ask")
     cfg["settings"]["wheel_divert"] = coerce_wheel_divert_setting(
         cfg["settings"].get("wheel_divert", WHEEL_DIVERT_DEFAULT)
     )
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():
+        mappings = pdata.setdefault("mappings", {})
+        default_mappings = DEFAULT_CONFIG["profiles"]["default"]["mappings"]
+        for key in (
+            "gesture",
+            "gesture_left",
+            "gesture_right",
+            "gesture_up",
+            "gesture_down",
+            "actions_ring",
+            "actions_ring_left",
+            "actions_ring_right",
+            "actions_ring_up",
+            "actions_ring_down",
+        ):
+            mappings.setdefault(key, default_mappings.get(key, "none"))
         apps = pdata.get("apps", [])
         for i, a in enumerate(apps):
             if a.lower() == "wmplayer.exe":

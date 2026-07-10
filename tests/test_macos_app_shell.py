@@ -391,6 +391,17 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
             5000,
         )
 
+    def test_tray_quit_posts_qt_quit_without_engine_teardown(self):
+        app = MagicMock()
+        tray = MagicMock()
+        quit_filter = MagicMock()
+
+        main_qml._quit_from_tray(app, tray, quit_filter)
+
+        quit_filter.allow_quit.assert_called_once()
+        tray.hide.assert_called_once()
+        app.quit.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

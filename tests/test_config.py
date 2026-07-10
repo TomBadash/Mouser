@@ -1,3 +1,4 @@
+import copy
 import json
 import ntpath
 import os
@@ -44,7 +45,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -66,7 +67,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertNotIn("start_with_windows", migrated["settings"])
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
         )
         for key in config.GESTURE_DIRECTION_BUTTONS:
@@ -94,7 +95,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -168,7 +169,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 20)
+        self.assertEqual(loaded["version"], 21)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertEqual(loaded["settings"]["action_haptic"], [])
         self.assertTrue(loaded["settings"]["haptic_enabled"])
@@ -201,7 +202,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
@@ -227,15 +228,15 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v8_cfg)
 
-        self.assertEqual(migrated["version"], 20)
-        # v19→v20 moves the default ring activation to the gesture (sense panel) key.
+        self.assertEqual(migrated["version"], 21)
+        # Physical key naming keeps the Sense Panel action on actions_ring.
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
         )
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
+            migrated["profiles"]["default"]["mappings"]["gesture"],
+            "app_expose",
         )
         self.assertEqual(migrated["settings"]["haptic_level"], 2)
         self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
@@ -256,7 +257,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v9_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(migrated["settings"]["gesture_commit_window_ms"], 400)
         self.assertEqual(migrated["settings"]["gesture_settle_ms"], 90)
         self.assertEqual(migrated["settings"]["gesture_cross_ratio"], 0.5)
@@ -282,7 +283,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v10_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
         self.assertEqual(migrated["profiles"]["work"]["button_haptic"], {})
 
@@ -302,7 +303,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v12_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(migrated["settings"]["action_haptic"], [])
         # existing haptic settings preserved
         self.assertTrue(migrated["settings"]["haptic_enabled"])
@@ -353,7 +354,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v13_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(migrated["settings"]["button_haptic"], [])
         self.assertTrue(migrated["settings"]["haptic_dedup"])
         # existing settings preserved
@@ -388,25 +389,25 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v17_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertNotIn("actions_ring_mode", migrated["settings"])
         self.assertEqual(migrated["settings"]["actions_ring_hold_ms"], 250)
-        # v18→v19 converts "ring" mode, v19→v20 moves it to gesture key
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "activate_actions_ring",
-        )
+        # v18→v19 converts "ring" mode to the physical actions_ring key.
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
+            "activate_actions_ring",
         )
         self.assertEqual(
-            migrated["profiles"]["work"]["mappings"]["gesture"],
-            "activate_actions_ring",
+            migrated["profiles"]["default"]["mappings"]["gesture"],
+            "app_expose",
         )
         self.assertEqual(
             migrated["profiles"]["work"]["mappings"]["actions_ring"],
-            "none",
+            "activate_actions_ring",
+        )
+        self.assertEqual(
+            migrated["profiles"]["work"]["mappings"]["gesture"],
+            "app_expose",
         )
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring_slots"],
@@ -419,6 +420,16 @@ class ConfigMigrationTests(unittest.TestCase):
         # existing settings preserved
         self.assertEqual(migrated["settings"]["dpi"], 1000)
         self.assertEqual(migrated["settings"]["haptic_level"], 2)
+        # new close-confirmation setting backfilled for pre-existing configs
+        self.assertEqual(migrated["settings"]["close_action"], "ask")
+
+    def test_migrate_preserves_explicit_close_action(self):
+        cfg = copy.deepcopy(config.DEFAULT_CONFIG)
+        cfg["settings"]["close_action"] = "quit"
+
+        migrated = config._migrate(cfg)
+
+        self.assertEqual(migrated["settings"]["close_action"], "quit")
 
     def test_migrate_v17_to_v18_preserves_existing_slots(self):
         v17_cfg = {
@@ -439,7 +450,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v17_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         # setdefault must not overwrite pre-existing values
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring_slots"],
@@ -464,16 +475,16 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v18_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertNotIn("actions_ring_mode", migrated["settings"])
-        # v18→v19 sets actions_ring to activate, v19→v20 moves it to gesture
+        # v18→v19 sets the physical actions_ring key to activate.
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
         )
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
+            migrated["profiles"]["default"]["mappings"]["gesture"],
+            "app_expose",
         )
 
     def test_migrate_v18_to_v19_disabled_mode_sets_none(self):
@@ -492,7 +503,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v18_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertNotIn("actions_ring_mode", migrated["settings"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring"],
@@ -515,14 +526,14 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v18_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertNotIn("actions_ring_mode", migrated["settings"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "play_pause",
         )
 
-    def test_migrate_v19_to_v20_moves_actions_ring_to_gesture(self):
+    def test_migrate_v19_to_v20_keeps_actions_ring_physical_key(self):
         v19_cfg = {
             "version": 19,
             "active_profile": "default",
@@ -541,13 +552,13 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v19_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
         )
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
+            migrated["profiles"]["default"]["mappings"]["gesture"],
             "none",
         )
 
@@ -570,7 +581,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v19_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 21)
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["gesture"],
             "play_pause",
@@ -578,6 +589,51 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
+        )
+
+    def test_migrate_v20_to_v21_repairs_legacy_actions_ring_default(self):
+        v20_cfg = {
+            "version": 20,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {
+                        "actions_ring": "none",
+                        "gesture": "activate_actions_ring",
+                    },
+                },
+                "custom": {
+                    "label": "Custom",
+                    "apps": [],
+                    "mappings": {
+                        "actions_ring": "volume_down",
+                        "gesture": "app_expose",
+                    },
+                },
+            },
+            "settings": {},
+        }
+
+        migrated = config._migrate(v20_cfg)
+
+        self.assertEqual(migrated["version"], 21)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
+            "activate_actions_ring",
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture"],
+            "none",
+        )
+        self.assertEqual(
+            migrated["profiles"]["custom"]["mappings"]["actions_ring"],
+            "volume_down",
+        )
+        self.assertEqual(
+            migrated["profiles"]["custom"]["mappings"]["gesture"],
+            "app_expose",
         )
 
     def test_button_haptic_enabled_returns_false_when_not_listed(self):

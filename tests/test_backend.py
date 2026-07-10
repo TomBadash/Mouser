@@ -50,6 +50,7 @@ class _FakeEngine:
         self.debug_enabled = None
         self.start_count = 0
         self.stop_count = 0
+        self.reload_count = 0
         self.start_error = None
 
     def set_profile_change_callback(self, cb):
@@ -84,6 +85,9 @@ class _FakeEngine:
     def stop(self):
         self.stop_count += 1
 
+    def reload_mappings(self):
+        self.reload_count += 1
+
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendDeviceLayoutTests(unittest.TestCase):
@@ -111,6 +115,22 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertFalse(backend.hasInteractiveDeviceLayout)
+
+    def test_apply_window_navigation_preset_to_actions_ring(self):
+        engine = _FakeEngine()
+        backend = self._make_backend(engine=engine)
+
+        with patch("ui.backend.save_config") as save_config:
+            backend.applyGesturePreset("default", "actions_ring", "window_navigation")
+
+        mappings = backend._cfg["profiles"]["default"]["mappings"]
+        self.assertEqual(mappings["actions_ring"], "app_expose")
+        self.assertEqual(mappings["actions_ring_left"], "space_left")
+        self.assertEqual(mappings["actions_ring_right"], "space_right")
+        self.assertEqual(mappings["actions_ring_up"], "none")
+        self.assertEqual(mappings["actions_ring_down"], "none")
+        save_config.assert_called_once()
+        self.assertEqual(engine.reload_count, 1)
 
     def test_device_image_source_uses_encoded_file_url(self):
         backend = self._make_backend(root_dir="/tmp/Mouser Build")
@@ -450,6 +470,14 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(engine.start_count, 1)
         quit_app.assert_not_called()
         self.assertEqual(backend.updateInstallStatus, "error")
+
+    def test_quit_application_requests_qt_quit(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.QCoreApplication.quit") as quit_app:
+            backend.quitApplication()
+
+        quit_app.assert_called_once()
 
     def test_cancel_update_preparation_sets_inline_cancelled_state(self):
         backend = self._make_backend()
@@ -848,6 +876,37 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(backend.screenshotDirectory, "")
         self.assertEqual(backend.screenshotDirectoryLabel, "")
         self.assertFalse(backend.hasCustomScreenshotDirectory)
+
+    def test_close_action_defaults_to_ask(self):
+        backend = self._make_backend()
+
+        self.assertEqual(backend.closeAction, "ask")
+
+    def test_set_close_action_persists_valid_choice(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config") as save_mock,
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=None)
+            backend.setCloseAction("minimize")
+
+        self.assertEqual(backend.closeAction, "minimize")
+        save_mock.assert_called_once()
+
+    def test_set_close_action_rejects_unknown_value(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config") as save_mock,
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=None)
+            backend.setCloseAction("hibernate")
+
+        self.assertEqual(backend.closeAction, "ask")
+        save_mock.assert_not_called()
 
     def test_next_screenshot_file_path_uses_custom_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

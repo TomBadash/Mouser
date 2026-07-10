@@ -447,8 +447,8 @@ Item {
     }
 
     function gestureSummary(key) {
-        // Per-button summary: tap action, or "Swipes configured" when the tap
-        // is Do Nothing but at least one swipe direction is mapped.
+        // Per-button summary: tap action plus an indicator when hold+move
+        // directions are mapped on the same physical button.
         if (!backend.supportsGestureDirections)
             return actionFor(key)
         var tapId = actionFor_id(key)
@@ -456,7 +456,7 @@ Item {
                     || actionFor_id(key + "_right") !== "none"
                     || actionFor_id(key + "_up") !== "none"
                     || actionFor_id(key + "_down") !== "none"
-        if (tapId === "none" && hasSwipe)
+        if (hasSwipe)
             return s["mouse.swipes_configured"] || "Swipes configured"
         return actionFor(key)
     }
@@ -1396,15 +1396,25 @@ Item {
                                     }
                                 }
 
+                                Button {
+                                    width: parent.width
+                                    text: "Window navigation"
+                                    font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                    Material.background: theme.surface
+                                    Material.foreground: theme.textPrimary
+                                    onClicked: backend.applyGesturePreset(
+                                        selectedProfile,
+                                        selectedButton,
+                                        "window_navigation")
+                                }
+
                                 Rectangle {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     height: 1
                                     color: theme.border
                                 }
 
                                 Row {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1427,7 +1437,6 @@ Item {
 
                                 WheelSafeSlider {
                                     id: gestureThresholdSlider
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     from: 20
                                     to: 400
@@ -1455,7 +1464,6 @@ Item {
                                 }
 
                                 Text {
-                                    visible: swipeTapActionId === "none"
                                     text: s["mouse.swipe_actions"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
@@ -1463,7 +1471,6 @@ Item {
                                 }
 
                                 RowLayout {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1498,7 +1505,6 @@ Item {
                                 }
 
                                 RowLayout {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1533,7 +1539,6 @@ Item {
                                 }
 
                                 RowLayout {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1568,7 +1573,6 @@ Item {
                                 }
 
                                 RowLayout {
-                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
