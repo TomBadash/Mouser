@@ -220,7 +220,6 @@ DEVICE_LAYOUTS = {
 # Entries here let per-device keys fall back to the family layout until a
 # dedicated layout is added.  Extend this dict as new devices are cataloged.
 _FAMILY_FALLBACKS = {
-    "mx_master_4": "mx_master",
     "mx_master_3s": "mx_master",
     "mx_master_3": "mx_master",
     "mx_master_2s": "mx_master",

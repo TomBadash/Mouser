@@ -7,8 +7,8 @@ import "Theme.js" as Theme
 ApplicationWindow {
     id: root
     visible: !launchHidden
-    width: 1060
-    height: 700
+    width: 1500
+    height: 800
     minimumWidth: 920
     minimumHeight: 620
     readonly property string versionLabel: "v" + appVersion
@@ -35,6 +35,20 @@ ApplicationWindow {
     property real hoveredNavCenterY: 0
     readonly property bool shortcutsBlocked: aboutDialog.visible
                                             || mousePageView.hasBlockingDialog
+
+    property var navModel: {
+        var items = [
+            { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+            { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
+        ]
+        if (backend.hapticSupported) {
+            items.push({ icon: "circle", tipKey: "nav.haptic_feedback", page: 2 })
+        }
+        if (backend.deviceHasActionsRing && backend.actionsRingActive) {
+            items.push({ icon: "target", tipKey: "nav.actions_ring", page: 3 })
+        }
+        return items
+    }
 
     function openPage(page) {
         if (root.currentPage === page)
@@ -105,10 +119,7 @@ ApplicationWindow {
                     Item { width: 1; height: 18 }
 
                     Repeater {
-                        model: [
-                            { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
-                            { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
-                        ]
+                        model: root.navModel
 
                         delegate: FocusScope {
                             id: navItem
@@ -270,6 +281,14 @@ ApplicationWindow {
             Loader {
                 active: root.currentPage === 1 || item
                 source: "ScrollPage.qml"
+            }
+            Loader {
+                active: (root.currentPage === 2 || item) && backend.hapticSupported
+                source: "HapticPage.qml"
+            }
+            Loader {
+                active: (root.currentPage === 3 || item) && backend.deviceHasActionsRing && backend.actionsRingActive
+                source: "ActionsRingConfig.qml"
             }
         }
     }

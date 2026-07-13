@@ -20,7 +20,8 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe,
+    get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
+    set_button_haptic,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -223,6 +224,8 @@ class Backend(QObject):
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
+    hapticChanged = Signal()
+    forceSensingChanged = Signal()
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
@@ -240,6 +243,8 @@ class Backend(QObject):
     _updateCheckFinishedRequest = Signal(bool, bool, object)
     _updateInstallStateRequest = Signal(str, str, bool)
     _updateInstallProgressRequest = Signal(int)
+    _showRingRequest = Signal(list, bool)
+    _hideRingRequest = Signal()
 
     def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
@@ -292,6 +297,18 @@ class Backend(QObject):
         self._update_timer.setInterval(DEFAULT_AUTO_CHECK_INTERVAL_SECONDS * 1000)
         self._update_timer.timeout.connect(lambda: self._startUpdateCheck(manual=False))
 
+        # Lazily-computed list snapshots for QML bindings. Every read of a
+        # ``@Property(list, ...)`` returns the cached value until the
+        # property's notify signal (or a structurally-dependent signal)
+        # fires and clears it. Without these caches QML repaints rebuild
+        # the lists on every binding evaluation -- profiles re-runs
+        # ``app_catalog`` lookups, knownApps walks the catalog, etc.
+        self._buttons_cache: list | None = None
+        self._profiles_cache: list | None = None
+        self._known_apps_cache: list | None = None
+        self._action_categories_cache: list | None = None
+        self._all_actions_cache: list | None = None
+
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
             self._handleProfileSwitch, Qt.QueuedConnection)
@@ -317,6 +334,23 @@ class Backend(QObject):
             self._handleUpdateInstallState, Qt.QueuedConnection)
         self._updateInstallProgressRequest.connect(
             self._handleUpdateInstallProgress, Qt.QueuedConnection)
+        self._showRingRequest.connect(
+            self._handleShowRing, Qt.QueuedConnection)
+        self._hideRingRequest.connect(
+            self._handleHideRing, Qt.QueuedConnection)
+
+        self._ring_overlay = None  # created lazily on first show
+        self._ring_visible = False  # thread-safe flag (avoids Qt isVisible() off main thread)
+        self._ring_edit_profile = ""  # profile targeted by the ring editor (per-app mode)
+
+        # List-property cache invalidation. Each notify signal maps to the
+        # subset of caches that depends on it; reads after the next emit
+        # rebuild lazily.
+        self.mappingsChanged.connect(self._invalidate_buttons_cache)
+        self.profilesChanged.connect(self._invalidate_profiles_cache)
+        self.activeProfileChanged.connect(self._invalidate_profiles_cache)
+        self.knownAppsChanged.connect(self._invalidate_known_apps_cache)
+        self.deviceLayoutChanged.connect(self._invalidate_device_dependent_caches)
 
         # Wire engine callbacks
         if engine:
@@ -335,6 +369,12 @@ class Backend(QObject):
                 engine.set_status_callback(self._onEngineStatusMessage)
             if hasattr(engine, "set_debug_enabled"):
                 engine.set_debug_enabled(self.debugMode)
+            if hasattr(engine, "set_ring_show_callback"):
+                engine.set_ring_show_callback(self._onEngineShowRing)
+                engine.set_ring_hide_callback(self._onEngineHideRing)
+                engine.set_ring_sector_callback(self._getRingCurrentSector)
+            if hasattr(engine, "set_ring_move_callback"):
+                engine.set_ring_move_callback(self._onEngineRingMove)
             self._mouse_connected = bool(getattr(engine, "device_connected", False))
             self._hid_features_ready = bool(
                 getattr(engine, "hid_features_ready", False)
@@ -369,7 +409,20 @@ class Backend(QObject):
 
     @Property(list, notify=mappingsChanged)
     def buttons(self):
-        """List of button dicts for the active profile, filtered by device."""
+        """List of button dicts for the active profile, filtered by device.
+
+        Cached -- invalidated by ``mappingsChanged`` (active-profile
+        mappings) and ``deviceLayoutChanged`` (effective supported-button
+        set). The QML mappings list binds to ``backend.buttons`` and
+        re-evaluates on every paint of the row delegate, so without the
+        cache this rebuilt a list of ~10 dicts and a per-button
+        ``_action_label`` lookup on every frame the user scrolled.
+        """
+        if self._buttons_cache is None:
+            self._buttons_cache = self._compute_buttons()
+        return self._buttons_cache
+
+    def _compute_buttons(self):
         mappings = get_active_mappings(self._cfg)
         device_buttons = set(
             self._effective_supported_buttons or BUTTON_NAMES.keys()
@@ -390,6 +443,24 @@ class Backend(QObject):
             })
         return result
 
+    def _invalidate_buttons_cache(self) -> None:
+        self._buttons_cache = None
+
+    def _invalidate_profiles_cache(self) -> None:
+        self._profiles_cache = None
+
+    def _invalidate_known_apps_cache(self) -> None:
+        self._known_apps_cache = None
+
+    def _invalidate_device_dependent_caches(self) -> None:
+        # ``buttons`` depends on ``_effective_supported_buttons`` and
+        # ``actionCategories`` / ``allActions`` depend on the hidden-action
+        # filter that is itself derived from the layout. A device swap
+        # invalidates all three at once.
+        self._buttons_cache = None
+        self._action_categories_cache = None
+        self._all_actions_cache = None
+
     def _hidden_actions(self):
         """Return set of action IDs to hide based on effective device buttons."""
         btns = self._effective_supported_buttons
@@ -397,11 +468,24 @@ class Backend(QObject):
         if btns and "mode_shift" not in btns:
             hidden.add("toggle_smart_shift")
             hidden.add("switch_scroll_mode")
+        if sys.platform == "darwin":
+            hidden.update(("win_d", "task_view"))
         return hidden
 
     @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
-        """Actions grouped by category, filtered by device capabilities."""
+        """Actions grouped by category, filtered by device capabilities.
+
+        Cached -- invalidated by ``deviceLayoutChanged``. The grouped
+        structure is rebuilt across the whole ``ACTIONS`` registry on
+        every read; the QML action picker binds to this property and
+        rebuilt it on every focus/visibility change before the cache.
+        """
+        if self._action_categories_cache is None:
+            self._action_categories_cache = self._compute_action_categories()
+        return self._action_categories_cache
+
+    def _compute_action_categories(self):
         from collections import OrderedDict
         hidden = self._hidden_actions()
         cats = OrderedDict()
@@ -425,7 +509,15 @@ class Backend(QObject):
 
     @Property(list, notify=deviceLayoutChanged)
     def allActions(self):
-        """Flat sorted action list (Do Nothing first), filtered by device."""
+        """Flat sorted action list (Do Nothing first), filtered by device.
+
+        Cached -- invalidated by ``deviceLayoutChanged``.
+        """
+        if self._all_actions_cache is None:
+            self._all_actions_cache = self._compute_all_actions()
+        return self._all_actions_cache
+
+    def _compute_all_actions(self):
         hidden = self._hidden_actions()
         result = []
         none_data = ACTIONS.get("none")
@@ -501,6 +593,195 @@ class Backend(QObject):
         """Whether the effective device has a mode_shift button (SmartShift)."""
         btns = self._effective_supported_buttons
         return btns is None or "mode_shift" in btns
+
+    @Property(bool, notify=deviceLayoutChanged)
+    def deviceHasActionsRing(self):
+        """Whether the effective device has an Actions Ring button."""
+        btns = self._effective_supported_buttons
+        return btns is not None and "actions_ring" in btns
+
+    @Property(bool, notify=mappingsChanged)
+    def actionsRingActive(self):
+        """Whether the current profile has the ring action assigned to any button."""
+        mappings = get_active_mappings(self._cfg)
+        return any(
+            v == "activate_actions_ring"
+            for v in mappings.values() if isinstance(v, str)
+        )
+
+    @Property(int, notify=settingsChanged)
+    def actionsRingHoldMs(self):
+        return int(self._cfg.get("settings", {}).get("actions_ring_hold_ms", 250))
+
+    @Slot(int)
+    def setActionsRingHoldMs(self, ms):
+        ms = max(100, min(500, ms))
+        self._cfg.setdefault("settings", {})["actions_ring_hold_ms"] = ms
+        save_config(self._cfg)
+        self.settingsChanged.emit()
+        if self._engine:
+            self._engine.reload_mappings()
+
+    @Property(bool, notify=mappingsChanged)
+    def actionsRingUseGlobal(self):
+        """True when one shared ring is used for every app (default)."""
+        return bool(self._cfg.get("settings", {}).get(
+            "actions_ring_use_global", True))
+
+    @Slot(bool)
+    def setActionsRingUseGlobal(self, use_global):
+        self._cfg.setdefault("settings", {})["actions_ring_use_global"] = bool(use_global)
+        save_config(self._cfg)
+        self.mappingsChanged.emit()
+        if self._engine:
+            self._engine.reload_mappings()
+
+    @Property(str, notify=mappingsChanged)
+    def ringEditProfile(self):
+        """Profile the ring editor targets in per-app mode (defaults to active)."""
+        return self._ring_edit_profile or self._cfg.get("active_profile", "default")
+
+    @Slot(str)
+    def setRingEditProfile(self, name):
+        self._ring_edit_profile = name or ""
+        self.mappingsChanged.emit()
+
+    def _ring_slots_target_mappings(self):
+        """Mappings dict the ring editor reads/writes in per-app mode (the
+        selected profile, falling back to Default), created if absent."""
+        name = self._ring_edit_profile or self._cfg.get("active_profile", "default")
+        prof = self._cfg.get("profiles", {}).get(name)
+        if prof is None:
+            prof = self._cfg.get("profiles", {}).setdefault("default", {})
+        return prof.setdefault("mappings", {})
+
+    @Property(list, notify=mappingsChanged)
+    def actionsRingSlots(self):
+        if self.actionsRingUseGlobal:
+            return list(self._cfg.get("settings", {}).get("actions_ring_slots", []))
+        return list(self._ring_slots_target_mappings().get("actions_ring_slots", []))
+
+    @Slot(list)
+    def setActionsRingSlots(self, slots):
+        if self.actionsRingUseGlobal:
+            self._cfg.setdefault("settings", {})["actions_ring_slots"] = list(slots)
+        else:
+            self._ring_slots_target_mappings()["actions_ring_slots"] = list(slots)
+        save_config(self._cfg)
+        self.mappingsChanged.emit()
+        if self._engine:
+            self._engine.reload_mappings()
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
+    def hapticSupported(self):
+        return self._engine.haptic_supported if self._engine else False
+
+    @Property(int, notify=hapticChanged)
+    def hapticLevel(self):
+        return int(self._cfg.get("settings", {}).get("haptic_level", 2))
+
+    @Property(bool, notify=hapticChanged)
+    def hapticEnabled(self):
+        return bool(self._cfg.get("settings", {}).get("haptic_enabled", True))
+
+    @Property(list, notify=hapticChanged)
+    def hapticEnabledActions(self):
+        """Actions in the user's haptic allowlist, in stored order."""
+        enabled = self._cfg.get("settings", {}).get("action_haptic", [])
+        result = []
+        for aid in enabled:
+            data = ACTIONS.get(aid)
+            if data:
+                result.append({"id": aid, "label": data["label"]})
+        return result
+
+    @Property(list, notify=hapticChanged)
+    def hapticAvailableActions(self):
+        """Eligible haptic actions the user has NOT yet enabled."""
+        enabled = set(self._cfg.get("settings", {}).get("action_haptic", []))
+        result = []
+        for aid in HAPTIC_ELIGIBLE_ACTIONS:
+            if aid in enabled:
+                continue
+            data = ACTIONS.get(aid)
+            if data:
+                result.append({"id": aid, "label": data["label"]})
+        return result
+
+    _HAPTIC_BUTTON_EXCLUDE = {"hscroll_left", "hscroll_right"}
+
+    @Property(list, notify=hapticChanged)
+    def hapticEnabledButtons(self):
+        """Buttons in the per-button haptic allowlist, in stored order."""
+        enabled = self._cfg.get("settings", {}).get("button_haptic", [])
+        result = []
+        for key in enabled:
+            if key in self._HAPTIC_BUTTON_EXCLUDE:
+                continue
+            label = BUTTON_NAMES.get(key)
+            if label:
+                result.append({"key": key, "label": label})
+        return result
+
+    @Property(list, notify=hapticChanged)
+    def hapticAvailableButtons(self):
+        """Device buttons the user has NOT yet added to the haptic allowlist."""
+        enabled = set(self._cfg.get("settings", {}).get("button_haptic", []))
+        supported = self._effective_supported_buttons or set(BUTTON_NAMES.keys())
+        result = []
+        for key, label in BUTTON_NAMES.items():
+            if key in enabled or key not in supported or key in self._HAPTIC_BUTTON_EXCLUDE:
+                continue
+            result.append({"key": key, "label": label})
+        return result
+
+    @Property(bool, notify=hapticChanged)
+    def hapticDedup(self):
+        return bool(self._cfg.get("settings", {}).get("haptic_dedup", True))
+
+    @Property(bool, notify=hapticChanged)
+    def actionsRingHoverHaptic(self):
+        return bool(self._cfg.get("settings", {}).get(
+            "actions_ring_hover_haptic", True))
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
+    def forceSensingSupported(self):
+        return self._engine.force_sensing_supported if self._engine else False
+
+    @Property(int, notify=hidFeaturesReadyChanged)
+    def forceSensingMin(self):
+        if self._engine:
+            rng = self._engine.force_sensing_range
+            if rng:
+                return rng[0]
+        return 0
+
+    @Property(int, notify=hidFeaturesReadyChanged)
+    def forceSensingMax(self):
+        if self._engine:
+            rng = self._engine.force_sensing_range
+            if rng:
+                return rng[1]
+        return 100
+
+    @Property(int, notify=hidFeaturesReadyChanged)
+    def forceSensingDefault(self):
+        if self._engine:
+            rng = self._engine.force_sensing_range
+            if rng:
+                return rng[2]
+        return 50
+
+    @Property(int, notify=forceSensingChanged)
+    def forceSensitivity(self):
+        saved = self._cfg.get("settings", {}).get("force_sensitivity")
+        if saved is not None:
+            return int(saved)
+        if self._engine:
+            rng = self._engine.force_sensing_range
+            if rng and len(rng) >= 4:
+                return rng[3]
+        return 50
 
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
@@ -734,6 +1015,20 @@ class Backend(QObject):
 
     @Property(list, notify=profilesChanged)
     def profiles(self):
+        """Profile snapshots for the QML profile selector.
+
+        Cached -- invalidated by ``profilesChanged`` (catalog churn) and
+        ``activeProfileChanged`` (the ``isActive`` flag per row). The
+        compute path walks every profile's apps and resolves each through
+        ``get_icon_for_exe`` and ``app_catalog.get_app_label`` -- both
+        non-trivial in a profile with several apps, so rebuilding on
+        every QML read was the worst per-paint allocator in this file.
+        """
+        if self._profiles_cache is None:
+            self._profiles_cache = self._compute_profiles()
+        return self._profiles_cache
+
+    def _compute_profiles(self):
         result = []
         active = self._cfg.get("active_profile", "default")
         for pname, pdata in self._cfg.get("profiles", {}).items():
@@ -750,6 +1045,17 @@ class Backend(QObject):
 
     @Property(list, notify=knownAppsChanged)
     def knownApps(self):
+        """Catalog snapshot for the QML known-apps picker.
+
+        Cached -- invalidated by ``knownAppsChanged``. The catalog itself
+        is essentially static for a session, so this is the highest-hit
+        memoization target of the five.
+        """
+        if self._known_apps_cache is None:
+            self._known_apps_cache = self._compute_known_apps()
+        return self._known_apps_cache
+
+    def _compute_known_apps(self):
         result = []
         for entry in app_catalog.get_app_catalog():
             icon = get_icon_for_exe(entry.get("path", ""))
@@ -1348,6 +1654,83 @@ class Backend(QObject):
     def setSmartShiftThreshold(self, threshold):
         self._applySmartShift(threshold=threshold)
 
+    @Slot(int)
+    def setHapticLevel(self, level):
+        level = max(0, min(3, int(level)))
+        self._cfg.setdefault("settings", {})["haptic_level"] = level
+        save_config(self._cfg)
+        self.hapticChanged.emit()
+        if self._engine:
+            import threading
+            threading.Thread(
+                target=lambda: self._engine.set_haptic_level(level),
+                daemon=True, name="SetHapticLevel"
+            ).start()
+
+    @Slot(bool)
+    def setHapticEnabled(self, enabled):
+        self._cfg.setdefault("settings", {})["haptic_enabled"] = bool(enabled)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot()
+    def playHapticTest(self):
+        if self._engine:
+            import threading
+            threading.Thread(
+                target=lambda: self._engine.play_haptic_waveform(0),
+                daemon=True, name="HapticTest"
+            ).start()
+
+    @Slot(str, bool)
+    def setActionHaptic(self, action_id, enabled):
+        """Toggle whether an action fires haptic feedback on button press."""
+        self._cfg = set_action_haptic(self._cfg, action_id, bool(enabled))
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot(str, bool)
+    def setButtonHaptic(self, button_key, enabled):
+        """Toggle whether a physical button fires haptic feedback on press."""
+        self._cfg = set_button_haptic(self._cfg, button_key, bool(enabled))
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot(bool)
+    def setHapticDedup(self, enabled):
+        """Set whether overlapping haptic pulses are deduplicated."""
+        self._cfg.setdefault("settings", {})["haptic_dedup"] = bool(enabled)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot(bool)
+    def setActionsRingHoverHaptic(self, enabled):
+        """Set whether landing on a ring slot fires haptic feedback."""
+        self._cfg.setdefault("settings", {})["actions_ring_hover_haptic"] = bool(enabled)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot(int)
+    def setForceSensitivity(self, value):
+        value = int(value)
+        self._cfg.setdefault("settings", {})["force_sensitivity"] = value
+        save_config(self._cfg)
+        self.forceSensingChanged.emit()
+        if self._engine:
+            import threading
+            threading.Thread(
+                target=lambda: self._engine.set_force_sensitivity(value),
+                daemon=True, name="SetForceSensitivity"
+            ).start()
+
     @Slot(bool)
     def setInvertVScroll(self, value):
         value = bool(value)
@@ -1705,6 +2088,72 @@ class Backend(QObject):
         if message:
             self.statusMessage.emit(message)
 
+    # ── Actions Ring overlay ────────────────────────────────────
+
+    def _onEngineShowRing(self, slots, interactive=False):
+        """Called from hook/timer thread — posts to Qt main thread."""
+        from core.key_simulator import ACTIONS
+        from ui.actions_ring_overlay import _resolve_ring_label
+        labels = [_resolve_ring_label(s, ACTIONS.get(s, {}).get("label", s))
+                  for s in slots]
+        self._showRingRequest.emit(labels, bool(interactive))
+
+    def _onEngineHideRing(self):
+        """Called from hook/timer thread — posts to Qt main thread."""
+        self._hideRingRequest.emit()
+
+    def _onEngineRingMove(self, dx, dy):
+        """Called from HID thread — forward rawXY deltas to overlay."""
+        overlay = self._ring_overlay
+        if overlay and self._ring_visible:
+            overlay.accumulate_rawxy(dx, dy)
+
+    def _getRingCurrentSector(self):
+        """Called from hook thread at button-up — reads Python attr, not Qt C++."""
+        overlay = self._ring_overlay
+        if overlay and self._ring_visible:
+            return overlay._highlighted_sector
+        return -1
+
+    @Slot(list, bool)
+    def _handleShowRing(self, labels, interactive):
+        """Runs on Qt main thread — create/show overlay."""
+        from PySide6.QtGui import QCursor
+        from ui.actions_ring_overlay import ActionsRingOverlay
+        if self._ring_overlay is None:
+            self._ring_overlay = ActionsRingOverlay()
+            self._ring_overlay.action_selected.connect(self._onRingActionSelected)
+            self._ring_overlay.cancelled.connect(self._onRingCancelled)
+            self._ring_overlay.sector_changed.connect(self._onRingSectorChanged)
+        pos = QCursor.pos()
+        self._ring_overlay.show_ring(pos.x(), pos.y(), labels, interactive=interactive)
+        self._ring_visible = True
+
+    @Slot()
+    def _handleHideRing(self):
+        """Runs on Qt main thread — hide overlay."""
+        self._ring_visible = False
+        if self._ring_overlay:
+            self._ring_overlay.hide_ring()
+
+    @Slot(int)
+    def _onRingActionSelected(self, sector):
+        """Overlay click on a sector in toggle mode."""
+        if self._engine:
+            self._engine.ring_toggle_select(sector)
+
+    @Slot()
+    def _onRingCancelled(self):
+        """Overlay click on center X or outside ring in toggle mode."""
+        if self._engine:
+            self._engine.ring_toggle_dismiss()
+
+    @Slot(int)
+    def _onRingSectorChanged(self, sector):
+        """Cursor moved onto a new ring slot -- fire hover haptic."""
+        if self._engine:
+            self._engine.ring_hover(sector)
+
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):
         """Runs on Qt main thread."""
@@ -1716,10 +2165,31 @@ class Backend(QObject):
 
     @Slot(int)
     def _handleDpiRead(self, dpi):
-        """Runs on Qt main thread."""
-        self._cfg.setdefault("settings", {})["dpi"] = dpi
+        """Runs on Qt main thread.
+
+        A device-reported DPI is authoritative for "what the hardware is
+        currently set to" -- the user expects Mouser to keep showing the
+        same value across restarts rather than reverting to a stale
+        preference whenever the engine reads the device. Clamp the
+        incoming value, persist it, and keep the engine's cached config
+        in sync so subsequent reads do not loop through a stale picture.
+
+        Skip the engine push (``set_dpi``) here: this handler is reacting
+        to a value the device already reports, so echoing it back would
+        be a redundant HID round-trip.
+        """
+        device = self._resolved_connected_device()
+        clamped = clamp_dpi(dpi, device)
+        settings = self._cfg.setdefault("settings", {})
+        if settings.get("dpi") == clamped:
+            self.dpiFromDevice.emit(clamped)
+            return
+        settings["dpi"] = clamped
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
         self.settingsChanged.emit()
-        self.dpiFromDevice.emit(dpi)
+        self.dpiFromDevice.emit(clamped)
 
     @Slot(bool)
     def _handleConnectionChange(self, connected):
@@ -1743,6 +2213,7 @@ class Backend(QObject):
             self.batteryLevelChanged.emit()
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
+            self.forceSensingChanged.emit()
         if connected != previous_connected:
             self.mouseConnectedChanged.emit()
             self._append_debug_line(
@@ -1814,6 +2285,7 @@ class Backend(QObject):
         ) if self._engine else False
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
+            self.forceSensingChanged.emit()
         self._connected_device_refresh_attempts += 1
         self._sync_connected_device_info()
 

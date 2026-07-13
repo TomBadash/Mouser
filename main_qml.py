@@ -964,14 +964,28 @@ def _runtime_launch_path() -> str:
 
 
 def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
-    if not accessibility_granted:
-        print("[Mouser] Engine not started -- Accessibility permission is required")
-        return False
-    QTimer.singleShot(0, lambda: (
-        engine.start(),
-        print("[Mouser] Engine started -- remapping is active"),
-    ))
-    return True
+    if accessibility_granted:
+        QTimer.singleShot(0, lambda: (
+            engine.start(),
+            print("[Mouser] Engine started -- remapping is active"),
+        ))
+        return True
+
+    print("[Mouser] Engine not started -- waiting for Accessibility permission")
+    timer = QTimer()
+    timer.setInterval(2000)
+
+    def _poll_accessibility():
+        if is_process_trusted():
+            timer.stop()
+            engine.start()
+            print("[Mouser] Accessibility granted -- engine started")
+
+    timer.timeout.connect(_poll_accessibility)
+    timer.start()
+    # prevent GC of the timer
+    engine._accessibility_poll_timer = timer
+    return False
 
 
 def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
