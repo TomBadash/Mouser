@@ -44,7 +44,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
@@ -65,9 +65,14 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["settings"]["update_check_state"], {})
         self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertNotIn("start_with_windows", migrated["settings"])
+        # Ring activation lands on the Sense Panel (actions_ring), and the thumb
+        # Gesture button is left untouched by migration (defaults to "none").
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
             "activate_actions_ring",
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture"], "none"
         )
         for key in config.GESTURE_DIRECTION_BUTTONS:
             self.assertEqual(
@@ -94,7 +99,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 10)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
@@ -168,7 +173,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
-        self.assertEqual(loaded["version"], 20)
+        self.assertEqual(loaded["version"], 10)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertEqual(loaded["settings"]["action_haptic"], [])
         self.assertTrue(loaded["settings"]["haptic_enabled"])
@@ -201,46 +206,108 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(legacy)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 10)
         self.assertTrue(migrated["settings"]["start_at_login"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["mode_shift"],
             "switch_scroll_mode",
         )
 
-    def test_migrate_v8_to_v9_adds_actions_ring_and_haptic(self):
-        v8_cfg = {
-            "version": 8,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {
-                        "middle": "none",
-                        "mode_shift": "switch_scroll_mode",
-                    },
-                }
-            },
-            "settings": {"dpi": 1000},
-        }
+    # The MX Master 4 branch squashes every pre-release schema step (old
+    # versions 10-20) into a single v9 -> v10 migration. These tests exercise
+    # the real upgrade path from the last public release forward.
 
-        migrated = config._migrate(v8_cfg)
+    # Verbatim copy of the config.json shipped with the latest public release
+    # (tag v3.6.0, schema version 9). Kept inline so this test pins the true
+    # upgrade path even if DEFAULT_CONFIG changes.
+    _RELEASE_V9_CONFIG = {
+        "version": 9,
+        "active_profile": "default",
+        "profiles": {
+            "default": {
+                "label": "Default (All Apps)",
+                "apps": [],
+                "mappings": {
+                    "middle": "none",
+                    "gesture": "none",
+                    "gesture_left": "none",
+                    "gesture_right": "none",
+                    "gesture_up": "none",
+                    "gesture_down": "none",
+                    "xbutton1": "alt_tab",
+                    "xbutton2": "alt_tab",
+                    "hscroll_left": "browser_back",
+                    "hscroll_right": "browser_forward",
+                    "mode_shift": "switch_scroll_mode",
+                },
+            }
+        },
+        "settings": {
+            "start_minimized": True,
+            "start_at_login": False,
+            "hscroll_threshold": 1,
+            "invert_hscroll": False,
+            "invert_vscroll": False,
+            "dpi": 1000,
+            "smart_shift_mode": "ratchet",
+            "smart_shift_enabled": False,
+            "smart_shift_threshold": 25,
+            "gesture_threshold": 50,
+            "gesture_deadzone": 40,
+            "gesture_timeout_ms": 3000,
+            "gesture_cooldown_ms": 500,
+            "appearance_mode": "system",
+            "debug_mode": False,
+            "device_layout_overrides": {},
+            "language": "en",
+            "ignore_trackpad": True,
+        },
+    }
 
-        self.assertEqual(migrated["version"], 20)
-        # v19→v20 moves the default ring activation to the gesture (sense panel) key.
+    def test_migrate_release_v9_config_to_current_schema(self):
+        """End-to-end: the shipped v3.6.0 (v9) config → current MX4 schema."""
+        migrated = config._migrate(json.loads(json.dumps(self._RELEASE_V9_CONFIG)))
+        mappings = migrated["profiles"]["default"]["mappings"]
+        settings = migrated["settings"]
+
+        self.assertEqual(migrated["version"], 10)
+        # Actions Ring activates from the Sense Panel; the thumb Gesture button
+        # keeps its release value ("none") — migration never reassigns it.
+        self.assertEqual(mappings["actions_ring"], "activate_actions_ring")
+        self.assertEqual(mappings["gesture"], "none")
+        # New MX4 mappings are present.
+        self.assertEqual(mappings["thumb_button"], "none")
         self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "activate_actions_ring",
+            mappings["actions_ring_slots"],
+            config._default_actions_ring_slots(),
         )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
-        )
-        self.assertEqual(migrated["settings"]["haptic_level"], 2)
+        # New settings seeded; hscroll_threshold transformed from 1 -> 0.1.
+        self.assertEqual(settings["hscroll_threshold"], 0.1)
+        self.assertEqual(settings["haptic_level"], 2)
+        self.assertTrue(settings["haptic_enabled"])
+        self.assertEqual(settings["action_haptic"], [])
+        self.assertEqual(settings["button_haptic"], [])
+        self.assertTrue(settings["haptic_dedup"])
+        self.assertIsNone(settings["force_sensitivity"])
+        self.assertEqual(settings["gesture_commit_window_ms"], 400)
         self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
+        # Pre-existing user mappings are preserved.
+        self.assertEqual(mappings["mode_shift"], "switch_scroll_mode")
 
-    def test_migrate_v9_to_v10_adds_gesture_recognizer_params(self):
+    def test_migrate_release_v9_matches_fresh_ring_placement(self):
+        """An upgraded release config and a fresh install agree on where the
+        Actions Ring lives (the Sense Panel), never the thumb Gesture button."""
+        migrated = config._migrate(json.loads(json.dumps(self._RELEASE_V9_CONFIG)))
+        fresh = config.DEFAULT_CONFIG["profiles"]["default"]["mappings"]
+        upgraded = migrated["profiles"]["default"]["mappings"]
+
+        self.assertEqual(fresh["actions_ring"], "activate_actions_ring")
+        self.assertEqual(upgraded["actions_ring"], fresh["actions_ring"])
+        self.assertNotEqual(upgraded["gesture"], "activate_actions_ring")
+
+    def test_migrate_v9_to_v10_preserves_custom_gesture_mapping(self):
+        """A user who customised the thumb Gesture button keeps it, and the ring
+        still lands on the Sense Panel."""
         v9_cfg = {
             "version": 9,
             "active_profile": "default",
@@ -248,7 +315,11 @@ class ConfigMigrationTests(unittest.TestCase):
                 "default": {
                     "label": "Default",
                     "apps": [],
-                    "mappings": {"middle": "none", "actions_ring": "none"},
+                    "mappings": {
+                        "middle": "none",
+                        "gesture": "app_expose",
+                        "actions_ring": "none",
+                    },
                 },
             },
             "settings": {"dpi": 1000, "haptic_level": 2},
@@ -256,57 +327,27 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(v9_cfg)
 
-        self.assertEqual(migrated["version"], 20)
+        self.assertEqual(migrated["version"], 10)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["gesture"], "app_expose"
+        )
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"]["actions_ring"],
+            "activate_actions_ring",
+        )
         self.assertEqual(migrated["settings"]["gesture_commit_window_ms"], 400)
         self.assertEqual(migrated["settings"]["gesture_settle_ms"], 90)
         self.assertEqual(migrated["settings"]["gesture_cross_ratio"], 0.5)
 
-    def test_migrate_v10_to_v11_adds_button_haptic(self):
-        v10_cfg = {
-            "version": 10,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"middle": "none", "actions_ring": "none"},
-                },
-                "work": {
-                    "label": "Work",
-                    "apps": ["Code.exe"],
-                    "mappings": {"middle": "copy", "actions_ring": "none"},
-                },
-            },
-            "settings": {"dpi": 1000, "haptic_level": 2},
-        }
-
-        migrated = config._migrate(v10_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertEqual(migrated["profiles"]["default"]["button_haptic"], {})
-        self.assertEqual(migrated["profiles"]["work"]["button_haptic"], {})
-
-    def test_migrate_v12_to_v13_adds_action_haptic_list(self):
-        v12_cfg = {
-            "version": 12,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"middle": "none", "actions_ring": "none"},
-                }
-            },
-            "settings": {"dpi": 1000, "haptic_level": 2, "haptic_enabled": True},
-        }
-
-        migrated = config._migrate(v12_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertEqual(migrated["settings"]["action_haptic"], [])
-        # existing haptic settings preserved
-        self.assertTrue(migrated["settings"]["haptic_enabled"])
-        self.assertEqual(migrated["settings"]["haptic_level"], 2)
+    def test_migrate_is_idempotent_at_current_version(self):
+        """A config already at the current version is not modified."""
+        current = json.loads(json.dumps(config.DEFAULT_CONFIG))
+        migrated = config._migrate(json.loads(json.dumps(current)))
+        self.assertEqual(migrated["version"], 10)
+        self.assertEqual(
+            migrated["profiles"]["default"]["mappings"],
+            current["profiles"]["default"]["mappings"],
+        )
 
     def test_action_haptic_enabled_returns_false_when_missing(self):
         cfg = {"settings": {"action_haptic": ["cycle_dpi"]}}
@@ -335,250 +376,6 @@ class ConfigMigrationTests(unittest.TestCase):
             # Removing a non-present action is a no-op
             cfg = config.set_action_haptic(cfg, "cycle_dpi", False)
             self.assertEqual(cfg["settings"]["action_haptic"], ["volume_mute"])
-
-    def test_migrate_v13_to_v14_adds_button_haptic_and_dedup(self):
-        v13_cfg = {
-            "version": 13,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"middle": "none", "actions_ring": "none"},
-                }
-            },
-            "settings": {"dpi": 1000, "haptic_level": 2, "haptic_enabled": True,
-                         "action_haptic": ["cycle_dpi"]},
-        }
-
-        migrated = config._migrate(v13_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertEqual(migrated["settings"]["button_haptic"], [])
-        self.assertTrue(migrated["settings"]["haptic_dedup"])
-        # existing settings preserved
-        self.assertEqual(migrated["settings"]["action_haptic"], ["cycle_dpi"])
-        self.assertTrue(migrated["settings"]["haptic_enabled"])
-
-    def test_migrate_v17_to_v18_adds_actions_ring_settings_and_slots(self):
-        v17_cfg = {
-            "version": 17,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {
-                        "middle": "none",
-                        "actions_ring": "none",
-                        "thumb_button": "none",
-                    },
-                },
-                "work": {
-                    "label": "Work",
-                    "apps": ["Code.exe"],
-                    "mappings": {
-                        "middle": "copy",
-                        "actions_ring": "none",
-                    },
-                },
-            },
-            "settings": {"dpi": 1000, "haptic_level": 2},
-        }
-
-        migrated = config._migrate(v17_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertNotIn("actions_ring_mode", migrated["settings"])
-        self.assertEqual(migrated["settings"]["actions_ring_hold_ms"], 250)
-        # v18→v19 converts "ring" mode, v19→v20 moves it to gesture key
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "activate_actions_ring",
-        )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
-        )
-        self.assertEqual(
-            migrated["profiles"]["work"]["mappings"]["gesture"],
-            "activate_actions_ring",
-        )
-        self.assertEqual(
-            migrated["profiles"]["work"]["mappings"]["actions_ring"],
-            "none",
-        )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring_slots"],
-            ["screenshot_fullscreen", "play_pause", "show_desktop", "lock_screen"],
-        )
-        self.assertEqual(
-            migrated["profiles"]["work"]["mappings"]["actions_ring_slots"],
-            ["screenshot_fullscreen", "play_pause", "show_desktop", "lock_screen"],
-        )
-        # existing settings preserved
-        self.assertEqual(migrated["settings"]["dpi"], 1000)
-        self.assertEqual(migrated["settings"]["haptic_level"], 2)
-
-    def test_migrate_v17_to_v18_preserves_existing_slots(self):
-        v17_cfg = {
-            "version": 17,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {
-                        "middle": "none",
-                        "actions_ring_slots": ["volume_mute", "next_track"],
-                    },
-                }
-            },
-            "settings": {"actions_ring_mode": "pie"},
-        }
-
-        migrated = config._migrate(v17_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        # setdefault must not overwrite pre-existing values
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring_slots"],
-            ["volume_mute", "next_track"],
-        )
-        # v18→v19 pops actions_ring_mode regardless of value
-        self.assertNotIn("actions_ring_mode", migrated["settings"])
-
-    def test_migrate_v18_to_v19_ring_mode_becomes_mapping(self):
-        v18_cfg = {
-            "version": 18,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"actions_ring": "none"},
-                }
-            },
-            "settings": {"actions_ring_mode": "ring"},
-        }
-
-        migrated = config._migrate(v18_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertNotIn("actions_ring_mode", migrated["settings"])
-        # v18→v19 sets actions_ring to activate, v19→v20 moves it to gesture
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "activate_actions_ring",
-        )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
-        )
-
-    def test_migrate_v18_to_v19_disabled_mode_sets_none(self):
-        v18_cfg = {
-            "version": 18,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"actions_ring": "play_pause"},
-                }
-            },
-            "settings": {"actions_ring_mode": "disabled"},
-        }
-
-        migrated = config._migrate(v18_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertNotIn("actions_ring_mode", migrated["settings"])
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
-        )
-
-    def test_migrate_v18_to_v19_simple_mode_preserves_mapping(self):
-        v18_cfg = {
-            "version": 18,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {"actions_ring": "play_pause"},
-                }
-            },
-            "settings": {"actions_ring_mode": "simple"},
-        }
-
-        migrated = config._migrate(v18_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertNotIn("actions_ring_mode", migrated["settings"])
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "play_pause",
-        )
-
-    def test_migrate_v19_to_v20_moves_actions_ring_to_gesture(self):
-        v19_cfg = {
-            "version": 19,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {
-                        "actions_ring": "activate_actions_ring",
-                        "gesture": "none",
-                    },
-                }
-            },
-            "settings": {},
-        }
-
-        migrated = config._migrate(v19_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "activate_actions_ring",
-        )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "none",
-        )
-
-    def test_migrate_v19_to_v20_skips_when_gesture_already_assigned(self):
-        v19_cfg = {
-            "version": 19,
-            "active_profile": "default",
-            "profiles": {
-                "default": {
-                    "label": "Default",
-                    "apps": [],
-                    "mappings": {
-                        "actions_ring": "activate_actions_ring",
-                        "gesture": "play_pause",
-                    },
-                }
-            },
-            "settings": {},
-        }
-
-        migrated = config._migrate(v19_cfg)
-
-        self.assertEqual(migrated["version"], 20)
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["gesture"],
-            "play_pause",
-        )
-        self.assertEqual(
-            migrated["profiles"]["default"]["mappings"]["actions_ring"],
-            "activate_actions_ring",
-        )
 
     def test_button_haptic_enabled_returns_false_when_not_listed(self):
         cfg = {"settings": {"button_haptic": ["middle"]}}
@@ -683,6 +480,106 @@ class ConfigMigrationTests(unittest.TestCase):
                 ),
                 "firefox",
             )
+
+
+class DefaultActionValidityTests(unittest.TestCase):
+    """Every non-custom action referenced by the default config must exist in
+    the target platform's ACTIONS table, or fresh installs get dead buttons."""
+
+    @staticmethod
+    def _actions_by_platform():
+        """Parse each platform's ACTIONS keys from key_simulator source, so the
+        check covers Windows/Linux even when run on a macOS host (the module
+        only loads the current platform's table at import)."""
+        import re
+        from pathlib import Path
+
+        src = Path("core/key_simulator.py").read_text(encoding="utf-8").splitlines()
+        bounds = []
+        for i, line in enumerate(src, start=1):
+            if re.match(r'if sys\.platform == "win32":', line):
+                bounds.append(("win32", i))
+            elif re.match(r'elif sys\.platform == "darwin":', line):
+                bounds.append(("darwin", i))
+            elif re.match(r'elif sys\.platform == "linux":', line):
+                bounds.append(("linux", i))
+            elif re.match(r"else:", line) and len(bounds) == 3:
+                bounds.append(("stub", i))
+
+        def keys_in(start, end):
+            in_actions = False
+            depth = 0
+            keys = []
+            for idx in range(start - 1, end - 1):
+                line = src[idx]
+                if re.match(r"\s*ACTIONS\s*=\s*\{", line):
+                    in_actions = True
+                    depth = line.count("{") - line.count("}")
+                    continue
+                if in_actions:
+                    depth += line.count("{") - line.count("}")
+                    m = re.match(r'        "([a-z_]+)"\s*:', line)
+                    if m and depth >= 1:
+                        keys.append(m.group(1))
+                    if depth <= 0:
+                        break
+            return set(keys)
+
+        ends = [
+            bounds[i + 1][1] if i + 1 < len(bounds) else len(src)
+            for i in range(len(bounds))
+        ]
+        return {name: keys_in(start, end) for (name, start), end in zip(bounds, ends)}
+
+    def test_platform_default_mappings_exist_on_every_platform(self):
+        tables = self._actions_by_platform()
+        self.assertTrue(tables.get("win32") and tables.get("darwin") and tables.get("linux"))
+        for platform in ("win32", "darwin", "linux"):
+            valid = tables[platform]
+            gesture = config._default_gesture_action(platform)
+            self.assertIn(
+                gesture, valid,
+                f"default gesture {gesture!r} missing from {platform} ACTIONS",
+            )
+            for slot in config._default_actions_ring_slots(platform):
+                self.assertIn(
+                    slot, valid,
+                    f"default ring slot {slot!r} missing from {platform} ACTIONS",
+                )
+
+    def test_default_ring_slots_have_short_labels(self):
+        # The overlay falls back to a raw/truncated id when a slot has no
+        # RING_LABEL_MAP entry — the exact problem flagged for the defaults.
+        from ui.actions_ring_overlay import RING_LABEL_MAP
+
+        for platform in ("win32", "darwin", "linux"):
+            for slot in config._default_actions_ring_slots(platform):
+                self.assertIn(
+                    slot, RING_LABEL_MAP,
+                    f"ring slot {slot!r} has no short label; the overlay would "
+                    f"show a raw id on {platform}",
+                )
+
+    def test_default_config_actions_valid_on_current_platform(self):
+        from core import key_simulator
+
+        valid = set(key_simulator.ACTIONS.keys())
+        mappings = config.DEFAULT_CONFIG["profiles"]["default"]["mappings"]
+        for key, value in mappings.items():
+            if key == "actions_ring_slots":
+                candidates = value
+            elif isinstance(value, str):
+                candidates = [value]
+            else:
+                continue
+            for action in candidates:
+                if action == "none" or action.startswith("custom:"):
+                    continue
+                self.assertIn(
+                    action, valid,
+                    f"DEFAULT_CONFIG action {action!r} (key {key!r}) missing from "
+                    f"the {config.sys.platform} ACTIONS table",
+                )
 
 
 class SaveConfigTests(unittest.TestCase):

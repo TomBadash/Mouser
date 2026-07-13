@@ -146,8 +146,24 @@ BUTTON_HOLD_EVENTS = {
     "actions_ring": ("sense_button_down", "sense_button_up"),
 }
 
+# Several native actions (app_expose, mission_control, show_desktop, launchpad)
+# exist only in the macOS ACTIONS table. DEFAULT_CONFIG is shared across all
+# platforms, so the platform-varying defaults are built per OS to avoid seeding
+# Windows/Linux installs with actions their key simulator cannot execute.
+def _default_gesture_action(platform=None):
+    platform = platform or sys.platform
+    return "app_expose" if platform == "darwin" else "task_view"
+
+
+def _default_actions_ring_slots(platform=None):
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return ["mission_control", "play_pause", "show_desktop", "launchpad"]
+    return ["task_view", "play_pause", "win_d", "screenshot_region_clip"]
+
+
 DEFAULT_CONFIG = {
-    "version": 20,
+    "version": 10,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -155,8 +171,9 @@ DEFAULT_CONFIG = {
             "apps": [],          # empty = all apps (fallback profile)
             "mappings": {
                 "middle": "none",
-                # Gesture button (thumb) — App Exposé by default on the MX4.
-                "gesture": "app_expose",
+                # Gesture button (thumb) — app overview by default on the MX4
+                # (App Exposé on macOS, Task View elsewhere).
+                "gesture": _default_gesture_action(),
                 "gesture_left": "none",
                 "gesture_right": "none",
                 "gesture_up": "none",
@@ -173,10 +190,7 @@ DEFAULT_CONFIG = {
                 "actions_ring_up": "none",
                 "actions_ring_down": "none",
                 "thumb_button": "none",
-                "actions_ring_slots": [
-                    "mission_control", "play_pause",
-                    "show_desktop", "launchpad",
-                ],
+                "actions_ring_slots": _default_actions_ring_slots(),
             },
             "button_haptic": {},  # per-button haptic override; absent key = enabled (True)
         }
@@ -552,93 +566,51 @@ def _migrate(cfg):
         cfg["version"] = 9
 
     if version < 10:
-        # v9 -> v10: gesture recognizer rewrite — add stroke-aware params.
+        # v9 -> v10: MX Master 4 schema.
+        #
+        # v9 was the last public release. Everything above it was developed on
+        # the MX Master 4 branch and never shipped, so the entire pre-release
+        # chain (unreleased schema versions 10-20) is squashed into this single
+        # step. Anyone running an intermediate pre-release build should reset
+        # their config; see the PR notes.
         settings = cfg.setdefault("settings", {})
+        # Stroke-aware gesture recognizer params.
         settings.setdefault("gesture_commit_window_ms", 400)
         settings.setdefault("gesture_settle_ms", 90)
         settings.setdefault("gesture_cross_ratio", 0.5)
-        cfg["version"] = 10
-
-    if version < 11:
-        # v10 -> v11: MX4 dual-CID model — wheel_divert + thumb_button.
-        settings = cfg.setdefault("settings", {})
+        # Dual-CID model: firmware wheel divert.
         settings.setdefault("wheel_divert", WHEEL_DIVERT_DEFAULT)
+        # Haptic feedback: level, global toggle, allowlists, dedup.
+        settings.setdefault("haptic_level", 2)
+        settings.setdefault("haptic_enabled", True)
+        settings.setdefault("action_haptic", [])
+        settings.setdefault("button_haptic", [])
+        settings.setdefault("haptic_dedup", True)
+        # Force-sensing button sensitivity (None = device default).
+        settings.setdefault("force_sensitivity", None)
+        # Actions Ring overlay hold threshold.
+        settings.setdefault("actions_ring_hold_ms", 250)
+        # hscroll_threshold moved from the old integer default (1) to 0.1.
+        if settings.get("hscroll_threshold") == 1:
+            settings["hscroll_threshold"] = 0.1
+        # The Actions Ring overlay lived behind a transient "actions_ring_mode"
+        # setting on some pre-release builds; fold it into the actions_ring
+        # mapping. Ring activation lives on the Sense Panel (config key
+        # "actions_ring"), NOT the thumb Gesture button (config key "gesture").
+        old_mode = settings.pop("actions_ring_mode", "ring")
         for pdata in cfg.get("profiles", {}).values():
             mappings = pdata.setdefault("mappings", {})
             mappings.setdefault("thumb_button", "none")
-        cfg["version"] = 11
-
-    if version < 12:
-        # v11 -> v12: add per-button haptic override dict to each profile.
-        for pdata in cfg.get("profiles", {}).values():
+            mappings.setdefault("actions_ring_slots", _default_actions_ring_slots())
+            # The v8->v9 step seeds actions_ring="none"; overwrite it so the ring
+            # is activated from the Sense Panel by default. "disabled" turns it
+            # off; "simple" keeps any real action the user already assigned.
+            if old_mode == "disabled":
+                mappings["actions_ring"] = "none"
+            elif old_mode != "simple":
+                mappings["actions_ring"] = "activate_actions_ring"
             pdata.setdefault("button_haptic", {})
-        cfg["version"] = 12
-
-    if version < 13:
-        # v12 -> v13: add global haptic enabled flag.
-        cfg.setdefault("settings", {}).setdefault("haptic_enabled", True)
-        cfg["version"] = 13
-
-    if version < 14:
-        # v13 -> v14: add per-action haptic allowlist (empty = opt-in).
-        cfg.setdefault("settings", {}).setdefault("action_haptic", [])
-        cfg["version"] = 14
-
-    if version < 15:
-        # v14 -> v15: add per-button haptic allowlist and dedup flag.
-        s = cfg.setdefault("settings", {})
-        s.setdefault("button_haptic", [])
-        s.setdefault("haptic_dedup", True)
-        cfg["version"] = 15
-
-    if version < 16:
-        # v15 -> v16: add force sensing button sensitivity (None = device default).
-        cfg.setdefault("settings", {}).setdefault("force_sensitivity", None)
-        cfg["version"] = 16
-
-    if version < 17:
-        # v16 -> v17: migrate hscroll_threshold from old default (int 1) to 0.1.
-        s = cfg.setdefault("settings", {})
-        if s.get("hscroll_threshold") == 1:
-            s["hscroll_threshold"] = 0.1
-        cfg["version"] = 17
-
-    if version < 18:
-        # v17 -> v18: Actions Ring radial overlay — mode, hold threshold, slots.
-        s = cfg.setdefault("settings", {})
-        s.setdefault("actions_ring_mode", "ring")
-        s.setdefault("actions_ring_hold_ms", 250)
-        for prof in cfg.get("profiles", {}).values():
-            m = prof.get("mappings", {})
-            m.setdefault("actions_ring_slots", [
-                "screenshot_fullscreen", "play_pause",
-                "show_desktop", "lock_screen",
-            ])
-        cfg["version"] = 18
-
-    if version < 19:
-        # v18 -> v19: Actions Ring is now an assignable action.
-        s = cfg.setdefault("settings", {})
-        old_mode = s.pop("actions_ring_mode", "ring")
-        for prof in cfg.get("profiles", {}).values():
-            m = prof.get("mappings", {})
-            if old_mode == "ring":
-                m["actions_ring"] = "activate_actions_ring"
-            elif old_mode == "disabled":
-                m["actions_ring"] = "none"
-            # "simple": keep existing mapping (already a real action ID)
-        cfg["version"] = 19
-
-    if version < 20:
-        # v19 -> v20: move default actions ring activation from thumb button
-        # (config key "actions_ring") to sense panel (config key "gesture").
-        for prof in cfg.get("profiles", {}).values():
-            m = prof.get("mappings", {})
-            if (m.get("actions_ring") == "activate_actions_ring"
-                    and m.get("gesture", "none") == "none"):
-                m["gesture"] = "activate_actions_ring"
-                m["actions_ring"] = "none"
-        cfg["version"] = 20
+        cfg["version"] = 10
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

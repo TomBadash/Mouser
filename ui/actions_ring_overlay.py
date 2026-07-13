@@ -20,6 +20,8 @@ RING_LABEL_MAP: dict[str, str] = {
     "show_desktop":         "Show Desktop",
     "launchpad":            "Launchpad",
     "task_view":            "Task View",
+    "win_d":                "Show Desktop",
+    "screenshot_region_clip": "Screenshot",
     "play_pause":           "Play / Pause",
     "next_track":           "Next Track",
     "prev_track":           "Prev Track",

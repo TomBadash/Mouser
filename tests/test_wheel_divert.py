@@ -838,11 +838,11 @@ class ConfigMigrationTests(unittest.TestCase):
         migrated = _migrate(legacy)
         self.assertEqual(migrated["settings"]["wheel_divert"], "off")
 
-    def test_v11_migration_preserves_user_thumb_button_mapping(self):
-        # Idempotency: a v11 config with a user-mapped thumb_button must
-        # NOT be clobbered by a re-run of the migration chain.
-        already_v11 = {
-            "version": 11,
+    def test_thumb_button_migration_preserves_user_mapping(self):
+        # A pre-v10 config with a user-mapped thumb_button must NOT be
+        # clobbered when the MX4 schema migration runs.
+        pre_v10 = {
+            "version": 9,
             "settings": {"wheel_divert": "auto"},
             "profiles": {
                 "default": {
@@ -852,17 +852,17 @@ class ConfigMigrationTests(unittest.TestCase):
                 },
             },
         }
-        migrated = _migrate(already_v11)
+        migrated = _migrate(pre_v10)
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["thumb_button"],
             "alt_tab",
         )
 
-    def test_v11_migration_adds_default_when_missing(self):
-        # Cold-start: a sub-v11 config should be populated with the
+    def test_thumb_button_migration_adds_default_when_missing(self):
+        # Cold-start: a pre-v10 config should be populated with the
         # "none" default, not have an existing mapping overwritten.
-        pre_v11 = {
-            "version": 10,
+        pre_v10 = {
+            "version": 9,
             "settings": {"wheel_divert": "auto"},
             "profiles": {
                 "gaming": {
@@ -872,7 +872,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 },
             },
         }
-        migrated = _migrate(pre_v11)
+        migrated = _migrate(pre_v10)
         self.assertEqual(
             migrated["profiles"]["gaming"]["mappings"]["thumb_button"],
             "none",
