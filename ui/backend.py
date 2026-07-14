@@ -20,11 +20,12 @@ from core.accessibility import is_process_trusted
 from core.config import (
     BUTTON_NAMES, load_config, save_config, get_active_mappings,
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
-    get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
-    set_button_haptic,
+    get_icon_for_exe, get_profile_crown_smooth, set_profile_crown_smooth,
+    HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic, set_button_haptic,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
+from core.logi_device_catalog import LOGI_DEVICE_LAYOUTS
 from core.key_registry import (
     ShortcutParseError,
     canonical_shortcut_text,
@@ -40,7 +41,9 @@ from core.logi_devices import (
 )
 from core.key_simulator import (
     ACTIONS,
+    OPEN_APP_PREFIX,
     custom_action_label,
+    open_app_label,
     normalize_captured_shortcut_parts,
     valid_custom_key_names,
 )
@@ -78,6 +81,8 @@ from ui.screenshot_common import screenshot_file_path, screenshot_file_paths, sc
 def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
+    if action_id.startswith(OPEN_APP_PREFIX):
+        return open_app_label(action_id)
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
 
 
@@ -224,17 +229,20 @@ class Backend(QObject):
     gestureRecordsChanged = Signal()
     deviceInfoChanged = Signal()
     deviceLayoutChanged = Signal()
+    deviceTickChanged = Signal()
     hapticChanged = Signal()
     forceSensingChanged = Signal()
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
+    calibrationModeChanged = Signal()
+    calibrationCustomImageChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
     _dpiReadRequest = Signal(int)
     _connectionChangeRequest = Signal(bool)
-    _batteryChangeRequest = Signal(int)
+    _batteryChangeRequest = Signal(object)
     _debugMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
     _smartShiftReadRequest = Signal()
@@ -249,10 +257,13 @@ class Backend(QObject):
     def __init__(self, engine=None, parent=None, root_dir=None):
         super().__init__(parent)
         self._engine = engine
+        self._locale = None  # LocaleManager, set by main_qml for status toasts
         self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._cfg = load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
+        self._device_type = "mouse"   # "mouse" or "keyboard"
+        self._device_tick = 0         # bumped whenever per-device info changes
         self._connected_device_key = ""
         self._device_layout_override_key = ""
         self._device_layout = get_device_layout("generic_mouse")
@@ -261,6 +272,10 @@ class Backend(QObject):
         self._connected_device_source = ""
         self._connected_device_transport = ""
         self._battery_level = -1
+        self._battery_by_type = {}      # {device_type: level} for multi-device
+        self._calibration_mode = False  # hidden dev layout-calibration overlay
+        self._calibration_custom_image = ""  # user-loaded calibration photo (URL)
+        self._system_dark = False       # last OS dark-mode state (for backlight)
         self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
@@ -411,6 +426,10 @@ class Backend(QObject):
     def buttons(self):
         """List of button dicts for the active profile, filtered by device.
 
+        Uses PROFILE_BUTTON_NAMES so non-mouse controls (gesture swipes, the
+        Craft crown, and keyboard top-row keys) appear in the fallback list for
+        devices without an interactive overlay.
+
         Cached -- invalidated by ``mappingsChanged`` (active-profile
         mappings) and ``deviceLayoutChanged`` (effective supported-button
         set). The QML mappings list binds to ``backend.buttons`` and
@@ -425,11 +444,11 @@ class Backend(QObject):
     def _compute_buttons(self):
         mappings = get_active_mappings(self._cfg)
         device_buttons = set(
-            self._effective_supported_buttons or BUTTON_NAMES.keys()
+            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
         )
         result = []
         idx = 0
-        for key, name in BUTTON_NAMES.items():
+        for key, name in PROFILE_BUTTON_NAMES.items():
             if key not in device_buttons:
                 continue
             aid = mappings.get(key, "none")
@@ -461,16 +480,51 @@ class Backend(QObject):
         self._action_categories_cache = None
         self._all_actions_cache = None
 
-    def _hidden_actions(self):
-        """Return set of action IDs to hide based on effective device buttons."""
-        btns = self._effective_supported_buttons
+    def _hidden_actions_for(self, device_type, supported):
         hidden = set()
-        if btns and "mode_shift" not in btns:
+        if supported and "mode_shift" not in supported:
             hidden.add("toggle_smart_shift")
             hidden.add("switch_scroll_mode")
+        if device_type == "keyboard":
+            # DPI cycling needs a mouse sensor; not applicable to keyboards.
+            hidden.add("cycle_dpi")
+        # The crown feel toggle only applies to devices with a crown (the Craft),
+        # not every keyboard — a plain keyboard like the MX Keys has none. Gate on
+        # a crown_* control being present rather than on mouse-vs-keyboard.
+        has_crown = bool(supported) and any(
+            str(button).startswith("crown_") for button in supported)
+        if not has_crown:
+            hidden.add("toggle_crown_smooth")
         if sys.platform == "darwin":
             hidden.update(("win_d", "task_view"))
         return hidden
+
+    def _hidden_actions(self):
+        """Return set of action IDs to hide based on the connected device."""
+        return self._hidden_actions_for(
+            self._device_type, self._effective_supported_buttons)
+
+    def _action_categories_for(self, hidden):
+        from collections import OrderedDict
+        cats = OrderedDict()
+        for aid in sorted(
+            ACTIONS,
+            key=lambda a: (
+                "0" if ACTIONS[a]["category"] == "Other" else "1" + ACTIONS[a]["category"],
+                ACTIONS[a]["label"],
+            ),
+        ):
+            if aid in hidden:
+                continue
+            data = ACTIONS[aid]
+            cats.setdefault(data["category"], []).append(
+                {"id": aid, "label": data["label"]})
+        result = [{"category": c, "actions": a} for c, a in cats.items()]
+        result.append({"category": "Custom", "actions": [
+            {"id": "__custom__", "label": "Custom Shortcut…"},
+            {"id": "__open_app__", "label": "Open Application…"},
+        ]})
+        return result
 
     @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
@@ -486,26 +540,7 @@ class Backend(QObject):
         return self._action_categories_cache
 
     def _compute_action_categories(self):
-        from collections import OrderedDict
-        hidden = self._hidden_actions()
-        cats = OrderedDict()
-        for aid in sorted(
-            ACTIONS,
-            key=lambda a: (
-                "0" if ACTIONS[a]["category"] == "Other" else "1" + ACTIONS[a]["category"],
-                ACTIONS[a]["label"],
-            ),
-        ):
-            if aid in hidden:
-                continue
-            data = ACTIONS[aid]
-            cat = data["category"]
-            cats.setdefault(cat, []).append({"id": aid, "label": data["label"]})
-        result = [{"category": c, "actions": a} for c, a in cats.items()]
-        result.append({"category": "Custom", "actions": [
-            {"id": "__custom__", "label": "Custom Shortcut\u2026"}
-        ]})
-        return result
+        return self._action_categories_for(self._hidden_actions())
 
     @Property(list, notify=deviceLayoutChanged)
     def allActions(self):
@@ -534,6 +569,8 @@ class Backend(QObject):
             result.append({"id": aid, "label": data["label"],
                            "category": data["category"]})
         result.append({"id": "__custom__", "label": "Custom Shortcut\u2026",
+                        "category": "Custom"})
+        result.append({"id": "__open_app__", "label": "Open Application\u2026",
                         "category": "Custom"})
         return result
 
@@ -590,7 +627,22 @@ class Backend(QObject):
 
     @Property(bool, notify=deviceLayoutChanged)
     def deviceHasSmartShift(self):
-        """Whether the effective device has a mode_shift button (SmartShift)."""
+        """Whether a connected mouse exposes SmartShift (mode_shift).
+
+        Checked against the mouse specifically — in a multi-device setup (e.g. a
+        Craft keyboard + MX Master on one receiver) the keyboard may be the
+        'effective' device, and it must not hide the mouse's SmartShift control.
+        """
+        devices = self._engine.connected_devices if self._engine else []
+        mouse = next(
+            (d for d in devices
+             if (getattr(d, "device_type", "mouse") or "mouse") == "mouse"),
+            None,
+        )
+        if mouse is not None:
+            btns = getattr(mouse, "supported_buttons", None)
+            return btns is None or "mode_shift" in btns
+        # No connected mouse info: fall back to the effective device's buttons.
         btns = self._effective_supported_buttons
         return btns is None or "mode_shift" in btns
 
@@ -807,6 +859,256 @@ class Backend(QObject):
     def ignoreTrackpad(self):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
 
+    @Property(bool, notify=settingsChanged)
+    def crownSmooth(self):
+        """Crown feel for the active profile: True = smooth, False = ratchet.
+        Falls back to the global setting when the profile has no own value."""
+        return get_profile_crown_smooth(
+            self._cfg, self._cfg.get("active_profile", "default"))
+
+    @Property(bool, notify=deviceInfoChanged)
+    def crownAvailable(self):
+        """True when a connected keyboard exposes the crown."""
+        return self._device_type == "keyboard"
+
+    # ── Keyboard backlight (follows system theme via HID++ 0x1982) ──
+    @Property(bool, notify=deviceInfoChanged)
+    def backlightAvailable(self):
+        """True when a connected keyboard exposes a controllable backlight."""
+        return bool(getattr(self._engine, "backlight_supported", False)) \
+            if self._engine else False
+
+    @Property(bool, notify=settingsChanged)
+    def backlightFollowTheme(self):
+        return bool(self._cfg.get("settings", {}).get("backlight_follow_theme", False))
+
+    def _resolved_backlight(self):
+        """Return (enabled, brightness) for the current theme, or None when Mouser
+        should not manage the backlight (theme-following disabled). Opt-in only.
+
+        This Craft can't set brightness over HID++, only on/off, so theme-follow
+        means: dark theme → backlight on, light theme → backlight off."""
+        s = self._cfg.get("settings", {})
+        if not s.get("backlight_follow_theme", False):
+            return None
+        on = bool(self._system_dark)
+        return (on, 100 if on else 0)
+
+    def _apply_backlight(self):
+        if not self._engine or not hasattr(self._engine, "set_backlight"):
+            return
+        resolved = self._resolved_backlight()
+        if resolved is None:
+            return
+        self._engine.set_backlight(*resolved)
+
+    @Slot(bool)
+    def syncBacklight(self, isDark):
+        """Called by the UI when the effective theme changes (and at startup)."""
+        self._system_dark = bool(isDark)
+        follow = self._cfg.get("settings", {}).get("backlight_follow_theme", False)
+        print(f"[Backend] syncBacklight: dark={self._system_dark} "
+              f"follow_theme={follow} resolved={self._resolved_backlight()}")
+        self._apply_backlight()
+
+    @Slot(bool)
+    def setBacklightFollowTheme(self, value):
+        self._cfg.setdefault("settings", {})["backlight_follow_theme"] = bool(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()  # (re)divert the backlight keys
+        self._apply_backlight()
+        self.settingsChanged.emit()
+
+    @Property(int, notify=deviceTickChanged)
+    def deviceTick(self):
+        """Increments whenever per-device info changes; bind to it to refresh
+        deviceInfoForType() results in QML."""
+        return self._device_tick
+
+    def _bump_device_tick(self):
+        self._device_tick += 1
+        self.deviceTickChanged.emit()
+
+    def set_locale_manager(self, locale_mgr):
+        """Wire the LocaleManager so status toasts can be localized."""
+        self._locale = locale_mgr
+
+    def _tr(self, key, fallback):
+        """Translate a status-toast key via the LocaleManager (English fallback)."""
+        lm = self._locale
+        if lm is None:
+            return fallback
+        try:
+            val = lm.tr(key)
+        except Exception:
+            return fallback
+        return val if val and val != key else fallback
+
+    @Slot(str, result="QVariant")
+    def deviceInfoForType(self, device_type):
+        """All UI data for the connected device of *device_type* ("mouse" or
+        "keyboard"), so the Mouse and Keyboard pages can each render their own
+        device independently (multiplexer)."""
+        devices = self._engine.connected_devices if self._engine else []
+        device = next(
+            (d for d in devices
+             if (getattr(d, "device_type", "mouse") or "mouse") == device_type),
+            None,
+        )
+        if device is None:
+            return {
+                "connected": False, "type": device_type, "name": "",
+                "transport": "", "buttons": [], "interactive": False,
+                "recognized": False, "layoutKind": "", "hotspots": [], "crown": None,
+                "note": "", "image": "", "imageWidth": 220,
+                "imageHeight": 220, "hasCrown": False, "battery": -1,
+                "actionCategories": self._action_categories_for(
+                    self._hidden_actions_for(device_type, None)),
+            }
+        mappings = get_active_mappings(self._cfg)
+        supported = list(getattr(device, "supported_buttons", ()) or ())
+        supported_set = set(supported)
+        buttons = []
+        for key, name in PROFILE_BUTTON_NAMES.items():
+            if key not in supported_set:
+                continue
+            aid = mappings.get(key, "none")
+            buttons.append({"key": key, "name": name, "actionId": aid,
+                            "actionLabel": _action_label(aid)})
+        layout = get_device_layout(getattr(device, "ui_layout", "generic_mouse"))
+        asset = layout.get("image_asset", "")
+        image = QUrl.fromLocalFile(
+            os.path.abspath(os.path.join(self._root_dir, "images", asset))
+        ).toString() if asset else ""
+        # Per-device battery (multiplexer reads each device's own level).
+        battery = self._battery_by_type.get(device_type, -1)
+        # Only surface hotspots for keys the device actually exposes.
+        hotspots = [
+            h for h in layout.get("hotspots", [])
+            if h.get("buttonKey") in supported_set
+        ]
+        crown = layout.get("crown") if any(
+            str(b).startswith("crown_") for b in supported_set
+        ) else None
+        # "Recognized" = matched a catalog entry (not a generic fallback layout).
+        recognized = getattr(device, "ui_layout", "") not in (
+            "generic_mouse", "generic_keyboard",
+        )
+        return {
+            "connected": True,
+            "type": device_type,
+            "name": getattr(device, "display_name", "") or "",
+            "transport": getattr(device, "transport", "") or "",
+            "buttons": buttons,
+            "interactive": bool(layout.get("interactive", False)),
+            "recognized": recognized,
+            "layoutKind": layout.get("layout_kind", ""),
+            "hotspots": hotspots,
+            "crown": crown,
+            "note": layout.get("note", ""),
+            "image": image,
+            "imageWidth": layout.get("image_width", 220),
+            "imageHeight": layout.get("image_height", 220),
+            "hasCrown": any(str(b).startswith("crown_") for b in supported_set),
+            "battery": battery,
+            "actionCategories": self._action_categories_for(
+                self._hidden_actions_for(device_type, supported_set)),
+        }
+
+    @Slot(result=list)
+    def calibrationLayouts(self):
+        """All interactive device layouts, for the hidden calibration tool.
+
+        Lets coordinates be measured against any device photo without the
+        hardware connected (normalized coords transfer to the live device).
+        """
+        out = []
+        for key, layout in LOGI_DEVICE_LAYOUTS.items():
+            if not layout.get("interactive"):
+                continue
+            asset = layout.get("image_asset", "")
+            image = QUrl.fromLocalFile(
+                os.path.abspath(os.path.join(self._root_dir, "images", asset))
+            ).toString() if asset else ""
+            crown = layout.get("crown")
+            crown_out = None
+            if crown:
+                crown_out = {
+                    "normX": crown.get("normX", 0),
+                    "normY": crown.get("normY", 0),
+                    "normR": crown.get("normR", 0.05),
+                    "buttons": [
+                        {"key": b, "name": PROFILE_BUTTON_NAMES.get(b, b)}
+                        for b in crown.get("buttons", [])
+                    ],
+                }
+            out.append({
+                "key": key,
+                "label": layout.get("label", key),
+                "image": image,
+                "imageWidth": layout.get("image_width", 220),
+                "imageHeight": layout.get("image_height", 220),
+                "layoutKind": layout.get("layout_kind", ""),
+                "hotspots": layout.get("hotspots", []),
+                "crown": crown_out,
+            })
+        return out
+
+    @Slot(str, result=list)
+    def allProfileMappings(self, profileName):
+        """Every button's mapping for a profile, unfiltered (calibration preview)."""
+        profiles = self._cfg.get("profiles", {})
+        mappings = profiles.get(profileName, {}).get("mappings", {})
+        result = []
+        for key, name in PROFILE_BUTTON_NAMES.items():
+            aid = mappings.get(key, "none")
+            result.append({
+                "key": key, "name": name,
+                "actionId": aid, "actionLabel": _action_label(aid),
+            })
+        return result
+
+    @Property(bool, notify=calibrationModeChanged)
+    def calibrationMode(self):
+        """Hidden developer layout-calibration overlay (session-only)."""
+        return self._calibration_mode
+
+    @Slot(bool)
+    def setCalibrationMode(self, on):
+        on = bool(on)
+        if on != self._calibration_mode:
+            self._calibration_mode = on
+            self.calibrationModeChanged.emit()
+
+    @Property(str, notify=calibrationCustomImageChanged)
+    def calibrationCustomImage(self):
+        """A user-supplied photo to calibrate against (empty = use the built-in
+        device asset). Stored as a file:// URL ready for an Image source."""
+        return self._calibration_custom_image
+
+    @Slot()
+    def pickCalibrationImage(self):
+        """Open a file picker and load a custom photo into the calibration tool."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load calibration image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)",
+        )
+        if not path:
+            return
+        url = QUrl.fromLocalFile(os.path.abspath(path)).toString()
+        if url != self._calibration_custom_image:
+            self._calibration_custom_image = url
+            self.calibrationCustomImageChanged.emit()
+
+    @Slot()
+    def clearCalibrationImage(self):
+        """Revert the calibration tool to the built-in device asset."""
+        if self._calibration_custom_image:
+            self._calibration_custom_image = ""
+            self.calibrationCustomImageChanged.emit()
+
     @Property(int, notify=settingsChanged)
     def gestureThreshold(self):
         return int(self._cfg.get("settings", {}).get("gesture_threshold", 50))
@@ -914,6 +1216,11 @@ class Backend(QObject):
     @Property(str, notify=deviceInfoChanged)
     def deviceDisplayName(self):
         return self._device_display_name
+
+    @Property(str, notify=deviceInfoChanged)
+    def deviceType(self):
+        """'mouse' or 'keyboard' for the connected device (default 'mouse')."""
+        return self._device_type
 
     @Property(str, notify=deviceInfoChanged)
     def connectedDeviceKey(self):
@@ -1427,6 +1734,7 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
         self.mappingsChanged.emit()
+        self._bump_device_tick()
         self.statusMessage.emit("Saved")
 
     @Slot(str, str, str)
@@ -1438,6 +1746,7 @@ class Backend(QObject):
             self._engine.reload_mappings()
         self.profilesChanged.emit()
         self.mappingsChanged.emit()
+        self._bump_device_tick()
         self.statusMessage.emit("Saved")
 
     @Slot(bool)
@@ -1743,6 +2052,48 @@ class Backend(QObject):
         self.settingsChanged.emit()
 
     @Slot(bool)
+    def setCrownSmooth(self, value):
+        value = bool(value)
+        if self.crownSmooth == value:
+            return
+        active = self._cfg.get("active_profile", "default")
+        # Mirror into the backend's in-memory copy so crownSmooth reflects it
+        # immediately; the engine owns persistence + the device write.
+        self._cfg.setdefault("profiles", {}).setdefault(active, {})["crown_smooth"] = value
+        if active == "default":
+            self._cfg.setdefault("settings", {})["crown_smooth"] = value
+        if self._engine:
+            self._engine.set_crown_smooth(value, active)
+        else:
+            set_profile_crown_smooth(self._cfg, value, active)
+        self.settingsChanged.emit()
+
+    @Slot(str, result=bool)
+    def crownSmoothForProfile(self, profileName):
+        """Crown feel for a specific profile (inherits global when unset)."""
+        return get_profile_crown_smooth(self._cfg, profileName)
+
+    @Slot(bool, str)
+    def setCrownSmoothForProfile(self, value, profileName):
+        """Set the crown feel for a specific profile (the one being edited in the
+        device view), not just the active one. Only pushes to the device when
+        that profile is currently active."""
+        value = bool(value)
+        if not profileName:
+            profileName = self._cfg.get("active_profile", "default")
+        if self.crownSmoothForProfile(profileName) == value:
+            return
+        # Keep the backend's in-memory copy consistent for immediate UI reads.
+        self._cfg.setdefault("profiles", {}).setdefault(profileName, {})["crown_smooth"] = value
+        if profileName == "default":
+            self._cfg.setdefault("settings", {})["crown_smooth"] = value
+        if self._engine:
+            self._engine.set_crown_smooth(value, profileName)
+        else:
+            set_profile_crown_smooth(self._cfg, value, profileName)
+        self.settingsChanged.emit()
+
+    @Slot(bool)
     def setInvertHScroll(self, value):
         value = bool(value)
         if self.invertHScroll == value:
@@ -1837,14 +2188,14 @@ class Backend(QObject):
         app_spec = self._stored_profile_app_spec(entry, appId)
         label = entry.get("label", appId)
         if self._profile_has_app(app_spec):
-            self.statusMessage.emit("Profile already exists")
+            self.statusMessage.emit(self._tr("toast.profile_exists", "Profile already exists"))
             return
         safe_name = re.sub(r"[^a-z0-9_]", "_", label.lower())[:32].strip("_")
         self._cfg = create_profile(self._cfg, safe_name, label=label, apps=[app_spec])
         if self._engine:
             self._engine.cfg = self._cfg
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile created")
+        self.statusMessage.emit(self._tr("toast.profile_created", "Profile created"))
 
     @Slot()
     def browseForAppProfile(self):
@@ -1873,14 +2224,36 @@ class Backend(QObject):
         label = entry.get("label") if entry else os.path.splitext(os.path.basename(path))[0]
         app_spec = self._stored_profile_app_spec(entry, path) if entry else path
         if self._profile_has_app(app_spec):
-            self.statusMessage.emit("Profile already exists")
+            self.statusMessage.emit(self._tr("toast.profile_exists", "Profile already exists"))
             return
         safe_name = re.sub(r"[^a-z0-9_]", "_", label.lower())[:32].strip("_")
         self._cfg = create_profile(self._cfg, safe_name, label=label, apps=[app_spec])
         if self._engine:
             self._engine.cfg = self._cfg
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile created")
+        self.statusMessage.emit(self._tr("toast.profile_created", "Profile created"))
+
+    @Slot(str, str)
+    def pickAppForMapping(self, profileName, button):
+        """Open a file picker and bind the chosen app to a button as an
+        'Open Application' action (stored as 'open_app:<path>')."""
+        from PySide6.QtWidgets import QFileDialog
+        if sys.platform == "darwin":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application", "/Applications", "Apps (*.app)")
+        elif sys.platform == "linux":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application", os.path.expanduser("~"),
+                "Applications (*)")
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Application",
+                os.environ.get("ProgramFiles", "C:\\Program Files"),
+                "Executables (*.exe)")
+        if not path:
+            return
+        path = os.path.realpath(path) if sys.platform == "linux" else os.path.normpath(path)
+        self.setProfileMapping(profileName, button, OPEN_APP_PREFIX + path)
 
     @Slot()
     def refreshKnownAppsSilently(self):
@@ -1896,17 +2269,64 @@ class Backend(QObject):
             self._engine.cfg = self._cfg
             self._engine.reload_mappings()
         self.profilesChanged.emit()
-        self.statusMessage.emit("Profile deleted")
+        self.statusMessage.emit(self._tr("toast.profile_deleted", "Profile deleted"))
+
+    @Slot(str, str)
+    def copyProfileConfig(self, sourceName, targetName):
+        """Copy the configuration (button mappings + crown feel) from one profile
+        into another, leaving the target's apps and label untouched. Lets the user
+        share one set-up across several apps (e.g. Chrome + VS Code)."""
+        if not sourceName or not targetName or sourceName == targetName:
+            return
+        profiles = self._cfg.get("profiles", {})
+        src = profiles.get(sourceName)
+        tgt = profiles.get(targetName)
+        if src is None or tgt is None:
+            return
+        tgt["mappings"] = dict(src.get("mappings", {}))
+        if "crown_smooth" in src:
+            tgt["crown_smooth"] = bool(src["crown_smooth"])
+        else:
+            tgt.pop("crown_smooth", None)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+            self._engine.reload_mappings()
+            # Push the copied crown feel live if the target is the active profile.
+            self._engine.set_crown_smooth(
+                get_profile_crown_smooth(self._cfg, targetName), targetName)
+        self.profilesChanged.emit()
+        self.mappingsChanged.emit()
+        self._bump_device_tick()
+        self.statusMessage.emit(self._tr("toast.config_copied", "Configuration copied"))
 
     @Slot(str, result=list)
-    def getProfileMappings(self, profileName):
-        """Return button mappings for a specific profile, filtered by device."""
+    @Slot(str, str, result=list)
+    def getProfileMappings(self, profileName, deviceType=""):
+        """Return button mappings for a profile, filtered by device.
+
+        ``deviceType`` ("mouse"/"keyboard") filters by THAT page's connected
+        device so each page resolves its own buttons in a multi-device setup.
+        Without it, falls back to the globally tracked device (legacy).
+        """
         profiles = self._cfg.get("profiles", {})
         pdata = profiles.get(profileName, {})
         mappings = pdata.get("mappings", {})
-        device_buttons = set(
-            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
-        )
+        if deviceType:
+            devices = self._engine.connected_devices if self._engine else []
+            device = next(
+                (d for d in devices
+                 if (getattr(d, "device_type", "mouse") or "mouse") == deviceType),
+                None,
+            )
+            device_buttons = set(
+                getattr(device, "supported_buttons", None)
+                or PROFILE_BUTTON_NAMES.keys()
+            )
+        else:
+            device_buttons = set(
+                self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
+            )
         result = []
         for key, name in PROFILE_BUTTON_NAMES.items():
             if key not in device_buttons:
@@ -1969,11 +2389,39 @@ class Backend(QObject):
             return name
 
     @Slot(result=str)
-    def dumpDeviceInfo(self):
-        """Return JSON describing the connected device for contributor use."""
+    @Slot(str, result=str)
+    def dumpDeviceInfo(self, deviceType=""):
+        """Return JSON describing a connected device for contributor use.
+
+        ``deviceType`` ("mouse"/"keyboard") dumps that device in a multi-device
+        setup; without it, the engine's primary device.
+        """
         import json
         if not self._engine:
             return ""
+        if deviceType:
+            devices = self._engine.connected_devices or []
+            device = next(
+                (d for d in devices
+                 if (getattr(d, "device_type", "mouse") or "mouse") == deviceType),
+                None,
+            )
+            if device is not None:
+                pid = getattr(device, "product_id", None)
+                info = {
+                    "display_name": getattr(device, "display_name", ""),
+                    "product_id": f"0x{pid:04X}" if pid else None,
+                    "product_name": getattr(device, "product_name", ""),
+                    "transport": getattr(device, "transport", ""),
+                    "device_type": getattr(device, "device_type", "mouse"),
+                    "ui_layout": getattr(device, "ui_layout", ""),
+                    "supported_buttons": list(
+                        getattr(device, "supported_buttons", ()) or ()),
+                }
+                inv = getattr(device, "capability_inventory", None)
+                if inv is not None and hasattr(inv, "to_dict"):
+                    info["capabilities"] = inv.to_dict()
+                return json.dumps(info, indent=2)
         info = self._engine.dump_device_info()
         if not info:
             return ""
@@ -2030,9 +2478,12 @@ class Backend(QObject):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._connectionChangeRequest.emit(connected)
 
-    def _onEngineBatteryRead(self, level):
-        """Called from engine thread — posts to Qt main thread."""
-        self._batteryChangeRequest.emit(level)
+    def _onEngineBatteryRead(self, levels):
+        """Called from engine thread — posts to Qt main thread.
+
+        ``levels`` is a {device_type: level} dict (multi-device aware).
+        """
+        self._batteryChangeRequest.emit(levels)
 
     def _onEngineDebugMessage(self, message):
         """Called from engine/hook thread — posts to Qt main thread."""
@@ -2161,7 +2612,8 @@ class Backend(QObject):
         self.activeProfileChanged.emit()
         self.mappingsChanged.emit()
         self.profilesChanged.emit()
-        self.statusMessage.emit(f"Profile: {profile_name}")
+        self.statusMessage.emit(
+            f"{self._tr('toast.profile_active', 'Profile:')} {profile_name}")
 
     @Slot(int)
     def _handleDpiRead(self, dpi):
@@ -2208,12 +2660,16 @@ class Backend(QObject):
         else:
             self._apply_device_layout(None)
         device_source = getattr(device, "source", "") if device is not None else ""
-        if (not connected or device_source == "evdev") and self._battery_level != -1:
-            self._battery_level = -1
-            self.batteryLevelChanged.emit()
+        if not connected or device_source == "evdev":
+            if self._battery_by_type:
+                self._battery_by_type = {}
+            if self._battery_level != -1:
+                self._battery_level = -1
+                self.batteryLevelChanged.emit()
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
             self.forceSensingChanged.emit()
+        self._bump_device_tick()
         if connected != previous_connected:
             self.mouseConnectedChanged.emit()
             self._append_debug_line(
@@ -2296,7 +2752,11 @@ class Backend(QObject):
         transport = getattr(device, "transport", "") or ""
         dpi_min = getattr(device, "dpi_min", DEFAULT_DPI_MIN) or DEFAULT_DPI_MIN
         dpi_max = getattr(device, "dpi_max", DEFAULT_DPI_MAX) or DEFAULT_DPI_MAX
+        device_type = getattr(device, "device_type", "mouse") or "mouse"
         info_changed = False
+        if device_type != self._device_type:
+            self._device_type = device_type
+            info_changed = True
         if display_name != self._device_display_name:
             self._device_display_name = display_name
             info_changed = True
@@ -2361,11 +2821,18 @@ class Backend(QObject):
         if eff != old_eff:
             self.deviceLayoutChanged.emit()
 
-    @Slot(int)
-    def _handleBatteryChange(self, level):
-        """Runs on Qt main thread."""
-        self._battery_level = level
+    @Slot(object)
+    def _handleBatteryChange(self, levels):
+        """Runs on Qt main thread. ``levels`` is {device_type: level}."""
+        self._battery_by_type = dict(levels or {})
+        # Legacy single-value property tracks the primary (currently tracked)
+        # device, falling back to the mouse.
+        self._battery_level = self._battery_by_type.get(
+            self._device_type,
+            self._battery_by_type.get("mouse", -1),
+        )
         self.batteryLevelChanged.emit()
+        self._bump_device_tick()
 
     @Slot(str)
     def _handleDebugMessage(self, message):

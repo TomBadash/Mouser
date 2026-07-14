@@ -35,7 +35,7 @@ Mouser uses a **CGEventTap** to intercept and suppress mouse button events. macO
 
 If Accessibility is not granted, Mouser will print:
 ```
-[MouseHook] ERROR: Failed to create CGEventTap!
+[DeviceHook] ERROR: Failed to create CGEventTap!
 ```
 
 ## Platform Differences

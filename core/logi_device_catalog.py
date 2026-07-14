@@ -70,6 +70,103 @@ MX_ANYWHERE_SMARTSHIFT_BUTTONS = (
     "mode_shift",
 )
 
+# Logitech Craft keyboard. The Crown dial exposes a rotate layer, a physical
+# click, and a second rotate layer used while the crown is clicked/held.
+CROWN_BUTTONS = (
+    "crown_left",
+    "crown_right",
+    "crown_tap",
+    "crown_touch",
+    "crown_press_left",
+    "crown_press_right",
+)
+
+# Standard Logitech keyboard top-row keys, exposed as remappable controls. These
+# CIDs are shared across the Logitech keyboard line (Craft, MX Keys, …), so the
+# table is device-agnostic: any keyboard exposes the subset of these keys its
+# REPROG_CONTROLS_V4 inventory actually advertises (see keyboard_buttons_for_cids
+# and the auto-classifier in logi_devices.classify_device_kind). Each is a
+# divertable control; "cid" is the HID++ control id, "label" is the default
+# printed function. Default mapping is "none" (the key keeps its native function
+# until the user remaps it, at which point Mouser diverts just that control).
+# Captured with tools/craft_probe.py --keys; see the craft-hidpp-protocol notes.
+# Easy-Switch (host) and arrow controls are intentionally omitted so host
+# switching and navigation stay native.
+STANDARD_KEYBOARD_KEYS = (
+    {"key": "kbd_brightness_down", "cid": 0x00C7, "label": "Brightness Down"},
+    {"key": "kbd_brightness_up",   "cid": 0x00C8, "label": "Brightness Up"},
+    {"key": "kbd_task_view",       "cid": 0x00E0, "label": "Task View"},
+    {"key": "kbd_app_switch",      "cid": 0x00FF, "label": "App Switch / Dashboard"},
+    # MX Keys' F4 exposes App Switch / Launchpad as 0x00E1 (verified on hardware)
+    # instead of the 0x00FF the Craft uses. Keep both; each keyboard advertises
+    # only the control id its firmware reports.
+    {"key": "kbd_launchpad",       "cid": 0x00E1, "label": "Launchpad / App Switch"},
+    {"key": "kbd_show_desktop",    "cid": 0x006E, "label": "Show Desktop"},
+    {"key": "kbd_backlight_down",  "cid": 0x00E2, "label": "Backlight Down"},
+    {"key": "kbd_backlight_up",    "cid": 0x00E3, "label": "Backlight Up"},
+    {"key": "kbd_prev_track",      "cid": 0x00E4, "label": "Previous Track"},
+    {"key": "kbd_play_pause",      "cid": 0x00E5, "label": "Play / Pause"},
+    {"key": "kbd_next_track",      "cid": 0x00E6, "label": "Next Track"},
+    {"key": "kbd_mute",            "cid": 0x00E7, "label": "Mute"},
+    {"key": "kbd_volume_down",     "cid": 0x00E8, "label": "Volume Down"},
+    {"key": "kbd_volume_up",       "cid": 0x00E9, "label": "Volume Up"},
+    {"key": "kbd_calculator",      "cid": 0x000A, "label": "Calculator"},
+    {"key": "kbd_screen_capture",  "cid": 0x00BF, "label": "Screen Capture"},
+    {"key": "kbd_context_menu",    "cid": 0x00EA, "label": "Context Menu"},
+    {"key": "kbd_screen_lock",     "cid": 0x006F, "label": "Screen Lock"},
+)
+
+KEYBOARD_KEY_BUTTONS = tuple(k["key"] for k in STANDARD_KEYBOARD_KEYS)
+
+# button key → HID++ control id, for diverting only the keys the user remaps.
+KEYBOARD_KEY_CIDS = {k["key"]: k["cid"] for k in STANDARD_KEYBOARD_KEYS}
+
+# HID++ control id → button key (reverse lookup for divert/classification).
+KEYBOARD_CID_TO_BUTTON = {k["cid"]: k["key"] for k in STANDARD_KEYBOARD_KEYS}
+
+# button key → default printed label (UI fallback before localization).
+KEYBOARD_KEY_LABELS = {k["key"]: k["label"] for k in STANDARD_KEYBOARD_KEYS}
+
+# The Craft is the standard key set PLUS its unique Crown dial.
+CRAFT_BUTTONS = CROWN_BUTTONS + KEYBOARD_KEY_BUTTONS
+
+# MX Keys top-row controls (no crown). Every standard keyboard key the device
+# actually advertises over REPROG_CONTROLS_V4 — verified on hardware with
+# tools/craft_probe.py --keys (PID 0xB35B, Bluetooth). The MX Keys exposes all
+# of STANDARD_KEYBOARD_KEYS except App Switch (0x00FF), which it does not report.
+# Matches the keys placed on the mx_keys interactive layout; keep the two in sync.
+MX_KEYS_BUTTONS = (
+    "kbd_brightness_down",
+    "kbd_brightness_up",
+    "kbd_task_view",
+    "kbd_launchpad",
+    "kbd_show_desktop",
+    "kbd_backlight_down",
+    "kbd_backlight_up",
+    "kbd_prev_track",
+    "kbd_play_pause",
+    "kbd_next_track",
+    "kbd_mute",
+    "kbd_volume_down",
+    "kbd_volume_up",
+    "kbd_calculator",
+    "kbd_screen_capture",
+    "kbd_context_menu",
+    "kbd_screen_lock",
+)
+
+
+def keyboard_buttons_for_cids(cids) -> tuple[str, ...]:
+    """Standard keyboard buttons whose HID++ control id the device advertises.
+
+    Lets an unrecognized keyboard (no catalog entry) expose exactly the top-row
+    keys it physically has, in canonical table order.
+    """
+    present = {int(c) for c in (cids or ()) if c is not None}
+    return tuple(
+        k["key"] for k in STANDARD_KEYBOARD_KEYS if k["cid"] in present
+    )
+
 # G502 family (G-series gaming mice). These run onboard profiles and do not
 # expose REPROG_CONTROLS_V4 (0x1B04), so HID++ button diversion -- gesture,
 # mode_shift, dpi_switch -- is unavailable. The buttons below are the ones the
@@ -141,6 +238,89 @@ def _layout(
         "note": "",
         "hotspots": hotspots,
     }
+
+
+# Default normalized size of a keyboard key-region hotspot (fraction of image).
+_KBD_KEY_W = 0.030
+_KBD_KEY_H = 0.075
+
+
+def _key(
+    button_key: str,
+    norm_x: float,
+    norm_y: float,
+    *,
+    norm_w: float = _KBD_KEY_W,
+    norm_h: float = _KBD_KEY_H,
+) -> dict[str, object]:
+    """A clickable keyboard key region centered at (norm_x, norm_y).
+
+    The printed label comes from KEYBOARD_KEY_LABELS so it stays in sync with
+    STANDARD_KEYBOARD_KEYS; the QML overlay shows the assigned action on the key.
+    """
+    return {
+        "buttonKey": button_key,
+        "label": KEYBOARD_KEY_LABELS.get(button_key, button_key),
+        "summaryType": "mapping",
+        "normX": norm_x,
+        "normY": norm_y,
+        "normW": norm_w,
+        "normH": norm_h,
+        "kind": "key",
+    }
+
+
+def _crown(
+    norm_x: float,
+    norm_y: float,
+    norm_r: float,
+    buttons: tuple[str, ...] = CROWN_BUTTONS,
+) -> dict[str, object]:
+    """The Craft Crown dial: a clickable circle that exposes its sub-actions."""
+    return {
+        "normX": norm_x,
+        "normY": norm_y,
+        "normR": norm_r,
+        "buttons": list(buttons),
+    }
+
+
+def _kbd_layout(
+    key: str,
+    label: str,
+    image_asset: str,
+    image_width: int,
+    image_height: int,
+    keys: list[dict[str, object]],
+    *,
+    crown: dict[str, object] | None = None,
+    note: str = "",
+    key_w: float | None = None,
+    key_h: float | None = None,
+) -> dict[str, object]:
+    """Interactive keyboard layout: a device photo with clickable key regions
+    (and, for the Craft, an interactive Crown dial). ``key_w``/``key_h`` set a
+    uniform key-region size (fraction of the image) for every key."""
+    for hotspot in keys:
+        if key_w is not None:
+            hotspot["normW"] = key_w
+        if key_h is not None:
+            hotspot["normH"] = key_h
+    layout = {
+        "key": key,
+        "label": label,
+        "image_asset": image_asset,
+        "image_width": image_width,
+        "image_height": image_height,
+        "interactive": True,
+        "manual_selectable": False,
+        "note": note,
+        "layout_kind": "keyboard",
+        "hotspots": keys,
+    }
+    if crown is not None:
+        layout["crown"] = crown
+    return layout
 
 
 LOGI_DEVICE_SPECS = (
@@ -260,6 +440,47 @@ LOGI_DEVICE_SPECS = (
         "supported_buttons": MX_ANYWHERE_BUTTONS,
         "dpi_max": 4000,
     },
+    {
+        # Craft Advanced Keyboard. Over a Unifying receiver the USB product_id
+        # is the shared receiver (0xC52B), so we match by the HID++ device name
+        # instead. The Crown dial and top-row keys are driven over HID++
+        # (feature 0x4600 + REPROG_CONTROLS_V4); no keyboard hook is involved.
+        "key": "craft",
+        "display_name": "Craft Advanced Keyboard",
+        "product_ids": (),
+        "aliases": (
+            "Craft Advanced Keyboard",
+            "Logitech Craft",
+            "Craft",
+        ),
+        "ui_layout": "craft",
+        "image_asset": "logitech-keyboards/craft/keyboard.webp",
+        "supported_buttons": CRAFT_BUTTONS,
+        "gesture_cids": (),
+        "dpi_min": 0,
+        "dpi_max": 0,
+        "device_type": "keyboard",
+    },
+    {
+        # MX Keys (full-size). Like the Craft it pairs over a Unifying receiver
+        # (shared PID 0xC52B), so match by HID++ name. No crown — only the
+        # top-row media/brightness keys are remapped over HID++.
+        "key": "mx_keys",
+        "display_name": "MX Keys",
+        "product_ids": (),
+        "aliases": (
+            "MX Keys Wireless Keyboard",
+            "MX Keys",
+            "Wireless Keyboard MX Keys",
+        ),
+        "ui_layout": "mx_keys",
+        "image_asset": "logitech-keyboards/mx_keys/keyboard.webp",
+        "supported_buttons": MX_KEYS_BUTTONS,
+        "gesture_cids": (),
+        "dpi_min": 0,
+        "dpi_max": 0,
+        "device_type": "keyboard",
+    },
     # -- M650 Signature family ------------------------------------------------
     # Compact wireless mouse (middle, back, forward buttons). Connects via Logi
     # Bolt receiver or Bluetooth LE. HID++ reports device name "Signature M650".
@@ -357,6 +578,83 @@ LOGI_DEVICE_SPECS = (
 
 
 LOGI_DEVICE_LAYOUTS = {
+    # Interactive Craft layout: device photo with clickable top-row keys and the
+    # Crown dial. Coordinates are normalized (0-1) over the image; tune visually.
+    "craft": _kbd_layout(
+        "craft",
+        "Craft Advanced Keyboard",
+        "logitech-keyboards/craft/keyboard.webp",
+        820,
+        461,
+        [
+            _key("kbd_brightness_down", 0.1635, 0.382),
+            _key("kbd_brightness_up",   0.2021, 0.382),
+            _key("kbd_task_view",       0.2406, 0.382),
+            _key("kbd_app_switch",      0.2792, 0.382),
+            _key("kbd_show_desktop",    0.3178, 0.382),
+            _key("kbd_backlight_down",  0.3564, 0.382),
+            _key("kbd_backlight_up",    0.3950, 0.382),
+            _key("kbd_prev_track",      0.4335, 0.382),
+            _key("kbd_play_pause",      0.4721, 0.382),
+            _key("kbd_next_track",      0.5107, 0.382),
+            _key("kbd_mute",            0.5492, 0.382),
+            _key("kbd_volume_down",     0.5878, 0.382),
+            _key("kbd_volume_up",       0.6264, 0.382),
+            _key("kbd_calculator",      0.7918, 0.382),
+            _key("kbd_screen_capture",  0.8305, 0.382),
+            _key("kbd_context_menu",    0.8691, 0.382),
+            _key("kbd_screen_lock",     0.9078, 0.382),
+        ],
+        crown=_crown(0.0935, 0.2834, 0.030),
+        note="Crown dial and top-row keys remapped over HID++.",
+        key_w=0.034,
+        key_h=0.050,
+    ),
+    "generic_keyboard": {
+        "key": "generic_keyboard",
+        "label": "Logitech Keyboard",
+        "image_asset": "icons/keyboard-simple.svg",
+        "image_width": 220,
+        "image_height": 220,
+        "interactive": False,
+        "manual_selectable": False,
+        "note": (
+            "Auto-detected Logitech keyboard. The top-row keys it reports are "
+            "remappable over HID++ — assign actions from the control list. "
+            "Un-mapped keys keep their native function."
+        ),
+        "hotspots": [],
+    },
+    # Interactive MX Keys layout: device photo with clickable top-row keys.
+    "mx_keys": _kbd_layout(
+        "mx_keys",
+        "MX Keys",
+        "logitech-keyboards/mx_keys/keyboard.webp",
+        820,
+        410,
+        [
+            _key("kbd_brightness_down", 0.1649, 0.328),
+            _key("kbd_brightness_up",   0.2031, 0.328),
+            _key("kbd_task_view",       0.2412, 0.328),
+            _key("kbd_launchpad",       0.2794, 0.328),
+            _key("kbd_show_desktop",    0.3176, 0.328),
+            _key("kbd_backlight_down",  0.3558, 0.328),
+            _key("kbd_backlight_up",    0.3939, 0.328),
+            _key("kbd_prev_track",      0.4320, 0.328),
+            _key("kbd_play_pause",      0.4701, 0.328),
+            _key("kbd_next_track",      0.5083, 0.328),
+            _key("kbd_mute",            0.5464, 0.328),
+            _key("kbd_volume_down",     0.5846, 0.328),
+            _key("kbd_volume_up",       0.6227, 0.328),
+            _key("kbd_calculator",      0.7882, 0.332),
+            _key("kbd_screen_capture",  0.8269, 0.332),
+            _key("kbd_context_menu",    0.8655, 0.332),
+            _key("kbd_screen_lock",     0.9042, 0.332),
+        ],
+        note="Top-row keys remapped over HID++.",
+        key_w=0.034,
+        key_h=0.048,
+    ),
     # M650 Signature: no device art yet; shows generic silhouette with the
     # three-button layout. Interactive hotspot diagram can be added once
     # mouse artwork is sourced and product_ids are confirmed.

@@ -9,8 +9,25 @@ import os
 import sys
 import shutil
 import json
+import logging
 import subprocess
 import PySide6
+
+# PyInstaller 6.20.0 ships a malformed log call in its Qt hook
+# (utils/hooks/qt/__init__.py): logger.warn("%s: QML plugin binary %r does not
+# exist!", str(plugin_file)) passes one arg for two format specifiers, so every
+# missing-QML-plugin warning crashes the stdlib logging formatter and dumps a
+# noisy "--- Logging error --- TypeError: not enough arguments for format
+# string" traceback. The build still succeeds; this filter drops that one broken
+# record so the build log stays clean. Remove once PyInstaller fixes the call.
+class _DropMalformedQmlPluginWarning(logging.Filter):
+    def filter(self, record):
+        return "QML plugin binary" not in str(record.msg)
+
+
+logging.getLogger("PyInstaller.utils.hooks.qt").addFilter(
+    _DropMalformedQmlPluginWarning()
+)
 
 block_cipher = None
 ROOT = os.path.abspath(".")

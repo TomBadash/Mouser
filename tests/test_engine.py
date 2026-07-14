@@ -4,11 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core.config import DEFAULT_CONFIG
-from core.mouse_hook import MouseEvent
-from core.mouse_hook_types import HidRuntimeState
+from core.device_hook import DeviceEvent
+from core.device_hook_types import HidRuntimeState
 
 
-class _FakeMouseHook:
+class _FakeDeviceHook:
     def __init__(self):
         self.invert_vscroll = False
         self.invert_hscroll = False
@@ -16,12 +16,16 @@ class _FakeMouseHook:
         self.connected_device = None
         self.device_connected = False
         self._hid_gesture = None
+        self.divert_keyboard_keys = {}
         self.start_called = False
         self.stop_called = False
         self.wheel_native_invert_active = False
         # Back-compat alias mirrored on the real BaseMouseHook for callers
         # from the divert+inject build of the test fixtures.
         self.wheel_divert_active = False
+
+    def refresh_diverts(self):
+        pass
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -110,7 +114,7 @@ class EngineHorizontalScrollTests(unittest.TestCase):
             cfg["settings"]["hscroll_threshold"] = hscroll_threshold
 
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):
@@ -122,17 +126,17 @@ class EngineHorizontalScrollTests(unittest.TestCase):
 
         with patch("core.engine.execute_action") as execute_action_mock:
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.00,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.05,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_LEFT,
+                event_type=DeviceEvent.HSCROLL_LEFT,
                 raw_data=1,
                 timestamp=1.45,
             ))
@@ -145,17 +149,17 @@ class EngineHorizontalScrollTests(unittest.TestCase):
 
         with patch("core.engine.execute_action") as execute_action_mock:
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.35,
                 timestamp=2.00,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.40,
                 timestamp=2.02,
             ))
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.30,
                 timestamp=2.04,
             ))
@@ -168,7 +172,7 @@ class EngineHorizontalScrollTests(unittest.TestCase):
 
         with patch("core.engine.execute_action") as execute_action_mock:
             handler(SimpleNamespace(
-                event_type=MouseEvent.HSCROLL_RIGHT,
+                event_type=DeviceEvent.HSCROLL_RIGHT,
                 raw_data=0.100006103515625,
                 timestamp=3.00,
             ))
@@ -292,7 +296,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
 
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):
@@ -311,13 +315,16 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
     def _non_battery_threads(instances):
         return [thread for thread in instances if thread.name != "BatteryPoll"]
 
-    def _make_hid(self, *, connected_device=None, dpi_result=True, smart_shift_result=True):
+    def _make_hid(self, *, connected_device=None, dpi_result=True, smart_shift_result=True,
+                  dpi_supported=True, smart_shift_supported=True):
         return SimpleNamespace(
             connected_device=connected_device,
             read_battery=Mock(return_value=None),
+            read_all_batteries=Mock(return_value={}),
             set_dpi=Mock(return_value=dpi_result),
             set_smart_shift=Mock(return_value=smart_shift_result),
-            smart_shift_supported=True,
+            dpi_supported=dpi_supported,
+            smart_shift_supported=smart_shift_supported,
         )
 
     def test_hid_ready_transition_requests_replay_worker(self):
@@ -517,6 +524,38 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             status_messages,
         )
 
+    def test_keyboard_only_reconnect_does_not_emit_failure_status(self):
+        # A keyboard exposes neither Adjustable DPI nor Smart Shift, so saved
+        # mouse settings must be skipped rather than counted as a failed replay
+        # (which would surface the misleading "Mouse reconnected…" message).
+        engine = self._make_engine()
+        status_messages = []
+        engine.set_status_callback(status_messages.append)
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=None,
+            dpi_result=False,
+            smart_shift_result=False,
+            dpi_supported=False,
+            smart_shift_supported=False,
+        )
+        threads = []
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._on_connection_change(True)
+            engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Keys")
+            engine._on_connection_change(True)
+
+        replay_threads = self._non_battery_threads(threads)
+        self.assertEqual(len(replay_threads), 1)
+        replay_threads[0].run_target()
+
+        engine.hook._hid_gesture.set_dpi.assert_not_called()
+        engine.hook._hid_gesture.set_smart_shift.assert_not_called()
+        self.assertFalse(
+            any("could not be restored" in message.lower() for message in status_messages),
+            status_messages,
+        )
+
     def test_battery_poll_skips_smart_shift_reads_while_replay_is_inflight(self):
         engine = self._make_engine()
         stop_event = Mock()
@@ -526,14 +565,79 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         engine.hook._hid_gesture = SimpleNamespace(
             connected_device=SimpleNamespace(name="MX Master 3S"),
             smart_shift_supported=True,
-            read_battery=Mock(return_value=None),
+            read_all_batteries=Mock(return_value={}),
             read_smart_shift=Mock(return_value={"mode": "ratchet", "enabled": False, "threshold": 25}),
         )
 
         engine._battery_poll_loop(stop_event)
 
-        engine.hook._hid_gesture.read_battery.assert_called_once_with()
+        engine.hook._hid_gesture.read_all_batteries.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+
+class EngineBacklightThemeOnOffTests(unittest.TestCase):
+    def _make_engine(self, follow=True, up_map="none", down_map="none"):
+        from core.engine import Engine
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["backlight_follow_theme"] = follow
+        cfg["profiles"]["default"]["mappings"]["kbd_backlight_up"] = up_map
+        cfg["profiles"]["default"]["mappings"]["kbd_backlight_down"] = down_map
+        with (
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_capable_when_following_and_up_unmapped(self):
+        self.assertTrue(self._make_engine(follow=True)._backlight_reenable_capable)
+
+    def test_not_capable_when_following_disabled(self):
+        self.assertFalse(self._make_engine(follow=False)._backlight_reenable_capable)
+
+    def test_not_capable_when_up_remapped(self):
+        self.assertFalse(
+            self._make_engine(up_map="volume_up")._backlight_reenable_capable)
+
+    def test_off_arms_up_divert_on_releases_to_passthrough(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        down = KEYBOARD_KEY_CIDS["kbd_backlight_down"]
+        engine = self._make_engine(follow=True)
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+
+        engine.set_backlight(False, 0)            # light theme: off
+        self.assertTrue(engine._backlight_reenable_active)
+        self.assertIn(up, engine.hook.divert_keyboard_keys)
+        self.assertNotIn(down, engine.hook.divert_keyboard_keys)  # DOWN passthrough
+
+        engine.set_backlight(True, 100)           # dark theme: on
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
+
+    def test_reenable_handler_turns_on_and_releases_up(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        engine = self._make_engine(follow=True)
+        engine._enabled = True
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+        engine.set_backlight(False, 0)            # arm
+
+        engine._make_backlight_reenable_handler()(SimpleNamespace())
+
+        self.assertEqual(engine._backlight_state, (True, 100))
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
+        engine.hook._hid_gesture.set_backlight.assert_called_with(True, 100)
+
+    def test_dark_theme_is_passthrough(self):
+        from core.logi_device_catalog import KEYBOARD_KEY_CIDS
+        up = KEYBOARD_KEY_CIDS["kbd_backlight_up"]
+        engine = self._make_engine(follow=True)
+        engine.hook._hid_gesture = SimpleNamespace(set_backlight=Mock())
+        engine.set_backlight(True, 100)           # dark theme
+        self.assertFalse(engine._backlight_reenable_active)
+        self.assertNotIn(up, engine.hook.divert_keyboard_keys)
 
 
 class WheelInvertConnectThreadingTests(unittest.TestCase):
@@ -548,7 +652,7 @@ class WheelInvertConnectThreadingTests(unittest.TestCase):
 
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         with (
-            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.DeviceHook", _FakeDeviceHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):

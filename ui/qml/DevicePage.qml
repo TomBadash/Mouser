@@ -4,18 +4,29 @@ import QtQuick.Controls.Material
 import QtQuick.Layouts
 import "Theme.js" as Theme
 
-/*  Unified Mouse + Profiles page.
+/*  Device + Profiles page. Reused for both the mouse and keyboard pages via the
+    `deviceFilter` property ("mouse" / "keyboard").
     Left panel  — profile list with add/delete.
-    Right panel — interactive mouse image with hotspot overlay & action picker.
+    Right panel — interactive device image with hotspot overlay & action picker.
     Selecting a profile switches which mappings are shown / edited.            */
 
 Item {
-    id: mousePage
+    id: devicePage
     readonly property var theme: Theme.palette(uiState.darkMode)
     readonly property bool hasBlockingDialog: addAppDialog.visible
                                              || deleteDialog.visible
                                              || keyCaptureDialog.visible
     property string pendingDeleteProfile: ""
+
+    // Which device class this page instance shows ("mouse" or "keyboard").
+    // The same page component backs both the Mouse and Keyboard navbar entries.
+    property string deviceFilter: "mouse"
+    // All info for THIS page's device class, so the Mouse and Keyboard pages
+    // each render their own device independently (multiplexer). The deviceTick
+    // reference forces re-evaluation when device info changes.
+    readonly property var pageDevice:
+        (backend.deviceTick, backend.deviceInfoForType(deviceFilter))
+    readonly property bool deviceConnectedHere: pageDevice.connected === true
     // Reactive i18n shortcut — all s["key"] bindings update on lm.languageChanged
     property var s: lm.strings
 
@@ -30,7 +41,7 @@ Item {
                 leftPadding: 10; rightPadding: 10
                 text: (lm.strings, lm.trAction(modelData ? modelData.label : ""))
                 font { family: uiState.fontFamily; pixelSize: 11 }
-                color: highlighted ? mousePage.theme.accent : mousePage.theme.textPrimary
+                color: highlighted ? devicePage.theme.accent : devicePage.theme.textPrimary
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
@@ -52,11 +63,11 @@ Item {
                     if (!modelData) return ""
                     var lbl = modelData.label || ""
                     return lbl === "Auto-detect"
-                           ? (s["mouse.auto_detect"] || lbl)
+                           ? (s["device.auto_detect"] || lbl)
                            : lbl
                 }
                 font { family: uiState.fontFamily; pixelSize: 11 }
-                color: highlighted ? mousePage.theme.accent : mousePage.theme.textPrimary
+                color: highlighted ? devicePage.theme.accent : devicePage.theme.textPrimary
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
@@ -69,6 +80,8 @@ Item {
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
     property var selectedProfileMappingState: ({})
+    // Crown ratchet/smooth feel for the profile currently being edited.
+    property bool selectedCrownSmooth: false
     property string appSearchText: ""
     property var filteredKnownApps: []
     property var suggestedKnownApps: []
@@ -81,13 +94,14 @@ Item {
     }
 
     function refreshSelectedProfileMappings() {
-        var mappings = backend.getProfileMappings(selectedProfile)
+        var mappings = backend.getProfileMappings(selectedProfile, deviceFilter)
         var mappingState = ({})
         for (var i = 0; i < mappings.length; i++) {
             var mapping = mappings[i]
             mappingState[mapping.key] = mapping
         }
         selectedProfileMappingState = mappingState
+        selectedCrownSmooth = backend.crownSmoothForProfile(selectedProfile)
     }
 
     function mappingFor(key) {
@@ -134,13 +148,13 @@ Item {
 
     function appLocationLabel(app) {
         if (!app || !app.path)
-            return s["mouse.installed_app"] || "Installed app"
+            return s["device.installed_app"] || "Installed app"
         if (app.path.indexOf("/Applications/") === 0)
-            return s["mouse.applications"] || "Applications"
+            return s["device.applications"] || "Applications"
         if (app.path.indexOf("/System/Applications/") === 0)
-            return s["mouse.system_applications"] || "System Applications"
+            return s["device.system_applications"] || "System Applications"
         if (app.path.indexOf("/System/Library/CoreServices/") === 0)
-            return s["mouse.macos_coreservices"] || "macOS CoreServices"
+            return s["device.macos_coreservices"] || "macOS CoreServices"
         if (app.path.indexOf("/Users/") === 0)
             return app.path
         return app.path
@@ -337,13 +351,13 @@ Item {
                                              : "none"
     readonly property string hscrollLeftActionLabel: selectedProfileMappingState.hscroll_left
                                                 ? selectedProfileMappingState.hscroll_left.actionLabel
-                                                : (s["mouse.do_nothing"] || "Do Nothing")
+                                                : (s["device.do_nothing"] || "Do Nothing")
     readonly property string hscrollRightActionId: selectedProfileMappingState.hscroll_right
                                               ? selectedProfileMappingState.hscroll_right.actionId
                                               : "none"
     readonly property string hscrollRightActionLabel: selectedProfileMappingState.hscroll_right
                                                  ? selectedProfileMappingState.hscroll_right.actionLabel
-                                                 : (s["mouse.do_nothing"] || "Do Nothing")
+                                                 : (s["device.do_nothing"] || "Do Nothing")
     // Both the Gesture button ("gesture") and the MX Master 4 Sense Panel
     // ("actions_ring") are gesture-capable: a tap action plus their own swipe
     // set. The config-editor panel is driven off whichever is selected; swipe
@@ -355,7 +369,7 @@ Item {
     readonly property string swipeTapActionId: _swipeTapMap
         ? _swipeTapMap.actionId : "none"
     readonly property string swipeTapActionLabel: _swipeTapMap
-        ? _swipeTapMap.actionLabel : (s["mouse.do_nothing"] || "Do Nothing")
+        ? _swipeTapMap.actionLabel : (s["device.do_nothing"] || "Do Nothing")
     readonly property var _swipeLeftMap: isSwipeButton
         ? selectedProfileMappingState[selectedButton + "_left"] : null
     readonly property string swipeLeftActionId: _swipeLeftMap
@@ -396,7 +410,7 @@ Item {
             return
         }
         selectedButton = "hscroll_left"
-        selectedButtonName = s["mouse.horizontal_scroll"] || "Horizontal Scroll"
+        selectedButtonName = s["device.horizontal_scroll"] || "Horizontal Scroll"
         var mapping = mappingFor("hscroll_left")
         selectedActionId = mapping ? mapping.actionId : "none"
     }
@@ -418,7 +432,7 @@ Item {
         var mapping = mappingFor(key)
         if (mapping)
             return lm.trAction(mapping.actionLabel)
-        return s["mouse.do_nothing"] || "Do Nothing"
+        return s["device.do_nothing"] || "Do Nothing"
     }
 
     function actionFor_id(key) {
@@ -428,22 +442,35 @@ Item {
         return "none"
     }
 
+    function _sentinelIndex(sentinelId) {
+        var actions = backend.allActions
+        for (var i = 0; i < actions.length; i++)
+            if (actions[i].id === sentinelId) return i
+        return 0
+    }
+
     function actionIndexForId(actionId) {
         var actions = backend.allActions
         for (var i = 0; i < actions.length; i++)
             if (actions[i].id === actionId) return i
-        // Custom shortcut: point to the __custom__ sentinel at the end
-        if (actionId.startsWith("custom:")) return actions.length - 1
+        // Parameterized actions point at their sentinel chip.
+        if (actionId.startsWith("custom:")) return _sentinelIndex("__custom__")
+        if (actionId.startsWith("open_app:")) return _sentinelIndex("__open_app__")
         return 0
     }
 
     function customLabel(actionId) {
-        if (!actionId.startsWith("custom:")) return ""
+        if (!actionId.startsWith("custom:") && !actionId.startsWith("open_app:"))
+            return ""
         return backend.actionLabelFor(actionId)
     }
 
     function isCustomAction(actionId) {
         return actionId.startsWith("custom:")
+    }
+
+    function isOpenAppAction(actionId) {
+        return actionId.startsWith("open_app:")
     }
 
     function gestureSummary(key) {
@@ -457,7 +484,7 @@ Item {
                     || actionFor_id(key + "_up") !== "none"
                     || actionFor_id(key + "_down") !== "none"
         if (tapId === "none" && hasSwipe)
-            return s["mouse.swipes_configured"] || "Swipes configured"
+            return s["device.swipes_configured"] || "Swipes configured"
         return actionFor(key)
     }
 
@@ -472,7 +499,7 @@ Item {
     }
 
     function layoutHasButton(buttonKey) {
-        var hotspots = backend.deviceHotspots
+        var hotspots = pageDevice.hotspots
         for (var i = 0; i < hotspots.length; i++) {
             if (hotspots[i].buttonKey === buttonKey)
                 return true
@@ -494,7 +521,7 @@ Item {
         var choices = backend.manualLayoutChoices
         if (idx >= 0 && idx < choices.length)
             return choices[idx].label
-        return s["mouse.auto_detect"] || "Auto-detect"
+        return s["device.auto_detect"] || "Auto-detect"
     }
 
     Connections {
@@ -536,7 +563,7 @@ Item {
                             left: parent.left; leftMargin: 16
                             verticalCenter: parent.verticalCenter
                         }
-                                text: s["mouse.profiles"]
+                                text: s["device.profiles"]
                                 font { family: uiState.fontFamily; pixelSize: 14; bold: true }
                                 color: theme.textPrimary
                     }
@@ -618,7 +645,7 @@ Item {
                                 Text {
                                     text: modelData.displayApps.length
                                           ? modelData.displayApps.join(", ")
-                                          : (s["mouse.all_applications"] || "All applications")
+                                          : (s["device.all_applications"] || "All applications")
                                     font { family: uiState.fontFamily; pixelSize: 9 }
                                     color: theme.textSecondary
                                     elide: Text.ElideRight
@@ -684,13 +711,13 @@ Item {
                                 spacing: 2
 
                                 Text {
-                                    text: s["mouse.add_app_profile"]
+                                    text: s["device.add_app_profile"]
                                     font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                     color: theme.textPrimary
                                 }
 
                                 Text {
-                                    text: s["mouse.search_installed_apps"]
+                                    text: s["device.search_installed_apps"]
                                     font { family: uiState.fontFamily; pixelSize: 9 }
                                     color: theme.textSecondary
                                     elide: Text.ElideRight
@@ -730,11 +757,13 @@ Item {
 
                     // ── Header ────────────────────────────────
                     Item {
+                        id: headerItem
                         width: parent.width; height: 70
 
                         Row {
                             anchors {
                                 left: parent.left; leftMargin: 28
+                                right: headerStatusRow.left; rightMargin: 12
                                 verticalCenter: parent.verticalCenter
                             }
                             spacing: 12
@@ -747,9 +776,18 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: backend.deviceDisplayName
+                                        text: deviceConnectedHere
+                                              ? pageDevice.name
+                                              : (deviceFilter === "keyboard"
+                                                 ? (s["nav.keyboard"] || "Keyboard")
+                                                 : (s["nav.mouse"] || "Mouse"))
                                         font { family: uiState.fontFamily; pixelSize: 20; bold: true }
                                         color: theme.textPrimary
+                                        elide: Text.ElideRight
+                                        width: Math.min(
+                                            implicitWidth,
+                                            Math.max(80, headerItem.width
+                                                     - headerStatusRow.width - 200))
                                     }
 
                                     // Profile badge
@@ -771,11 +809,15 @@ Item {
                                 }
 
                                 Text {
-                                    text: !backend.mouseConnected
-                                          ? s["mouse.turn_on_mouse"]
-                                          : backend.hasInteractiveDeviceLayout
-                                            ? s["mouse.click_dot"]
-                                            : s["mouse.choose_layout"]
+                                    text: !deviceConnectedHere
+                                          ? (deviceFilter === "keyboard"
+                                             ? s["device.turn_on_keyboard"]
+                                             : s["device.turn_on_mouse"])
+                                          : pageDevice.interactive
+                                            ? (deviceFilter === "keyboard"
+                                               ? s["device.click_key"]
+                                               : s["device.click_dot"])
+                                            : s["device.choose_layout"]
                                     font { family: uiState.fontFamily; pixelSize: 12 }
                                     color: theme.textSecondary
                                 }
@@ -784,11 +826,55 @@ Item {
 
                         // Right-side status row: delete button + battery + connection
                         Row {
+                            id: headerStatusRow
                             anchors {
                                 right: parent.right; rightMargin: 28
                                 verticalCenter: parent.verticalCenter
                             }
                             spacing: 8
+
+                            // Copy configuration from another profile
+                            Rectangle {
+                                visible: selectedProfile !== "" && backend.profiles.length > 1
+                                width: copyRow.implicitWidth + 18
+                                height: 28
+                                radius: 10
+                                color: copyMa.containsMouse ? theme.bgCardHover : theme.bgSubtle
+                                border.width: 1
+                                border.color: theme.border
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                Row {
+                                    id: copyRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+
+                                    AppIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14; height: 14
+                                        name: "sliders-horizontal"
+                                        iconColor: theme.textSecondary
+                                    }
+
+                                    Text {
+                                        text: s["device.copy_profile"] || "Copy from…"
+                                        font { family: uiState.fontFamily; pixelSize: 10; bold: true }
+                                        color: theme.textPrimary
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: copyMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        copyFromDialog.refreshSources()
+                                        copyFromDialog.open()
+                                    }
+                                }
+                            }
 
                             // Delete profile button (not for default)
                             Rectangle {
@@ -815,7 +901,7 @@ Item {
                                     }
 
                                     Text {
-                                        text: s["mouse.delete_profile"]
+                                        text: s["device.delete_profile"]
                                         font { family: uiState.fontFamily; pixelSize: 10; bold: true }
                                         color: uiState.darkMode ? theme.textPrimary : theme.danger
                                     }
@@ -835,12 +921,12 @@ Item {
 
                             // Battery badge
                             Rectangle {
-                                visible: backend.batteryLevel >= 0
+                                visible: deviceConnectedHere && pageDevice.battery >= 0
                                 width: battRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
                                 color: {
-                                    var lvl = backend.batteryLevel
+                                    var lvl = pageDevice.battery
                                     if (lvl <= 20) return Qt.rgba(0.88, 0.2, 0.2, 0.18)
                                     if (lvl <= 40) return Qt.rgba(0.9, 0.56, 0.1, 0.18)
                                     return Qt.rgba(0, 0.83, 0.67, uiState.darkMode ? 0.12 : 0.16)
@@ -857,7 +943,7 @@ Item {
                                         height: 14
                                         name: "battery-high"
                                         iconColor: {
-                                            var lvl = backend.batteryLevel
+                                            var lvl = pageDevice.battery
                                             if (lvl <= 20) return "#e05555"
                                             if (lvl <= 40) return "#e09045"
                                             return theme.accent
@@ -865,10 +951,10 @@ Item {
                                     }
 
                                     Text {
-                                        text: backend.batteryLevel + "%"
+                                        text: pageDevice.battery + "%"
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: {
-                                            var lvl = backend.batteryLevel
+                                            var lvl = pageDevice.battery
                                             if (lvl <= 20) return "#e05555"
                                             if (lvl <= 40) return "#e09045"
                                             return theme.accent
@@ -882,7 +968,7 @@ Item {
                                 width: statusRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
-                                color: backend.mouseConnected
+                                color: deviceConnectedHere
                                        ? Qt.rgba(0, 0.83, 0.67, 0.12)
                                        : Qt.rgba(0.9, 0.3, 0.3, 0.15)
 
@@ -893,26 +979,27 @@ Item {
 
                                     Rectangle {
                                         width: 7; height: 7; radius: 4
-                                        color: backend.mouseConnected
+                                        color: deviceConnectedHere
                                                ? theme.accent : "#e05555"
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
                                     Text {
-                                        text: backend.mouseConnected
-                                              ? (s["mouse.connected"]
-                                                 + (backend.connectionType !== ""
-                                                    ? " · " + backend.connectionType : ""))
-                                              : s["mouse.not_connected"]
+                                        text: deviceConnectedHere
+                                              ? (s["device.connected"]
+                                                 + (pageDevice.transport !== ""
+                                                    ? " · " + pageDevice.transport : ""))
+                                              : s["device.not_connected"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        color: backend.mouseConnected
+                                        color: deviceConnectedHere
                                                ? theme.accent : "#e05555"
                                     }
                                 }
                             }
 
-                            // Layout picker pill
+                            // Layout picker pill (mouse-only: the override
+                            // choices are mouse family layouts).
                             Rectangle {
-                                visible: backend.mouseConnected
+                                visible: deviceConnectedHere && deviceFilter !== "keyboard"
                                 width: layoutPillRow.implicitWidth + 16
                                 height: 24; radius: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -931,7 +1018,7 @@ Item {
                                         text: {
                                             if (backend.deviceLayoutOverrideKey !== "")
                                                 return currentLayoutChoiceLabel()
-                                            return backend.deviceDisplayName || "Auto"
+                                            return pageDevice.name || "Auto"
                                         }
                                         font { family: uiState.fontFamily; pixelSize: 10 }
                                         color: backend.deviceLayoutOverrideKey !== ""
@@ -964,7 +1051,7 @@ Item {
                                             text: {
                                                 var lbl = modelData.label || ""
                                                 return lbl === "Auto-detect"
-                                                       ? (s["mouse.auto_detect"] || lbl)
+                                                       ? (s["device.auto_detect"] || lbl)
                                                        : lbl
                                             }
                                             font { family: uiState.fontFamily; pixelSize: 11 }
@@ -986,9 +1073,14 @@ Item {
 
                     // ── Mouse image with hotspots ─────────────
                     Item {
-                        id: mouseImageArea
+                        id: deviceImageArea
                         width: parent.width
-                        height: 420
+                        // Give the non-interactive control list more vertical
+                        // room; interactive keyboard diagrams size to the photo.
+                        height: (deviceConnectedHere && !pageDevice.interactive) ? 600
+                                : (deviceConnectedHere
+                                   && pageDevice.layoutKind === "keyboard")
+                                  ? (deviceImg.height + 48) : 420
 
                         Rectangle {
                             anchors.fill: parent
@@ -996,13 +1088,19 @@ Item {
                         }
 
                         Image {
-                            id: mouseImg
-                            source: backend.deviceImageSource
+                            id: deviceImg
+                            source: pageDevice.image
                             fillMode: Image.PreserveAspectFit
-                            width: backend.deviceImageWidth
-                            height: backend.deviceImageHeight
+                            // Keyboards are wide: fit the panel width (aspect from
+                            // the layout); mice keep their fixed diagram size.
+                            readonly property bool isKbd: pageDevice.layoutKind === "keyboard"
+                            readonly property real kbdAspect: pageDevice.imageHeight > 0
+                                ? pageDevice.imageWidth / pageDevice.imageHeight : 2
+                            width: isKbd ? Math.min(parent.width - 32, 760)
+                                         : pageDevice.imageWidth
+                            height: isKbd ? width / kbdAspect : pageDevice.imageHeight
                             anchors.centerIn: parent
-                            visible: backend.mouseConnected
+                            visible: deviceConnectedHere
                             smooth: true
                             mipmap: true
                             asynchronous: true
@@ -1013,7 +1111,7 @@ Item {
                         }
 
                         Rectangle {
-                            visible: !backend.mouseConnected
+                            visible: !deviceConnectedHere
                             width: Math.min(parent.width - 120, 760)
                             height: emptyStateCol.implicitHeight + 52
                             radius: 24
@@ -1048,7 +1146,7 @@ Item {
                                         }
 
                                         Text {
-                                            text: s["mouse.waiting_for_connection"]
+                                            text: s["device.waiting_for_connection"]
                                             font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                             color: "#e05555"
                                         }
@@ -1057,7 +1155,9 @@ Item {
 
                                 Text {
                                     width: parent.width
-                                    text: s["mouse.connect_mouse"]
+                                    text: deviceFilter === "keyboard"
+                                          ? s["device.connect_keyboard"]
+                                          : s["device.connect_mouse"]
                                     wrapMode: Text.WordWrap
                                     font { family: uiState.fontFamily; pixelSize: 26; bold: true }
                                     color: theme.textPrimary
@@ -1065,7 +1165,9 @@ Item {
 
                                 Text {
                                     width: Math.min(parent.width, 680)
-                                    text: s["mouse.connect_mouse_desc"]
+                                    text: deviceFilter === "keyboard"
+                                          ? s["device.connect_keyboard_desc"]
+                                          : s["device.connect_mouse_desc"]
                                     wrapMode: Text.WordWrap
                                     font { family: uiState.fontFamily; pixelSize: 13 }
                                     color: theme.textSecondary
@@ -1086,7 +1188,7 @@ Item {
                                         Text {
                                             id: firstHint
                                             anchors.centerIn: parent
-                                            text: s["mouse.layout_appears_auto"]
+                                            text: s["device.layout_appears_auto"]
                                             font { family: uiState.fontFamily; pixelSize: 11 }
                                             color: theme.textSecondary
                                         }
@@ -1103,7 +1205,7 @@ Item {
                                         Text {
                                             id: secondHint
                                             anchors.centerIn: parent
-                                            text: s["mouse.per_device_settings"]
+                                            text: s["device.per_device_settings"]
                                             font { family: uiState.fontFamily; pixelSize: 11 }
                                             color: theme.textSecondary
                                         }
@@ -1113,13 +1215,17 @@ Item {
                         }
 
                         Repeater {
-                            model: backend.deviceHotspots
+                            // Mouse hotspot dots (callout style). Keyboards use
+                            // the key-region overlay below instead.
+                            model: (deviceConnectedHere
+                                    && pageDevice.layoutKind !== "keyboard")
+                                   ? pageDevice.hotspots : []
 
                             delegate: HotspotDot {
                                 required property int index
-                                readonly property var hotspot: backend.deviceHotspots[index]
-                                anchors.fill: mouseImageArea
-                                imgItem: mouseImg
+                                readonly property var hotspot: pageDevice.hotspots[index]
+                                anchors.fill: deviceImageArea
+                                imgItem: deviceImg
                                 normX: Number(hotspot["normX"] || 0)
                                 normY: Number(hotspot["normY"] || 0)
                                 buttonKey: String(hotspot["buttonKey"] || "")
@@ -1132,44 +1238,150 @@ Item {
                             }
                         }
 
+                        // Interactive keyboard overlay: clickable key regions.
+                        Repeater {
+                            model: (deviceConnectedHere
+                                    && pageDevice.layoutKind === "keyboard")
+                                   ? pageDevice.hotspots : []
+
+                            delegate: KeyHotspot {
+                                required property int index
+                                readonly property var hotspot: pageDevice.hotspots[index]
+                                anchors.fill: deviceImageArea
+                                imgItem: deviceImg
+                                normX: Number(hotspot["normX"] || 0)
+                                normY: Number(hotspot["normY"] || 0)
+                                normW: Number(hotspot["normW"] || 0.03)
+                                normH: Number(hotspot["normH"] || 0.075)
+                                buttonKey: String(hotspot["buttonKey"] || "")
+                                label: String(hotspot["label"] || hotspot["buttonKey"] || "")
+                            }
+                        }
+
+                        // Interactive Crown dial (Craft only).
+                        CrownControl {
+                            visible: deviceConnectedHere
+                                     && pageDevice.layoutKind === "keyboard"
+                                     && !!pageDevice.crown
+                            anchors.fill: deviceImageArea
+                            imgItem: deviceImg
+                            crown: pageDevice.crown || ({})
+                            crownButtons: {
+                                var out = []
+                                var bs = pageDevice.buttons
+                                for (var i = 0; i < bs.length; i++) {
+                                    if (String(bs[i].key).indexOf("crown_") === 0)
+                                        out.push(bs[i])
+                                }
+                                return out
+                            }
+                        }
+
                         Rectangle {
-                            visible: backend.mouseConnected && !backend.hasInteractiveDeviceLayout
-                            width: Math.min(420, parent.width - 48)
-                            height: fallbackCol.implicitHeight + 32
+                            visible: deviceConnectedHere && !pageDevice.interactive
+                            width: Math.min(460, parent.width - 48)
+                            // Bound to the image area; a long control list (e.g.
+                            // the Craft's crown + keys) scrolls inside the card
+                            // instead of overflowing onto the action picker.
+                            height: Math.min(76 + (pageDevice.hasCrown ? 36 : 0)
+                                             + pageDevice.buttons.length * 44,
+                                             parent.height - 16)
                             radius: 16
                             color: theme.bgCard
                             border.width: 1
                             border.color: theme.border
                             anchors.centerIn: parent
 
-                            Column {
-                                id: fallbackCol
+                            Item {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 10
 
-                                Text {
-                                    text: s["mouse.interactive_layout_coming"]
-                                    width: parent.width
-                                    font { family: uiState.fontFamily; pixelSize: 15; bold: true }
-                                    color: theme.textPrimary
+                                Column {
+                                    id: fallbackHeader
+                                    anchors { top: parent.top; left: parent.left; right: parent.right }
+                                    spacing: 6
+
+                                    Text {
+                                        text: s["device.interactive_layout_coming"]
+                                        width: parent.width
+                                        font { family: uiState.fontFamily; pixelSize: 15; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    Text {
+                                        text: pageDevice.note
+                                        width: parent.width
+                                        wrapMode: Text.WordWrap
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
+                                        visible: text !== ""
+                                    }
+
+                                    // Crown feel toggle (Craft keyboards only).
+                                    Row {
+                                        visible: pageDevice.hasCrown
+                                        spacing: 10
+                                        topPadding: 2
+
+                                        Text {
+                                            text: s["device.crown_rotation"] || "Crown rotation"
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                            color: theme.textPrimary
+                                        }
+
+                                        Row {
+                                            spacing: 0
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            Repeater {
+                                                model: [{ smooth: false }, { smooth: true }]
+                                                delegate: Rectangle {
+                                                    required property var modelData
+                                                    width: 76; height: 26
+                                                    radius: 7
+                                                    color: backend.crownSmooth === modelData.smooth
+                                                           ? theme.accent : "transparent"
+                                                    border.width: 1
+                                                    border.color: backend.crownSmooth === modelData.smooth
+                                                                  ? theme.accent : theme.border
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: modelData.smooth
+                                                              ? (s["device.smooth"] || "Smooth")
+                                                              : (s["device.ratchet"] || "Ratchet")
+                                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                                        color: backend.crownSmooth === modelData.smooth
+                                                               ? theme.bgCard : theme.textSecondary
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: backend.setCrownSmooth(modelData.smooth)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
-                                Text {
-                                    text: backend.deviceLayoutNote
-                                    width: parent.width
-                                    wrapMode: Text.WordWrap
-                                    font { family: uiState.fontFamily; pixelSize: 12 }
-                                    color: theme.textSecondary
-                                    visible: text !== ""
-                                }
+                                // Scrollable control list for devices without an
+                                // interactive overlay (keyboards, generic mice).
+                                ListView {
+                                    id: fallbackList
+                                    anchors {
+                                        top: fallbackHeader.bottom; topMargin: 10
+                                        left: parent.left; right: parent.right
+                                        bottom: parent.bottom
+                                    }
+                                    clip: true
+                                    spacing: 4
+                                    model: pageDevice.buttons
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                                // Clickable button list for devices without an interactive overlay
-                                Repeater {
-                                    model: backend.buttons
                                     delegate: Rectangle {
                                         required property var modelData
-                                        width: fallbackCol.width
+                                        width: fallbackList.width
                                         height: 40
                                         radius: 10
                                         color: selectedButton === modelData.key
@@ -1268,18 +1480,18 @@ Item {
 
                                     Text {
                                         text: selectedButtonName
-                                              ? selectedButtonName + (s["mouse.choose_action_suffix"] || " — Choose Action")
+                                              ? selectedButtonName + (s["device.choose_action_suffix"] || " — Choose Action")
                                               : ""
                                         font { family: uiState.fontFamily; pixelSize: 15; bold: true }
                                         color: theme.textPrimary
                                     }
                                     Text {
                                         text: selectedButton === "hscroll_left"
-                                              ? s["mouse.configure_scroll_actions"]
+                                              ? s["device.configure_scroll_actions"]
                                               : isSwipeButton
                                                 && backend.supportsGestureDirections
-                                                ? s["mouse.configure_gesture"]
-                                              : s["mouse.select_button_action"]
+                                                ? s["device.configure_gesture"]
+                                              : s["device.select_button_action"]
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textSecondary
                                         visible: selectedButton !== ""
@@ -1295,7 +1507,7 @@ Item {
                                 visible: selectedButton === "hscroll_left"
 
                                 Text {
-                                    text: s["mouse.scroll_left"]
+                                    text: s["device.scroll_left"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1329,7 +1541,7 @@ Item {
                                 Item { width: 1; height: 4 }
 
                                 Text {
-                                    text: s["mouse.scroll_right"]
+                                    text: s["device.scroll_right"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1368,7 +1580,7 @@ Item {
                                          && backend.supportsGestureDirections
 
                                 Text {
-                                    text: s["mouse.tap_action"]
+                                    text: s["device.tap_action"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1382,13 +1594,17 @@ Item {
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 11 }
                                     currentIndex: actionIndexForId(swipeTapActionId)
-                                    displayText: isCustomAction(swipeTapActionId)
+                                    displayText: (isCustomAction(swipeTapActionId) || isOpenAppAction(swipeTapActionId))
                                                  ? customLabel(swipeTapActionId)
                                                  : (lm.strings, lm.trAction(currentText))
                                     onActivated: function(index) {
                                         var aid = backend.allActions[index].id
                                         if (aid === "__custom__") {
                                             keyCaptureDialog.open(selectedProfile, selectedButton)
+                                            return
+                                        }
+                                        if (aid === "__open_app__") {
+                                            backend.pickAppForMapping(selectedProfile, selectedButton)
                                             return
                                         }
                                         backend.setProfileMapping(selectedProfile, selectedButton, aid)
@@ -1409,7 +1625,7 @@ Item {
                                     spacing: 12
 
                                 Text {
-                                    text: s["mouse.threshold"]
+                                    text: s["device.threshold"]
                                     font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                                     color: theme.textPrimary
                                 }
@@ -1456,7 +1672,7 @@ Item {
 
                                 Text {
                                     visible: swipeTapActionId === "none"
-                                    text: s["mouse.swipe_actions"]
+                                    text: s["device.swipe_actions"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
                                     color: theme.textDim
@@ -1468,7 +1684,7 @@ Item {
                                     spacing: 12
 
                                     Text {
-                                        text: s["mouse.swipe_left"]
+                                        text: s["device.swipe_left"]
                                         Layout.preferredWidth: 100
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textPrimary
@@ -1482,13 +1698,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(swipeLeftActionId)
-                                        displayText: isCustomAction(swipeLeftActionId)
+                                        displayText: (isCustomAction(swipeLeftActionId) || isOpenAppAction(swipeLeftActionId))
                                                      ? customLabel(swipeLeftActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, selectedButton + "_left")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_left")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1503,7 +1723,7 @@ Item {
                                     spacing: 12
 
                                     Text {
-                                        text: s["mouse.swipe_right"]
+                                        text: s["device.swipe_right"]
                                         Layout.preferredWidth: 100
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textPrimary
@@ -1517,13 +1737,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(swipeRightActionId)
-                                        displayText: isCustomAction(swipeRightActionId)
+                                        displayText: (isCustomAction(swipeRightActionId) || isOpenAppAction(swipeRightActionId))
                                                      ? customLabel(swipeRightActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, selectedButton + "_right")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_right")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1538,7 +1762,7 @@ Item {
                                     spacing: 12
 
                                     Text {
-                                        text: s["mouse.swipe_up"]
+                                        text: s["device.swipe_up"]
                                         Layout.preferredWidth: 100
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textPrimary
@@ -1552,13 +1776,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(swipeUpActionId)
-                                        displayText: isCustomAction(swipeUpActionId)
+                                        displayText: (isCustomAction(swipeUpActionId) || isOpenAppAction(swipeUpActionId))
                                                      ? customLabel(swipeUpActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, selectedButton + "_up")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_up")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1573,7 +1801,7 @@ Item {
                                     spacing: 12
 
                                     Text {
-                                        text: s["mouse.swipe_down"]
+                                        text: s["device.swipe_down"]
                                         Layout.preferredWidth: 100
                                         font { family: uiState.fontFamily; pixelSize: 12 }
                                         color: theme.textPrimary
@@ -1587,13 +1815,17 @@ Item {
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         currentIndex: actionIndexForId(swipeDownActionId)
-                                        displayText: isCustomAction(swipeDownActionId)
+                                        displayText: (isCustomAction(swipeDownActionId) || isOpenAppAction(swipeDownActionId))
                                                      ? customLabel(swipeDownActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
                                                 keyCaptureDialog.open(selectedProfile, selectedButton + "_down")
+                                                return
+                                            }
+                                            if (aid === "__open_app__") {
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_down")
                                                 return
                                             }
                                             backend.setProfileMapping(
@@ -1613,7 +1845,7 @@ Item {
                                               && backend.supportsGestureDirections)
 
                                 Repeater {
-                                    model: backend.actionCategories
+                                    model: pageDevice.actionCategories
 
                                     delegate: Column {
                                         width: parent.width
@@ -1633,15 +1865,22 @@ Item {
                                                 model: modelData.actions
                                                 delegate: ActionChip {
                                                     actionId: modelData.id
-                                                    actionLabel: modelData.id === "__custom__" && isCustomAction(selectedActionId)
+                                                    actionLabel: (modelData.id === "__custom__" && isCustomAction(selectedActionId))
+                                                                 || (modelData.id === "__open_app__" && isOpenAppAction(selectedActionId))
                                                                  ? customLabel(selectedActionId)
                                                                  : (lm.strings, lm.trAction(modelData.label))
                                                     isCurrent: modelData.id === "__custom__"
                                                                ? isCustomAction(selectedActionId)
-                                                               : modelData.id === selectedActionId
+                                                               : modelData.id === "__open_app__"
+                                                                 ? isOpenAppAction(selectedActionId)
+                                                                 : modelData.id === selectedActionId
                                                     onPicked: function(aid) {
                                                         if (aid === "__custom__") {
                                                             keyCaptureDialog.open(selectedProfile, selectedButton)
+                                                            return
+                                                        }
+                                                        if (aid === "__open_app__") {
+                                                            backend.pickAppForMapping(selectedProfile, selectedButton)
                                                             return
                                                         }
                                                         backend.setProfileMapping(
@@ -1816,9 +2055,11 @@ Item {
                         }
                     }
 
-                    // ── Device info share card (always visible when connected)
+                    // ── Device info share card ────────────────
+                    // Only for not-yet-recognized devices: invites the user to
+                    // submit this device's HID++ details so support can be added.
                     Rectangle {
-                        visible: backend.mouseConnected
+                        visible: deviceConnectedHere && !pageDevice.recognized
                         width: parent.width - 56
                         anchors.horizontalCenter: parent.horizontalCenter
                         height: shareDevRow.implicitHeight + 24
@@ -1833,7 +2074,9 @@ Item {
                             spacing: 10
 
                             Text {
-                                text: s["mouse.share_device_details"] || "Help us support your mouse"
+                                text: deviceFilter === "keyboard"
+                                      ? (s["device.share_device_keyboard"] || "Help us support your keyboard")
+                                      : (s["device.share_device_details"] || "Help us support your mouse")
                                 font { family: uiState.fontFamily; pixelSize: 12 }
                                 color: theme.textSecondary
                                 anchors.verticalCenter: parent.verticalCenter
@@ -1858,7 +2101,7 @@ Item {
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
                                     Text {
-                                        text: s["mouse.copy_device_info"] || "Copy device info"
+                                        text: s["device.copy_device_info"] || "Copy device info"
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: theme.accent
                                         anchors.verticalCenter: parent.verticalCenter
@@ -1871,14 +2114,14 @@ Item {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        var info = backend.dumpDeviceInfo()
+                                        var info = backend.dumpDeviceInfo(deviceFilter)
                                         if (info) {
                                             backend.copyToClipboard(info)
                                             backend.statusMessage(
-                                                s["mouse.device_info_copied"] || "Device info copied to clipboard -- paste it into a GitHub issue!")
+                                                s["device.device_info_copied"] || "Device info copied to clipboard -- paste it into a GitHub issue!")
                                         } else {
                                             backend.statusMessage(
-                                                s["mouse.no_device_connected"] || "No device connected")
+                                                s["device.no_device_connected"] || "No device connected")
                                         }
                                     }
                                 }
@@ -1911,13 +2154,13 @@ Item {
                                     spacing: 3
 
                                     Text {
-                                        text: s["mouse.debug_events"]
+                                        text: s["device.debug_events"]
                                         font { family: uiState.fontFamily; pixelSize: 14; bold: true }
                                         color: theme.textPrimary
                                     }
 
                                     Text {
-                                        text: s["mouse.debug_events_desc"]
+                                        text: s["device.debug_events_desc"]
                                         font { family: uiState.fontFamily; pixelSize: 11 }
                                         color: theme.textSecondary
                                     }
@@ -1925,14 +2168,14 @@ Item {
 
                                 Switch {
                                     checked: backend.debugEventsEnabled
-                                    text: checked ? s["mouse.on"] : s["mouse.off"]
+                                    text: checked ? s["device.on"] : s["device.off"]
                                     Material.accent: theme.accent
                                     onToggled: backend.setDebugEventsEnabled(checked)
                                 }
 
                                 Switch {
                                     checked: backend.recordMode
-                                    text: checked ? s["mouse.rec"] : s["mouse.record"]
+                                    text: checked ? s["device.rec"] : s["device.record"]
                                     Material.accent: "#e46f4e"
                                     onToggled: backend.setRecordMode(checked)
                                 }
@@ -1948,7 +2191,7 @@ Item {
                                     Text {
                                         id: clearText
                                         anchors.centerIn: parent
-                                        text: s["mouse.clear"]
+                                        text: s["device.clear"]
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: theme.textPrimary
                                     }
@@ -1973,7 +2216,7 @@ Item {
                                     Text {
                                         id: clearRecText
                                         anchors.centerIn: parent
-                                        text: s["mouse.clear_rec"]
+                                        text: s["device.clear_rec"]
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: theme.textPrimary
                                     }
@@ -2036,7 +2279,7 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: s["mouse.live_gesture_monitor"]
+                                        text: s["device.live_gesture_monitor"]
                                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                         color: theme.textPrimary
                                     }
@@ -2055,7 +2298,7 @@ Item {
                                             Text {
                                                 id: activeText
                                                 anchors.centerIn: parent
-                                                text: backend.gestureActive ? s["mouse.held"] : s["mouse.idle"]
+                                                text: backend.gestureActive ? s["device.held"] : s["device.idle"]
                                                 font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                                 color: backend.gestureActive ? "#f39c6b" : theme.textSecondary
                                             }
@@ -2072,7 +2315,7 @@ Item {
                                             Text {
                                                 id: moveText
                                                 anchors.centerIn: parent
-                                                text: backend.gestureMoveSeen ? s["mouse.move_seen"] : s["mouse.no_move"]
+                                                text: backend.gestureMoveSeen ? s["device.move_seen"] : s["device.no_move"]
                                                 font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                                                 color: backend.gestureMoveSeen ? theme.accent : theme.textSecondary
                                             }
@@ -2114,7 +2357,7 @@ Item {
                                         id: debugLogArea
                                         text: backend.debugLog.length
                                               ? backend.debugLog
-                                              : s["mouse.debug_placeholder"]
+                                              : s["device.debug_placeholder"]
                                         readOnly: true
                                         wrapMode: TextEdit.NoWrap
                                         selectByMouse: true
@@ -2149,7 +2392,7 @@ Item {
                                     TextArea {
                                         text: backend.gestureRecords.length
                                               ? backend.gestureRecords
-                                              : s["mouse.gesture_placeholder"]
+                                              : s["device.gesture_placeholder"]
                                         readOnly: true
                                         wrapMode: TextEdit.Wrap
                                         selectByMouse: true
@@ -2276,13 +2519,13 @@ Item {
                     spacing: 3
 
                     Text {
-                        text: s["mouse.add_app_dialog.title"]
+                        text: s["device.add_app_dialog.title"]
                         font { family: uiState.fontFamily; pixelSize: 17; bold: true }
                         color: theme.textPrimary
                     }
 
                     Text {
-                        text: s["mouse.add_app_dialog.desc"]
+                        text: s["device.add_app_dialog.desc"]
                         font { family: uiState.fontFamily; pixelSize: 11 }
                         color: theme.textSecondary
                     }
@@ -2369,7 +2612,7 @@ Item {
                         anchors.left: parent.left
                         anchors.leftMargin: 16
                         anchors.verticalCenter: parent.verticalCenter
-                        text: s["mouse.search_placeholder"]
+                        text: s["device.search_placeholder"]
                         font { family: uiState.fontFamily; pixelSize: 12 }
                         color: theme.textDim
                         visible: !appSearchInput.text.length
@@ -2392,7 +2635,7 @@ Item {
 
                     Text {
                         anchors.centerIn: parent
-                        text: s["mouse.browse"]
+                        text: s["device.browse"]
                         font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                         color: theme.textPrimary
                     }
@@ -2429,7 +2672,7 @@ Item {
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: addAppDialog.searching ? s["mouse.search_results"] : s["mouse.suggested_apps"]
+                        text: addAppDialog.searching ? s["device.search_results"] : s["device.suggested_apps"]
                         font { family: uiState.fontFamily; pixelSize: 11; bold: true }
                         color: theme.textPrimary
                     }
@@ -2554,8 +2797,8 @@ Item {
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
                             text: addAppDialog.searching
-                                  ? s["mouse.no_matched"]
-                                  : s["mouse.no_suggested"]
+                                  ? s["device.no_matched"]
+                                  : s["device.no_suggested"]
                             font { family: uiState.fontFamily; pixelSize: 13; bold: true }
                             color: theme.textPrimary
                             wrapMode: Text.WordWrap
@@ -2565,8 +2808,8 @@ Item {
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
                             text: addAppDialog.searching
-                                  ? s["mouse.try_different"]
-                                  : s["mouse.use_search"]
+                                  ? s["device.try_different"]
+                                  : s["device.use_search"]
                             font { family: uiState.fontFamily; pixelSize: 11 }
                             color: theme.textSecondary
                             wrapMode: Text.WordWrap
@@ -2597,7 +2840,7 @@ Item {
 
                     Text {
                         anchors.centerIn: parent
-                        text: s["mouse.create_profile"]
+                        text: s["device.create_profile"]
                         font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                         color: selectedKnownApp ? theme.bgSidebar : theme.textSecondary
                     }
@@ -2631,7 +2874,7 @@ Item {
 
                     Text {
                         anchors.centerIn: parent
-                        text: s["mouse.cancel"]
+                        text: s["device.cancel"]
                         font { family: uiState.fontFamily; pixelSize: 12; bold: true }
                         color: theme.textPrimary
                     }
@@ -2653,7 +2896,7 @@ Item {
         parent: Overlay.overlay
         modal: true
         focus: true
-        title: s["mouse.delete_dialog.title"]
+        title: s["device.delete_dialog.title"]
         width: 380
         x: Math.round((parent.width - width) / 2)
         y: Math.round((parent.height - height) / 2)
@@ -2681,9 +2924,9 @@ Item {
             Text {
                 width: parent.width
                 text: pendingDeleteProfile
-                      ? (s["mouse.delete_dialog.confirm_prefix"] || "Delete the profile for ")
+                      ? (s["device.delete_dialog.confirm_prefix"] || "Delete the profile for ")
                         + selectedProfileLabel
-                        + (s["mouse.delete_dialog.confirm_suffix"] || "?")
+                        + (s["device.delete_dialog.confirm_suffix"] || "?")
                       : ""
                 font { family: uiState.fontFamily; pixelSize: 13; bold: true }
                 color: theme.textPrimary
@@ -2692,8 +2935,80 @@ Item {
 
             Text {
                 width: parent.width
-                text: s["mouse.delete_dialog.desc"]
+                text: s["device.delete_dialog.desc"]
                 font { family: uiState.fontFamily; pixelSize: 12 }
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
+    // ── Copy configuration from another profile ──────────────
+    Dialog {
+        id: copyFromDialog
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        title: s["device.copy_dialog.title"] || "Copy configuration"
+        width: 400
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        // Profiles that can be a copy source (everything except the target).
+        property var sourceProfiles: []
+        function refreshSources() {
+            var out = []
+            var profs = backend.profiles
+            for (var i = 0; i < profs.length; i++)
+                if (profs[i].name !== selectedProfile)
+                    out.push(profs[i])
+            sourceProfiles = out
+            sourceCombo.currentIndex = out.length > 0 ? 0 : -1
+        }
+
+        onAccepted: {
+            if (sourceProfiles.length > 0 && sourceCombo.currentIndex >= 0) {
+                backend.copyProfileConfig(
+                    sourceProfiles[sourceCombo.currentIndex].name, selectedProfile)
+                refreshSelectedProfileMappings()
+            }
+        }
+
+        contentItem: Column {
+            width: copyFromDialog.availableWidth
+            spacing: 12
+
+            Text {
+                width: parent.width
+                text: (s["device.copy_dialog.desc"]
+                       || "Copy the button mappings and crown feel into ")
+                      + selectedProfileLabel + "."
+                font { family: uiState.fontFamily; pixelSize: 13 }
+                color: theme.textPrimary
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                text: s["device.copy_dialog.source"] || "Copy from profile:"
+                font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                color: theme.textSecondary
+            }
+
+            ComboBox {
+                id: sourceCombo
+                width: parent.width
+                model: copyFromDialog.sourceProfiles
+                textRole: "label"
+                Material.accent: theme.accent
+                font { family: uiState.fontFamily; pixelSize: 12 }
+            }
+
+            Text {
+                width: parent.width
+                text: s["device.copy_dialog.warn"]
+                      || "This replaces the current mappings of this profile."
+                font { family: uiState.fontFamily; pixelSize: 11 }
                 color: theme.textSecondary
                 wrapMode: Text.WordWrap
             }

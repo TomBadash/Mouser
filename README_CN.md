@@ -6,7 +6,7 @@
 
 中文文档｜[English README](README.md)
 
-一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标进行按键 / 手势重映射。当前对 **MX Master** 与 **MX Anywhere** 系列体验最佳，并对更多罗技型号提供识别与通用回退 UI。
+一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标**与键盘**进行按键 / 手势重映射。当前对 **MX Master** 与 **MX Anywhere** 鼠标以及 **Logitech Craft** / **MX Keys** 键盘体验最佳，并对更多罗技型号提供识别与通用回退 UI。
 
 **零遥测，零云端，无需罗技账号。**
 
@@ -18,6 +18,7 @@
 - [截图](#截图)
 - [功能特性](#功能特性)
 - [设备支持范围](#设备支持范围)
+- [键盘支持](#键盘支持)
 - [默认映射](#默认映射)
 - [可用动作](#可用动作)
 - [从源码构建](#从源码构建)
@@ -89,9 +90,25 @@
 
 ## 截图
 
-| 鼠标与配置 | 指针与滚动 |
-|---|---|
-| <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" /> | <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" /> |
+<p align="center">
+  <img src="images/Screenshot_mouse.png" alt="Mouser — 鼠标与配置页面" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_keyboard.png" alt="Mouser — 键盘页面（Craft / MX Keys 布局）" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_1.png" alt="Mouser — 鼠标设置" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_2.png" alt="Mouser — 键盘设置" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_3.png" alt="Mouser — 通用设置" />
+</p>
 
 ---
 
@@ -149,9 +166,26 @@
 | MX Master 4 / 3S / 3 / 2S / MX Master | 是 | 专用的逐型号交互布局 |
 | MX Anywhere 3S / 3 / 2S | 是 | 专用的逐型号交互布局 |
 | MX Vertical | 是 | 通用回退卡片（含 DPI 切换按键支持） |
+| Logitech Craft | 是 | 专用交互布局，含 **Crown** 旋钮与顶行按键 |
+| MX Keys | 是 | 专用交互布局，含顶行按键 |
+| 其他罗技 HID++ 键盘 | 按 HID++ 特征自动归类 | 通用键盘卡片（顶行按键可重映射） |
 | 其他罗技 HID++ 鼠标 | 按 PID / 名称尽力识别 | 通用回退卡片 |
 
-> MX Master 与 MX Anywhere 系列拥有专用的可视化覆盖层。其他设备同样可被识别、显示型号名，并可启用实验性布局覆盖；但在专用覆盖层加入前，按键热区位置可能不够精确。要为你的设备添加支持，请见 [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md)。
+> MX Master、MX Anywhere、Craft 与 MX Keys 拥有专用的可视化覆盖层。其他设备同样可被识别、显示型号名，并可启用实验性布局覆盖；但在专用覆盖层加入前，按键热区位置可能不够精确。要为你的设备添加支持，请见 [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md)。
+
+---
+
+## 键盘支持
+
+Mouser 在重映射鼠标的同时也支持罗技 HID++ 键盘。共用一个 Unifying 接收器的鼠标与键盘会被多路复用，可同时使用。
+
+- **Logitech Craft — Crown 旋钮。** Craft 的旋钮可完全重映射：在设备视图中点击旋钮打开面板，为 **左/右旋转**、**按下**、**触摸** 以及 **按下+左/右旋转** 分配动作（默认：旋转 = 音量，按下 = 播放/暂停，按下+旋转 = 切换曲目）。
+- **棘轮 ↔ 平滑，按应用区分。** 旋钮手感（有段落感的 *棘轮* 与自由旋转的 *平滑*）在旋钮面板中设置，并 **按应用配置（Profile）分别保存**，切换应用时自动生效。
+- **顶行按键。** 亮度、背光、媒体等顶行按键可在 Craft、MX Keys 及自动归类的键盘上通过 HID++ 重映射；在你重映射之前它们保持原生功能。
+- **背光跟随系统主题。** 在**设置**中启用后，键盘背光（HID++ 特征 `0x1982`）会在**深色模式下开启、浅色模式下关闭**。此键盘仅支持开关，不支持软件亮度调节；在浅色模式下，可按键盘的背光增强键将其重新开启，直到下次主题切换。
+- **打开应用程序动作。** 任意按键、Crown 子动作或鼠标按键都可绑定到 **打开应用程序…**，启动你选择的可执行文件。
+
+可使用 [`tools/craft_probe.py`](tools/craft_probe.py) 探测已连接键盘的 HID++ 特征与控制 ID（安全、只读）。
 
 ---
 

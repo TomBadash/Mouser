@@ -1,5 +1,5 @@
 """
-Shared mouse hook behavior used by platform implementations.
+Shared device hook behavior used by platform implementations.
 """
 
 import queue
@@ -10,28 +10,28 @@ except Exception:
     HidGestureListener = None
 
 from core.gesture_recognizer import GestureRecognizer
-from core.mouse_hook_types import HidRuntimeState, MouseEvent, format_debug_details
+from core.device_hook_types import HidRuntimeState, DeviceEvent, format_debug_details
 
 # Swipe direction -> event, per event family. The Gesture button (thumb)
 # always uses the gesture_* family; the Sense Panel (MX Master 4 primary
 # gesture control) uses the sense_* family.
 _GESTURE_SWIPE_EVENTS = {
-    "left": MouseEvent.GESTURE_SWIPE_LEFT,
-    "right": MouseEvent.GESTURE_SWIPE_RIGHT,
-    "up": MouseEvent.GESTURE_SWIPE_UP,
-    "down": MouseEvent.GESTURE_SWIPE_DOWN,
+    "left": DeviceEvent.GESTURE_SWIPE_LEFT,
+    "right": DeviceEvent.GESTURE_SWIPE_RIGHT,
+    "up": DeviceEvent.GESTURE_SWIPE_UP,
+    "down": DeviceEvent.GESTURE_SWIPE_DOWN,
 }
 _SENSE_SWIPE_EVENTS = {
-    "left": MouseEvent.SENSE_SWIPE_LEFT,
-    "right": MouseEvent.SENSE_SWIPE_RIGHT,
-    "up": MouseEvent.SENSE_SWIPE_UP,
-    "down": MouseEvent.SENSE_SWIPE_DOWN,
+    "left": DeviceEvent.SENSE_SWIPE_LEFT,
+    "right": DeviceEvent.SENSE_SWIPE_RIGHT,
+    "up": DeviceEvent.SENSE_SWIPE_UP,
+    "down": DeviceEvent.SENSE_SWIPE_DOWN,
 }
 # Backwards-compatible alias (primary control default family).
 _SWIPE_EVENTS = _GESTURE_SWIPE_EVENTS
 
 
-class BaseMouseHook:
+class BaseDeviceHook:
     def __init__(self):
         self._callbacks = {}
         self._blocked_events = set()
@@ -47,6 +47,9 @@ class BaseMouseHook:
         self._connection_change_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
+        # Logitech keyboard top-row keys to divert: {cid: button_key}. Populated
+        # by the engine from the active config; only mapped keys are diverted.
+        self.divert_keyboard_keys = {}
         self.wheel_native_invert_active = False
         self._gesture_direction_enabled = False
         self._gesture_os_passthrough = False
@@ -182,16 +185,16 @@ class BaseMouseHook:
                 else _GESTURE_SWIPE_EVENTS)
 
     def _primary_click_event(self):
-        return (MouseEvent.SENSE_CLICK if self._gesture_via_sense_panel
-                else MouseEvent.GESTURE_CLICK)
+        return (DeviceEvent.SENSE_CLICK if self._gesture_via_sense_panel
+                else DeviceEvent.GESTURE_CLICK)
 
     def _primary_button_down_event(self):
-        return (MouseEvent.SENSE_BUTTON_DOWN if self._gesture_via_sense_panel
-                else MouseEvent.GESTURE_BUTTON_DOWN)
+        return (DeviceEvent.SENSE_BUTTON_DOWN if self._gesture_via_sense_panel
+                else DeviceEvent.GESTURE_BUTTON_DOWN)
 
     def _primary_button_up_event(self):
-        return (MouseEvent.SENSE_BUTTON_UP if self._gesture_via_sense_panel
-                else MouseEvent.GESTURE_BUTTON_UP)
+        return (DeviceEvent.SENSE_BUTTON_UP if self._gesture_via_sense_panel
+                else DeviceEvent.GESTURE_BUTTON_UP)
 
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
@@ -246,7 +249,7 @@ class BaseMouseHook:
             return
         self._device_connected = connected
         state = "Connected" if connected else "Disconnected"
-        print(f"[MouseHook] Device {state}")
+        print(f"[DeviceHook] Device {state}")
         if self._connection_change_cb:
             try:
                 self._connection_change_cb(connected)
@@ -310,7 +313,7 @@ class BaseMouseHook:
             try:
                 callback(event)
             except Exception as exc:
-                print(f"[MouseHook] callback error: {exc}")
+                print(f"[DeviceHook] callback error: {exc}")
 
     def _hid_gesture_available(self):
         return self._hid_gesture is not None and self._device_connected
@@ -327,7 +330,18 @@ class BaseMouseHook:
                 "on_down": self._on_hid_dpi_switch_down,
                 "on_up": self._on_hid_dpi_switch_up,
             }
+        for cid, button_key in self.divert_keyboard_keys.items():
+            extra[cid] = {
+                "on_down": self._make_keyboard_key_handler(button_key),
+            }
         return extra
+
+    def _make_keyboard_key_handler(self, button_key):
+        return lambda: self._on_hid_keyboard_key(button_key)
+
+    def _on_hid_keyboard_key(self, button_key):
+        # Single-fire on press; the button key doubles as the DeviceEvent type.
+        self._dispatch(DeviceEvent(button_key))
 
     def _start_hid_listener(self):
         platform_module = getattr(self.__class__, "_platform_module", None)
@@ -341,6 +355,7 @@ class BaseMouseHook:
             on_connect=self._on_hid_connect,
             on_disconnect=self._on_hid_disconnect,
             extra_diverts=self._build_extra_diverts(),
+            on_crown=self._on_hid_crown,
             on_thumb_button_down=self._on_hid_thumb_button_down,
             on_thumb_button_up=self._on_hid_thumb_button_up,
             on_thumb_button_move=self._on_hid_thumb_button_move,
@@ -357,6 +372,13 @@ class BaseMouseHook:
         if self._hid_gesture:
             self._hid_gesture.stop()
             self._hid_gesture = None
+
+    def refresh_diverts(self):
+        """Push the current extra-divert set (mode shift, Craft keys, …) to a
+        running HID listener so a UI mapping change takes effect live."""
+        listener = self._hid_gesture
+        if listener is not None and hasattr(listener, "update_extra_diverts"):
+            listener.update_extra_diverts(self._build_extra_diverts())
 
     def _on_hid_connect(self):
         self._connected_device = (
@@ -380,7 +402,7 @@ class BaseMouseHook:
         self._gesture_active = True
         self._emit_debug("HID gesture button down")
         self._emit_gesture_event({"type": "button_down"})
-        self._dispatch(MouseEvent(self._primary_button_down_event()))
+        self._dispatch(DeviceEvent(self._primary_button_down_event()))
 
     def _on_hid_gesture_up(self):
         if getattr(self, "_ui_passthrough", False):
@@ -399,9 +421,9 @@ class BaseMouseHook:
         self._emit_gesture_event(
             {"type": "button_up", "click_candidate": was_click}
         )
-        self._dispatch(MouseEvent(self._primary_button_up_event()))
+        self._dispatch(DeviceEvent(self._primary_button_up_event()))
         if was_click:
-            self._dispatch(MouseEvent(self._primary_click_event()))
+            self._dispatch(DeviceEvent(self._primary_click_event()))
 
     def _on_hid_gesture_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):
@@ -422,13 +444,13 @@ class BaseMouseHook:
     def _on_recognized_swipe(self, direction):
         event_type = self._primary_swipe_events().get(direction)
         if event_type is not None:
-            self._emit_gesture_swipe(MouseEvent(event_type))
+            self._emit_gesture_swipe(DeviceEvent(event_type))
 
     def _on_thumb_recognized_swipe(self, direction):
         # The thumb Gesture button always emits the gesture_* family.
         event_type = _GESTURE_SWIPE_EVENTS.get(direction)
         if event_type is not None:
-            self._emit_gesture_swipe(MouseEvent(event_type))
+            self._emit_gesture_swipe(DeviceEvent(event_type))
 
     def _emit_gesture_swipe(self, mouse_event):
         self._dispatch(mouse_event)
@@ -443,17 +465,22 @@ class BaseMouseHook:
             f"-> {outcome}"
         )
 
+    def _on_hid_crown(self, button_key):
+        # The crown emits the config button key directly ("crown_left",
+        # "crown_right", "crown_tap"), which doubles as the DeviceEvent type.
+        self._dispatch(DeviceEvent(button_key))
+
     def _on_hid_mode_shift_down(self):
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
 
     def _on_hid_dpi_switch_up(self):
-        self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))
 
     def _on_hid_thumb_button_down(self):
         # The MX Master 4's small thumb-area button (CID 0x00C3) is the
@@ -468,7 +495,7 @@ class BaseMouseHook:
         self._thumb_recognizer.begin()
         self._thumb_active = True
         self._emit_debug("HID thumb button down")
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_DOWN))
+        self._dispatch(DeviceEvent(DeviceEvent.GESTURE_BUTTON_DOWN))
 
     def _on_hid_thumb_button_up(self):
         if getattr(self, "_ui_passthrough", False):
@@ -480,9 +507,9 @@ class BaseMouseHook:
         self._emit_debug(
             f"HID thumb button up click_candidate={str(was_click).lower()}"
         )
-        self._dispatch(MouseEvent(MouseEvent.GESTURE_BUTTON_UP))
+        self._dispatch(DeviceEvent(DeviceEvent.GESTURE_BUTTON_UP))
         if was_click:
-            self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+            self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _on_hid_thumb_button_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):

@@ -10,6 +10,10 @@ import sys
 import tempfile
 from urllib.parse import quote
 from core import app_catalog
+from core.logi_device_catalog import (
+    KEYBOARD_KEY_BUTTONS,
+    KEYBOARD_KEY_LABELS,
+)
 
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
@@ -110,9 +114,31 @@ PROFILE_BUTTON_NAMES = {
     "actions_ring_right": "Actions Ring swipe right",
     "actions_ring_up":    "Actions Ring swipe up",
     "actions_ring_down":  "Actions Ring swipe down",
+    "crown_left":         "Crown rotate left",
+    "crown_right":        "Crown rotate right",
+    "crown_tap":          "Crown click",
+    "crown_touch":        "Crown touch",
+    "crown_press_left":   "Crown click + rotate left",
+    "crown_press_right":  "Crown click + rotate right",
+    **{key: KEYBOARD_KEY_LABELS[key] for key in KEYBOARD_KEY_BUTTONS},
 }
 
-# Maps config button keys to the MouseEvent types they correspond to.
+# Crown defaults: rotate = volume, click = play/pause, click+rotate = track skip.
+# Touch defaults to none (opt-in) to avoid accidental triggers from resting a
+# finger on the crown.
+CRAFT_CROWN_DEFAULTS = {
+    "crown_left":        "volume_down",
+    "crown_right":       "volume_up",
+    "crown_tap":         "play_pause",
+    "crown_touch":       "none",
+    "crown_press_left":  "prev_track",
+    "crown_press_right": "next_track",
+}
+
+# Top-row keys default to "none": Mouser leaves them native until remapped.
+KEYBOARD_KEY_DEFAULTS = {key: "none" for key in KEYBOARD_KEY_BUTTONS}
+
+# Maps config button keys to the DeviceEvent types they correspond to.
 # The Gesture button (thumb) uses the gesture_* family; the Sense Panel
 # ("Actions Ring", MX4 only) uses the sense_* family. See BUTTON_NAMES for
 # why the key names differ from the historical "primary gesture" wiring.
@@ -137,6 +163,16 @@ BUTTON_TO_EVENTS = {
     "actions_ring_up":    ("sense_swipe_up",),
     "actions_ring_down":  ("sense_swipe_down",),
     "thumb_button":       ("thumb_button_down", "thumb_button_up"),
+    # Logitech Craft crown
+    "crown_left":         ("crown_left",),
+    "crown_right":        ("crown_right",),
+    "crown_tap":          ("crown_tap",),
+    "crown_touch":        ("crown_touch",),
+    "crown_press_left":   ("crown_press_left",),
+    "crown_press_right":  ("crown_press_right",),
+    # Each keyboard top-row key is a single-fire control whose event type equals
+    # its button key.
+    **{key: (key,) for key in KEYBOARD_KEY_BUTTONS},
 }
 
 # Hold (press-and-hold) events, used to drive the Actions Ring overlay when a
@@ -163,7 +199,7 @@ def _default_actions_ring_slots(platform=None):
 
 
 DEFAULT_CONFIG = {
-    "version": 10,
+    "version": 11,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -191,6 +227,10 @@ DEFAULT_CONFIG = {
                 "actions_ring_down": "none",
                 "thumb_button": "none",
                 "actions_ring_slots": _default_actions_ring_slots(),
+                # Logitech Craft crown (only used when a Craft is connected).
+                **CRAFT_CROWN_DEFAULTS,
+                # Keyboard top-row keys: native until the user remaps them.
+                **KEYBOARD_KEY_DEFAULTS,
             },
             "button_haptic": {},  # per-button haptic override; absent key = enabled (True)
         }
@@ -205,6 +245,11 @@ DEFAULT_CONFIG = {
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
+        "crown_smooth": False,    # Craft crown feel: False=ratchet, True=smooth (global fallback)
+        # Keyboard backlight (Craft/MX Keys, HID++ 0x1982). Brightness isn't
+        # software-settable on the Craft, so this only toggles on/off: when on,
+        # dark theme = backlight on, light theme = off.
+        "backlight_follow_theme": False,
         "gesture_threshold": GESTURE_SENSITIVITY_PX[GESTURE_DEFAULT_SENSITIVITY_INDEX],
         "gesture_commit_window_ms": 400,
         "gesture_settle_ms": 90,
@@ -426,6 +471,39 @@ def resolve_app_for_config(spec: str):
     return app_catalog.resolve_app_spec(spec)
 
 
+def get_profile_crown_smooth(cfg, profile_name=None):
+    """Resolve the crown feel (True=smooth, False=ratchet) for a profile.
+
+    A profile may carry its own ``crown_smooth``; if absent it inherits the
+    global ``settings.crown_smooth`` fallback.
+    """
+    if profile_name is None:
+        profile_name = cfg.get("active_profile", "default")
+    global_default = bool(cfg.get("settings", {}).get("crown_smooth", False))
+    profile = cfg.get("profiles", {}).get(profile_name, {})
+    value = profile.get("crown_smooth")
+    if value is None:
+        return global_default
+    return bool(value)
+
+
+def set_profile_crown_smooth(cfg, smooth, profile_name=None):
+    """Persist a per-profile crown feel. For 'default' this also updates the
+    global fallback so existing single-profile setups behave unchanged."""
+    if profile_name is None:
+        profile_name = cfg.get("active_profile", "default")
+    profile = cfg.setdefault("profiles", {}).setdefault(profile_name, {
+        "label": profile_name,
+        "apps": [],
+        "mappings": dict(DEFAULT_CONFIG["profiles"]["default"]["mappings"]),
+    })
+    profile["crown_smooth"] = bool(smooth)
+    if profile_name == "default":
+        cfg.setdefault("settings", {})["crown_smooth"] = bool(smooth)
+    save_config(cfg)
+    return cfg
+
+
 def _dedupe_specs(candidates) -> list[str]:
     result = []
     seen = set()
@@ -615,6 +693,31 @@ def _migrate(cfg):
             pdata.setdefault("button_haptic", {})
         cfg["version"] = 10
 
+    if version < 11:
+        # v10 -> v11: Logitech keyboard support (Craft crown + top-row keys).
+        # Developed as fork pre-release schema versions 10-13; squashed into a
+        # single step here, mirroring the v9 -> v10 MX Master 4 squash above.
+        # Anyone running an intermediate pre-release build should reset their
+        # config; see the PR notes.
+        for pdata in cfg.get("profiles", {}).values():
+            mappings = pdata.setdefault("mappings", {})
+            # Crown: rotate = volume, click = play/pause, click+rotate = track
+            # skip, touch = opt-in.
+            for btn, action in CRAFT_CROWN_DEFAULTS.items():
+                mappings.setdefault(btn, action)
+            # Pre-release builds named the per-key button ids craft_*; rename
+            # them to kbd_* so existing remaps survive.
+            for old_key in [k for k in mappings if k.startswith("craft_")]:
+                new_key = "kbd_" + old_key[len("craft_"):]
+                mappings.setdefault(new_key, mappings.pop(old_key))
+            # Top-row keyboard keys: native until the user remaps them.
+            for btn, action in KEYBOARD_KEY_DEFAULTS.items():
+                mappings.setdefault(btn, action)
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("crown_smooth", False)
+        settings.setdefault("backlight_follow_theme", False)
+        cfg["version"] = 11
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -624,6 +727,8 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("crown_smooth", False)
+    cfg["settings"].setdefault("backlight_follow_theme", False)
     cfg["settings"]["wheel_divert"] = coerce_wheel_divert_setting(
         cfg["settings"].get("wheel_divert", WHEEL_DIVERT_DEFAULT)
     )

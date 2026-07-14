@@ -23,8 +23,8 @@ from core.hid_gesture import (
     HidGestureListener,
 )
 from core.logi_devices import resolve_device
-from core.mouse_hook_base import BaseMouseHook
-from core.mouse_hook_contract import MouseHookLike
+from core.device_hook_base import BaseDeviceHook
+from core.device_hook_contract import DeviceHookLike
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -381,13 +381,13 @@ class CatalogFlagsTests(unittest.TestCase):
 
 class BaseHookFlagTests(unittest.TestCase):
     def test_default_state(self):
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         self.assertFalse(hook.wheel_native_invert_active)
 
     def test_configure_wheel_multipliers_is_noop(self):
         # Native-invert mode does no scroll injection, so multipliers are
         # unused. The method is retained only for shape compatibility.
-        hook = BaseMouseHook()
+        hook = BaseDeviceHook()
         hook.configure_wheel_multipliers(8, 120)
         # No exception, no state change beyond not having the old fields.
         self.assertFalse(hasattr(hook, "_wheel_residual_v"))
@@ -409,7 +409,7 @@ class MacOSSuppressionTests(unittest.TestCase):
 
     def setUp(self):
         try:
-            from core import mouse_hook_macos
+            from core import device_hook_macos as mouse_hook_macos
         except Exception:
             self.skipTest("macOS hook unavailable in this environment")
         self._mouse_hook_macos = mouse_hook_macos
@@ -435,7 +435,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         return _get
 
     def test_os_inversion_skipped_when_native_active(self):
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
@@ -468,7 +468,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         )
 
     def test_os_inversion_runs_when_native_inactive(self):
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
@@ -489,7 +489,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         self.assertIs(result, cg_event)
 
     def test_horizontal_inversion_negates_axis_2_in_place(self):
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_hscroll = True
@@ -507,7 +507,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         self.assertIs(result, cg_event)
 
     def test_both_axes_inverted_in_single_pass(self):
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
@@ -534,7 +534,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         must stand down rather than invert every trackpad / generic mouse
         scroll the OS forwards through us.
         """
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
@@ -557,7 +557,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         the very next event after ``_connected_device`` flips back to a
         ``ConnectedDeviceInfo`` is the one we start inverting again.
         """
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         hook._running = True
         hook._tap = MagicMock(name="tap")
         hook.invert_vscroll = True
@@ -585,7 +585,7 @@ class MacOSSuppressionTests(unittest.TestCase):
         PointDelta for the requested axis. Apps read different fields,
         so all three must be consistent."""
         from unittest.mock import call
-        hook = self._mouse_hook_macos.MouseHook()
+        hook = self._mouse_hook_macos.DeviceHook()
         # Mock Quartz field-name attributes the negate loop reads.
         self.mock_quartz.kCGScrollWheelEventDeltaAxis1 = 0xA
         self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis1 = 0xB
@@ -632,7 +632,7 @@ class ProtocolConformanceTests(unittest.TestCase):
                 inst = cls()
             except Exception:
                 inst = cls.__new__(cls)
-                BaseMouseHook.__init__(inst)
+                BaseDeviceHook.__init__(inst)
             for attr in (
                 "wheel_native_invert_active",
                 "invert_vscroll",
@@ -716,7 +716,7 @@ class EngineNativeInvertTests(unittest.TestCase):
         cfg["settings"]["invert_hscroll"] = invert_h
 
         with (
-            patch("core.engine.MouseHook", _FakeHook),
+            patch("core.engine.DeviceHook", _FakeHook),
             patch("core.engine.AppDetector", _FakeAppDetector),
             patch("core.engine.load_config", return_value=cfg),
         ):

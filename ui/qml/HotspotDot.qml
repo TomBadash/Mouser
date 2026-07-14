@@ -29,8 +29,8 @@ Item {
     property real cx: imgItem.x + imgItem.offX + normX * imgItem.paintedWidth
     property real cy: imgItem.y + imgItem.offY + normY * imgItem.paintedHeight
 
-    property bool isSelected: isHScroll ? mousePage.selectedButton === "hscroll_left"
-                                        : mousePage.selectedButton === buttonKey
+    property bool isSelected: isHScroll ? devicePage.selectedButton === "hscroll_left"
+                                        : devicePage.selectedButton === buttonKey
     property bool isHovered: dotMa.containsMouse
     property real labelWidth: labelCol.implicitWidth + 20
     property real labelHeight: labelCol.implicitHeight + 14
@@ -58,9 +58,9 @@ Item {
 
     function triggerSelection() {
         if (isHScroll)
-            mousePage.selectHScroll()
+            devicePage.selectHScroll()
         else
-            mousePage.selectButton(buttonKey)
+            devicePage.selectButton(buttonKey)
     }
 
     Keys.onReturnPressed: triggerSelection()

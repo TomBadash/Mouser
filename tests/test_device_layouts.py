@@ -13,6 +13,8 @@ class DeviceLayoutTests(unittest.TestCase):
             with self.subTest(device=device.key, ui_layout=device.ui_layout):
                 layout = get_device_layout(device.ui_layout)
 
+                # The key must match so a cataloged device never silently falls
+                # back to the generic layout.
                 # Layouts with hotspot art must be interactive; placeholder
                 # layouts (device cataloged before artwork is contributed,
                 # per CONTRIBUTING_DEVICES.md step 3b) must not be.
@@ -22,6 +24,16 @@ class DeviceLayoutTests(unittest.TestCase):
                     self.assertFalse(layout["interactive"])
                 self.assertEqual(layout["key"], device.ui_layout)
                 self.assertTrue((image_root / layout["image_asset"]).is_file())
+
+                # Interactivity is data-driven: a layout that declares itself
+                # interactive (a real device overlay) must carry hotspots, while
+                # non-interactive list views (generic mouse fallback, keyboard
+                # control lists) must not. This stays correct as new keyboards
+                # with list-style layouts are added.
+                if layout["interactive"]:
+                    self.assertTrue(layout["hotspots"])
+                else:
+                    self.assertFalse(layout["hotspots"])
 
     def test_known_device_hotspots_are_supported_buttons(self):
         for device in KNOWN_LOGI_DEVICES:
@@ -34,6 +46,10 @@ class DeviceLayoutTests(unittest.TestCase):
     def test_catalog_same_side_label_anchors_do_not_overlap(self):
         min_label_separation_px = 35
         for layout_key, layout in LOGI_DEVICE_LAYOUTS.items():
+            # Keyboard layouts use horizontal key-region tiles (labels under
+            # each key), not the vertical dot-callout model this check targets.
+            if layout.get("layout_kind") == "keyboard":
+                continue
             labels_by_side = {}
             for hotspot in layout["hotspots"]:
                 side = hotspot.get("labelSide", "right")

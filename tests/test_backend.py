@@ -35,9 +35,11 @@ class _FakeEngine:
         connected_device=None,
         hid_features_ready=False,
         smart_shift_supported=False,
+        connected_devices=None,
     ):
         self.device_connected = device_connected
         self.connected_device = connected_device
+        self.connected_devices = list(connected_devices or [])
         self.hid_features_ready = hid_features_ready
         self.smart_shift_supported = smart_shift_supported
         self.profile_callback = None
@@ -761,6 +763,42 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertEqual(backend.batteryLevel, -1)
 
+    def test_battery_change_stored_per_device_type(self):
+        backend = self._make_backend()
+
+        backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+
+        self.assertEqual(backend._battery_by_type, {"mouse": 90, "keyboard": 50})
+        # Legacy single-value property tracks the primary device (mouse).
+        self.assertEqual(backend.batteryLevel, 90)
+        # Switching the tracked type surfaces that device's level.
+        backend._device_type = "keyboard"
+        backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+        self.assertEqual(backend.batteryLevel, 50)
+
+    def test_device_info_for_type_reports_own_battery(self):
+        keyboard = SimpleNamespace(
+            key="mx_keys", display_name="MX Keys Wireless Keyboard",
+            device_type="keyboard", ui_layout="generic_keyboard",
+            transport="USB Receiver", supported_buttons=("kbd_volume_up",),
+            source="hidapi",
+        )
+
+        def fake_layout(key):
+            return {"key": key, "interactive": False, "image_asset": "",
+                    "hotspots": [], "note": ""}
+
+        with patch("ui.backend.get_device_layout", side_effect=fake_layout):
+            backend = self._make_backend(
+                engine=_FakeEngine(device_connected=True,
+                                   connected_devices=[keyboard]))
+            backend._handleBatteryChange({"mouse": 90, "keyboard": 50})
+
+            info = backend.deviceInfoForType("keyboard")
+            self.assertEqual(info["battery"], 50)
+            # A type with no reading reports -1, never another device's level.
+            self.assertEqual(backend.deviceInfoForType("mouse")["battery"], -1)
+
     def test_refresh_updates_hid_features_without_reemitting_connection_edge(self):
         device = SimpleNamespace(
             key="mx_master_3",
@@ -1225,6 +1263,87 @@ class BackendDeviceLayoutTests(unittest.TestCase):
 
         create_profile.assert_not_called()
         self.assertIn("Profile already exists", status_messages)
+
+    def test_copy_profile_config_copies_mappings_and_crown_keeps_apps(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["chrome"] = {
+            "label": "Chrome", "apps": ["chrome.exe"],
+            "mappings": {"middle": "copy", "xbutton1": "browser_back"},
+            "crown_smooth": True,
+        }
+        cfg["profiles"]["vscode"] = {
+            "label": "VS Code", "apps": ["Code.exe"],
+            "mappings": {"middle": "none"},
+        }
+        backend = self._make_backend(cfg=cfg)
+
+        with patch("ui.backend.save_config"):
+            backend.copyProfileConfig("chrome", "vscode")
+
+        vscode = backend._cfg["profiles"]["vscode"]
+        self.assertEqual(vscode["mappings"]["middle"], "copy")
+        self.assertEqual(vscode["mappings"]["xbutton1"], "browser_back")
+        self.assertTrue(vscode["crown_smooth"])
+        # Target keeps its own identity.
+        self.assertEqual(vscode["label"], "VS Code")
+        self.assertEqual(vscode["apps"], ["Code.exe"])
+        # Source is untouched.
+        self.assertEqual(backend._cfg["profiles"]["chrome"]["apps"], ["chrome.exe"])
+
+    def test_copy_profile_config_ignores_same_or_missing_profiles(self):
+        backend = self._make_backend()
+        with patch("ui.backend.save_config"):
+            backend.copyProfileConfig("default", "default")     # same → no-op
+            backend.copyProfileConfig("ghost", "default")       # missing → no-op
+        # default profile still present and intact
+        self.assertIn("default", backend._cfg["profiles"])
+
+    def test_device_has_smart_shift_uses_mouse_in_multidevice(self):
+        from types import SimpleNamespace
+        kbd = SimpleNamespace(device_type="keyboard",
+                              supported_buttons=["kbd_brightness_up"])
+        mouse = SimpleNamespace(device_type="mouse",
+                                supported_buttons=["middle", "mode_shift"])
+        engine = _FakeEngine(connected_devices=[kbd, mouse],
+                             smart_shift_supported=True)
+        backend = self._make_backend(engine=engine)
+        # Effective device is the keyboard, but the mouse drives SmartShift.
+        backend._effective_supported_buttons = ["kbd_brightness_up"]
+        self.assertTrue(backend.deviceHasSmartShift)
+
+    def test_device_has_smart_shift_false_when_only_keyboard(self):
+        from types import SimpleNamespace
+        kbd = SimpleNamespace(device_type="keyboard",
+                              supported_buttons=["kbd_brightness_up"])
+        engine = _FakeEngine(connected_devices=[kbd])
+        backend = self._make_backend(engine=engine)
+        backend._effective_supported_buttons = ["kbd_brightness_up"]
+        self.assertFalse(backend.deviceHasSmartShift)
+
+    def test_crown_toggle_hidden_for_keyboard_without_crown(self):
+        # A plain keyboard (MX Keys) has no crown, so the crown feel toggle
+        # action must not appear in its picker.
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for(
+            "keyboard", ["kbd_brightness_up", "kbd_volume_down"])
+        self.assertIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_shown_for_keyboard_with_crown(self):
+        # The Craft exposes crown_* controls, so the crown feel toggle applies.
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for(
+            "keyboard", ["crown_left", "crown_right", "kbd_volume_down"])
+        self.assertNotIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_hidden_for_mouse(self):
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for("mouse", ["middle", "mode_shift"])
+        self.assertIn("toggle_crown_smooth", hidden)
+
+    def test_crown_toggle_hidden_when_device_unknown(self):
+        backend = self._make_backend()
+        hidden = backend._hidden_actions_for("keyboard", None)
+        self.assertIn("toggle_crown_smooth", hidden)
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")

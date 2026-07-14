@@ -1082,10 +1082,19 @@ def main():
     _t7 = _time.perf_counter()
     # ── QML Backend ────────────────────────────────────────────
     backend = Backend(engine, root_dir=ROOT)
+    backend.set_locale_manager(locale_mgr)  # localize status toasts
     ui_state.appearanceMode = backend.appearanceMode
     backend.settingsChanged.connect(
         lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
     )
+    # Keyboard backlight follows the effective light/dark theme. darkModeChanged
+    # fires for both OS colour-scheme changes and the in-app appearance toggle,
+    # so the backlight tracks whichever the user changes; re-sync once at startup.
+    ui_state.darkModeChanged.connect(
+        lambda: backend.syncBacklight(ui_state.darkMode)
+    )
+    backend.syncBacklight(ui_state.darkMode)
+
     if sys.platform == "win32":
         from core.key_simulator import set_screenshot_action_handler
         from ui.windows_screenshot import WindowsScreenshotController

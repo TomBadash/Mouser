@@ -4,7 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_QML = (ROOT / "ui" / "qml" / "Main.qml").read_text(encoding="utf-8")
-MOUSE_PAGE_QML = (ROOT / "ui" / "qml" / "MousePage.qml").read_text(
+MOUSE_PAGE_QML = (ROOT / "ui" / "qml" / "DevicePage.qml").read_text(
     encoding="utf-8"
 )
 

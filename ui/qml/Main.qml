@@ -12,9 +12,18 @@ ApplicationWindow {
     minimumWidth: 920
     minimumHeight: 620
     readonly property string versionLabel: "v" + appVersion
-    title: backend.mouseConnected
-           ? "Mouser " + versionLabel + " — " + backend.deviceDisplayName
-           : "Mouser " + versionLabel
+    // Per-page title: mouse page → mouse device, keyboard page → keyboard device,
+    // settings → just the app name. deviceTick forces re-eval on connect/disconnect.
+    title: {
+        backend.deviceTick
+        if (root.currentPage === 1)
+            return "Mouser " + versionLabel
+        var info = backend.deviceInfoForType(
+            root.currentPage === 2 ? "keyboard" : "mouse")
+        return info.connected
+               ? "Mouser " + versionLabel + " — " + info.name
+               : "Mouser " + versionLabel
+    }
 
     property string appearanceMode: uiState.appearanceMode
     readonly property bool darkMode: appearanceMode === "dark"
@@ -35,17 +44,19 @@ ApplicationWindow {
     property real hoveredNavCenterY: 0
     readonly property bool shortcutsBlocked: aboutDialog.visible
                                             || mousePageView.hasBlockingDialog
+                                            || keyboardPageView.hasBlockingDialog
 
     property var navModel: {
         var items = [
-            { icon: "mouse-simple", tipKey: "nav.mouse_profiles", page: 0 },
+            { icon: "mouse-simple", tipKey: "nav.mouse", page: 0 },
+            { icon: "keyboard-simple", tipKey: "nav.keyboard", page: 2 },
             { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
         ]
         if (backend.hapticSupported) {
-            items.push({ icon: "circle", tipKey: "nav.haptic_feedback", page: 2 })
+            items.push({ icon: "circle", tipKey: "nav.haptic_feedback", page: 3 })
         }
         if (backend.deviceHasActionsRing && backend.actionsRingActive) {
-            items.push({ icon: "target", tipKey: "nav.actions_ring", page: 3 })
+            items.push({ icon: "target", tipKey: "nav.actions_ring", page: 4 })
         }
         return items
     }
@@ -54,7 +65,10 @@ ApplicationWindow {
         if (root.currentPage === page)
             return
         root.currentPage = page
-        root.forceActiveFocus(Qt.OtherFocusReason)
+        // ApplicationWindow is a Window, not an Item — focus lives on its
+        // contentItem. Move focus there so the nav item doesn't keep keyboard
+        // focus after switching pages.
+        root.contentItem.forceActiveFocus(Qt.OtherFocusReason)
     }
 
     color: theme.bg
@@ -275,22 +289,37 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: root.currentPage
 
-            MousePage {
+            DevicePage {                              // index 0
                 id: mousePageView
+                deviceFilter: "mouse"
             }
-            Loader {
+            Loader {                                  // index 1
                 active: root.currentPage === 1 || item
-                source: "ScrollPage.qml"
+                source: "SettingsPage.qml"
             }
-            Loader {
-                active: (root.currentPage === 2 || item) && backend.hapticSupported
+            DevicePage {                              // index 2 — keyboards
+                id: keyboardPageView
+                deviceFilter: "keyboard"
+            }
+            Loader {                                  // index 3
+                active: (root.currentPage === 3 || item) && backend.hapticSupported
                 source: "HapticPage.qml"
             }
-            Loader {
-                active: (root.currentPage === 3 || item) && backend.deviceHasActionsRing && backend.actionsRingActive
+            Loader {                                  // index 4
+                active: (root.currentPage === 4 || item) && backend.deviceHasActionsRing && backend.actionsRingActive
                 source: "ActionsRingConfig.qml"
             }
         }
+    }
+
+    // Hidden developer layout-calibration page (Settings → Developer). A
+    // top-level overlay so it opens directly, independent of the current tab.
+    Loader {
+        anchors.fill: parent
+        z: 950
+        active: backend.calibrationMode
+        visible: active
+        source: "CalibrationPage.qml"
     }
 
     Item {

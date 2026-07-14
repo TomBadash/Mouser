@@ -149,13 +149,60 @@ def _parse_custom_combo(action_id, key_name_to_code):
 
 
 # ==================================================================
+# "Open Application" action (shared across platforms)
+# ==================================================================
+# Stored as "open_app:<absolute path>" — analogous to the "custom:" shortcut
+# scheme. The path is launched detached so the foreground app is never blocked.
+
+OPEN_APP_PREFIX = "open_app:"
+
+
+def parse_open_app(action_id):
+    """Return the target path for an 'open_app:<path>' action, else None."""
+    if not action_id.startswith(OPEN_APP_PREFIX):
+        return None
+    return action_id[len(OPEN_APP_PREFIX):].strip()
+
+
+def open_app_label(action_id):
+    """Friendly label for an 'open_app:<path>' action (e.g. 'Open Code')."""
+    path = parse_open_app(action_id)
+    if path is None:
+        return action_id
+    if not path:
+        return "Open Application"
+    name = os.path.basename(path.rstrip("\\/")) or path
+    stem = os.path.splitext(name)[0]
+    return f"Open {stem}"
+
+
+def launch_application(path):
+    """Launch an application/file path detached, cross-platform."""
+    if not path:
+        print("[KeySimulator] launch_application: empty path")
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 — user-configured launch target
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.Popen(["open", path])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", path])
+        print(f"[KeySimulator] launch_application: {path}")
+    except Exception as exc:
+        print(f"[KeySimulator] launch_application failed for {path!r}: {exc}")
+
+
+# ==================================================================
 # Windows implementation
 # ==================================================================
 
 if sys.platform == "win32":
     import ctypes
     import ctypes.wintypes as wintypes
-    from ctypes import Structure, Union, c_ulong, c_ushort, c_long, sizeof
+    from ctypes import Structure, Union, c_ulong, c_ushort, c_long, c_uint, sizeof
 
     INPUT_MOUSE = 0
     INPUT_KEYBOARD = 1
@@ -268,6 +315,15 @@ if sys.platform == "win32":
     SendInput = ctypes.windll.user32.SendInput
     SendInput.argtypes = [c_ulong, ctypes.POINTER(INPUT), ctypes.c_int]
     SendInput.restype = c_ulong
+
+    WM_SYSCOMMAND = 0x0112
+    SC_CLOSE = 0xF060
+    GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
+    GetForegroundWindow.restype = wintypes.HWND
+    GetForegroundWindow.argtypes = []
+    PostMessageW = ctypes.windll.user32.PostMessageW
+    PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
+    PostMessageW.restype = wintypes.BOOL
 
     MOUSEEVENTF_LEFTDOWN   = 0x0002
     MOUSEEVENTF_LEFTUP     = 0x0004
@@ -411,6 +467,83 @@ if sys.platform == "win32":
         "browser_forward": VK_RIGHT,
     }
 
+    # Screen brightness control. Windows has no brightness virtual-key, so this
+    # drives the WMI WmiMonitorBrightnessMethods provider (works on displays that
+    # expose it). A background worker coalesces rapid steps (e.g. a fast crown
+    # spin) into at most one PowerShell call per throttle window, always applying
+    # the latest target, so the listener thread never blocks.
+    import subprocess as _subprocess
+
+    class _BrightnessController:
+        _STEP = 5            # percent per action
+        _THROTTLE_S = 0.08   # min seconds between WMI writes
+
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._level = None        # last known/target level (0-100), lazy
+            self._dirty = threading.Event()
+            self._thread = None
+
+        @staticmethod
+        def _ps(command):
+            return _subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+        def _read_level(self):
+            try:
+                out = self._ps(
+                    "(Get-CimInstance -Namespace root/WMI -ClassName "
+                    "WmiMonitorBrightness).CurrentBrightness"
+                ).stdout.strip().splitlines()
+                return int(out[0]) if out else None
+            except Exception:
+                return None
+
+        def _apply(self, level):
+            try:
+                # CIM instance methods must be called via Invoke-CimMethod.
+                self._ps(
+                    "$m = Get-CimInstance -Namespace root/WMI -ClassName "
+                    "WmiMonitorBrightnessMethods; Invoke-CimMethod -InputObject "
+                    "$m -MethodName WmiSetBrightness -Arguments "
+                    f"@{{Timeout=[uint32]1; Brightness=[byte]{level}}}"
+                )
+            except Exception as exc:
+                print(f"[KeySimulator] brightness set failed: {exc}")
+
+        def _worker(self):
+            last = 0.0
+            while True:
+                if not self._dirty.wait(timeout=2.0):
+                    return  # idle: let the worker exit; adjust() restarts it
+                self._dirty.clear()
+                wait = self._THROTTLE_S - (time.monotonic() - last)
+                if wait > 0:
+                    time.sleep(wait)
+                with self._lock:
+                    target = self._level
+                if target is not None:
+                    self._apply(target)
+                    last = time.monotonic()
+
+        def adjust(self, delta):
+            with self._lock:
+                if self._level is None:
+                    self._level = self._read_level()
+                    if self._level is None:
+                        self._level = 50
+                self._level = max(0, min(100, self._level + delta))
+                if self._thread is None or not self._thread.is_alive():
+                    self._thread = threading.Thread(
+                        target=self._worker, daemon=True, name="Brightness")
+                    self._thread.start()
+            self._dirty.set()
+
+    _brightness = _BrightnessController()
+
     ACTIONS = {
         "alt_tab": {
             "label": "Alt + Tab (Switch Windows)",
@@ -477,9 +610,19 @@ if sys.platform == "win32":
             "keys": [VK_CONTROL, VK_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window",
+            "keys": [VK_MENU, VK_F4],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Ctrl+T)",
             "keys": [VK_CONTROL, VK_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Ctrl+Shift+T)",
+            "keys": [VK_CONTROL, VK_SHIFT, VK_T],
             "category": "Browser",
         },
         "find": {
@@ -520,6 +663,16 @@ if sys.platform == "win32":
         "volume_mute": {
             "label": "Volume Mute",
             "keys": [VK_VOLUME_MUTE],
+            "category": "Media",
+        },
+        "brightness_up": {
+            "label": "Brightness Up",
+            "keys": [],               # handled below via WMI, not a virtual-key
+            "category": "Media",
+        },
+        "brightness_down": {
+            "label": "Brightness Down",
+            "keys": [],               # handled below via WMI, not a virtual-key
             "category": "Media",
         },
         "play_pause": {
@@ -569,6 +722,11 @@ if sys.platform == "win32":
         },
         "cycle_dpi": {
             "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
@@ -658,14 +816,32 @@ if sys.platform == "win32":
                 if keys:
                     send_key_combo(keys)
                 return
+            if action_id.startswith(OPEN_APP_PREFIX):
+                launch_application(parse_open_app(action_id))
+                return
             if is_mouse_button_action(action_id):
                 print(f"[KeySimulator] execute_action: mouse click for {action_id}")
                 inject_mouse_down(action_id)
                 inject_mouse_up(action_id)
                 return
+            if action_id == "brightness_up":
+                _brightness.adjust(_BrightnessController._STEP)
+                return
+            if action_id == "brightness_down":
+                _brightness.adjust(-_BrightnessController._STEP)
+                return
             if request_screenshot_action(action_id):
                 return
             action = ACTIONS.get(action_id)
+            if action_id == "close_window":
+                hwnd = GetForegroundWindow()
+                if hwnd:
+                    if not PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0):
+                        err = ctypes.get_last_error() if hasattr(ctypes, 'get_last_error') else 'N/A'
+                        print(f"[KeySimulator] execute_action: PostMessageW failed! error={err}")
+                else:
+                    send_key_combo(action["keys"])
+                return
             if not action or not action["keys"]:
                 print(f"[KeySimulator] execute_action: no keys for '{action_id}'")
                 return
@@ -823,7 +999,7 @@ elif sys.platform == "darwin":
             return
         evt_type = entry["down_type"] if is_down else entry["up_type"]
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
-        ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
+        ev = Quartz.CGEventCreateDeviceEvent(None, evt_type, loc, entry["button"])
         if ev:
             try:
                 # Mark synthetic mouse events so the CGEventTap can ignore them
@@ -1084,9 +1260,19 @@ elif sys.platform == "darwin":
             "keys": [kVK_Command, kVK_ANSI_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window (Cmd+Shift+W)",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_W],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Cmd+T)",
             "keys": [kVK_Command, kVK_ANSI_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Cmd+Shift+T)",
+            "keys": [kVK_Command, kVK_Shift, kVK_ANSI_T],
             "category": "Browser",
         },
         "find": {
@@ -1220,6 +1406,11 @@ elif sys.platform == "darwin":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "activate_actions_ring": {
             "label": "Actions Ring",
             "keys": [],               # handled by Engine, not key_simulator
@@ -1305,6 +1496,9 @@ elif sys.platform == "darwin":
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
                 send_key_combo(keys)
+            return
+        if action_id.startswith(OPEN_APP_PREFIX):
+            launch_application(parse_open_app(action_id))
             return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
@@ -1572,9 +1766,19 @@ elif sys.platform == "linux":
             "keys": [KEY_LEFTCTRL, KEY_W],
             "category": "Browser",
         },
+        "close_window": {
+            "label": "Close Window (Alt+F4)",
+            "keys": [KEY_LEFTALT, KEY_F4],
+            "category": "Navigation",
+        },
         "new_tab": {
             "label": "New Tab (Ctrl+T)",
             "keys": [KEY_LEFTCTRL, KEY_T],
+            "category": "Browser",
+        },
+        "reopen_tab": {
+            "label": "Reopen Closed Tab (Ctrl+Shift+T)",
+            "keys": [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_T],
             "category": "Browser",
         },
         "find": {
@@ -1667,6 +1871,11 @@ elif sys.platform == "linux":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "activate_actions_ring": {
             "label": "Actions Ring",
             "keys": [],               # handled by Engine, not key_simulator
@@ -1755,6 +1964,9 @@ elif sys.platform == "linux":
             if keys:
                 send_key_combo(keys)
             return
+        if action_id.startswith(OPEN_APP_PREFIX):
+            launch_application(parse_open_app(action_id))
+            return
         if is_mouse_button_action(action_id):
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
@@ -1796,6 +2008,11 @@ else:
         },
         "cycle_dpi": {
             "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "toggle_crown_smooth": {
+            "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },

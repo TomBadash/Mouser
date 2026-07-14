@@ -7,9 +7,9 @@
 English | [中文文档](README_CN.md)
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
-remapping Logitech HID++ mice. The current best experience is on the **MX Master**
-and **MX Anywhere** families, with detection and fallback UI support for additional
-Logitech models.
+remapping Logitech HID++ mice and keyboards. The current best experience is on
+the **MX Master**, **MX Anywhere** mice and the **Logitech Craft**, **MX Keys**
+keyboards, with detection and fallback UI support for additional Logitech models.
 
 **No telemetry. No cloud. No Logitech account required.**
 
@@ -21,6 +21,7 @@ Logitech models.
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Device coverage](#device-coverage)
+- [Keyboard support](#keyboard-support)
 - [Default mappings](#default-mappings)
 - [Available actions](#available-actions)
 - [Build from source](#build-from-source)
@@ -92,9 +93,25 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 ## Screenshots
 
-| Mouse & Profiles | Point & Scroll |
-|---|---|
-| <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" /> | <img src="images/Screenshot_settings.png" alt="Mouser — Point & Scroll settings" /> |
+<p align="center">
+  <img src="images/Screenshot_mouse.png" alt="Mouser — Mouse & Profiles page" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_keyboard.png" alt="Mouser — Keyboard page (Craft / MX Keys layout)" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_1.png" alt="Mouser — Mouse settings" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_2.png" alt="Mouser — Keyboard settings" />
+</p>
+
+<p align="center">
+  <img src="images/Screenshot_settings_3.png" alt="Mouser — General settings" />
+</p>
 
 ---
 
@@ -152,9 +169,47 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 | MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive per-model layouts |
 | MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive per-model layouts |
 | MX Vertical | Yes | Generic fallback card (with DPI switch button support) |
+| Logitech Craft | Yes | Dedicated interactive layout with **Crown** dial + top-row keys |
+| MX Keys | Yes | Dedicated interactive layout with top-row keys |
+| Unknown Logitech HID++ keyboards | Auto-classified by HID++ profile | Generic keyboard card (remappable top-row keys) |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> MX Master and MX Anywhere devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
+> MX Master, MX Anywhere, Craft and MX Keys devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
+
+---
+
+## Keyboard support
+
+Mouser remaps Logitech HID++ keyboards alongside mice. A mouse and a keyboard
+sharing a single Unifying receiver are multiplexed, so both work at once.
+
+### All keyboards (Craft, MX Keys, auto-classified)
+
+- **Top-row keys.** Brightness, backlight, media and other top-row keys are
+  remappable over HID++. They stay native until you remap them.
+- **Backlight follows the system theme.** When enabled in **Settings**, the
+  keyboard backlight (HID++ feature `0x1982`) turns **on in dark mode and off in
+  light mode**. These keyboards expose on/off only (not software brightness); in
+  light mode you can switch it back on with the keyboard's backlight-up key until
+  the next theme change.
+- **Open Application action.** Any key, Crown sub-action, or mouse button can be
+  bound to **Open Application…**, which launches an executable you pick.
+
+### Logitech Craft — Crown dial
+
+- **Fully remappable Crown.** Click the Crown in the device view to open its
+  panel and assign actions to **rotate left/right**, **click**, **touch**, and
+  **click + rotate left/right** (defaults: rotate = volume, click = play/pause,
+  click+rotate = track skip).
+- **Ratchet ↔ smooth, per app.** The Crown's rotation feel (clicky *ratchet* vs
+  free-spin *smooth*) is set in the Crown panel and is **saved per application
+  profile**, so it switches automatically when you change apps. A **Toggle Crown
+  Ratchet/Smooth** action is also available to flip it from any button. This is
+  a Craft-only feature: the toggle and its action only appear while a
+  Crown-equipped keyboard is connected.
+
+Use [`tools/craft_probe.py`](tools/craft_probe.py) to discover HID++ features and
+control IDs on a connected keyboard (safe, read-only).
 
 ---
 
@@ -162,32 +217,43 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 | Button | Default action |
 |---|---|
-| Back button (XButton1) | Alt + Tab (Switch Windows) |
-| Forward button (XButton2) | Alt + Tab (Switch Windows) |
+| Back button (XButton1) | Back (Mouse Button 4) |
+| Forward button (XButton2) | Forward (Mouse Button 5) |
 | Middle click | Pass-through |
-| Gesture button | Pass-through |
+| Gesture button | Task View (Windows) / App Exposé (macOS) |
 | Gesture swipes (up / down / left / right) | Pass-through |
+| Actions Ring / Sense Panel (MX Master 4) | Show Actions Ring |
+| Thumb button (MX Master 4) | Pass-through |
 | Mode shift (scroll click) | Switch Scroll Mode (Ratchet / Free Spin) |
-| Horizontal scroll left | Browser Back |
-| Horizontal scroll right | Browser Forward |
+| Horizontal scroll left / right | Pass-through |
 | DPI switch (MX Vertical) | Pass-through |
+| Craft Crown — rotate | Volume Down / Volume Up |
+| Craft Crown — click | Play / Pause |
+| Craft Crown — click + rotate | Previous / Next Track |
+| Craft Crown — touch | Pass-through |
+| Keyboard top-row keys | Native (pass-through until remapped) |
 
 ---
 
 ## Available actions
 
-Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS exposes `Mission Control`, `Show Desktop`, `App Exposé`, and `Launchpad`; Linux falls back to compositor-native equivalents.
+Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS exposes `Mission Control`, `Show Desktop`, `App Exposé`, `Launchpad`, `Cycle Desktops`, and `Zoom In / Zoom Out`; Linux falls back to compositor-native equivalents.
 
 | Category | Actions |
 |---|---|
-| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control / App Exposé / Launchpad (macOS), Page Up / Page Down / Home / End |
-| **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab) |
+| **Navigation** | Alt+Tab, Alt+Shift+Tab, Close Window, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control / App Exposé / Launchpad / Cycle Desktops / Zoom In / Zoom Out (macOS), Page Up / Page Down / Home / End |
+| **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Reopen Closed Tab (Ctrl+Shift+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab) — tab switching on Windows/macOS |
 | **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
-| **Media** | Volume Up, Volume Down, Volume Mute, Play / Pause, Next Track, Previous Track |
-| **Scroll** | Switch Scroll Mode (Ratchet / Free Spin), Toggle SmartShift, Cycle DPI Presets |
+| **Media** | Volume Up, Volume Down, Volume Mute, Play / Pause, Next Track, Previous Track, Brightness Up / Brightness Down (Windows) |
+| **Scroll** | Switch Scroll Mode (Ratchet / Free Spin), Toggle SmartShift, Cycle DPI Presets, Toggle Crown Ratchet/Smooth (Craft only) |
+| **Screenshot** | Screenshot Region → Clipboard, Screenshot Region → File, Screenshot Full Screen → Clipboard, Screenshot Full Screen → File |
 | **Mouse** | Left Click, Right Click, Middle Click, Back (Mouse Button 4), Forward (Mouse Button 5) |
-| **Custom** | User-defined keyboard shortcuts (any key combination, captured in the UI) |
-| **Other** | Do Nothing (pass-through) |
+| **Custom** | User-defined keyboard shortcuts (any key combination, captured in the UI); **Open Application…** (launch an executable you pick) |
+| **Other** | Actions Ring (MX Master 4 radial menu), Do Nothing (pass-through) |
+
+> The picker only shows actions your device can use: scroll-mode / SmartShift toggles need a mode-shift button, **Cycle DPI** is hidden on keyboards, **Toggle Crown Ratchet/Smooth** appears only when a Crown-equipped keyboard (Craft) is connected, and **Actions Ring** requires an MX Master 4.
+>
+> Keyboards add remappable Crown sub-actions (Craft) and top-row keys, plus a system-theme-aware backlight. See [Keyboard support](#keyboard-support).
 
 ---
 
@@ -382,6 +448,7 @@ Every bit helps keep the project going — thank you.
 - **[@liuxuAP369](https://github.com/liuxuAP369)** - Fractional macOS horizontal scroll delta handling.
 - **[@winniesi](https://github.com/winniesi)** - Ping-pong desktop cycling action (macOS).
 - **[@Archetipo95](https://github.com/Archetipo95)** - Physical scroll-wheel tilt support and reduced remapping latency on macOS.
+- **[@alessandrotischer](https://github.com/alessandrotischer)** - Keyboard support: multi-device multiplexing over a single Unifying receiver, Logitech Craft (Crown dial with per-app ratchet/smooth feel) and MX Keys with interactive photo layouts, generic keyboard auto-classification, remappable top-row keys, theme-aware backlight, Open Application action, Close Window action.
 
 ---
 

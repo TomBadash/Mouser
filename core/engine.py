@@ -1,5 +1,5 @@
 """
-Engine — wires the mouse hook to the key simulator using the
+Engine — wires the device hook to the key simulator using the
 current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
@@ -7,19 +7,21 @@ Supports per-application auto-switching of profiles.
 import sys
 import threading
 import time
-from core.mouse_hook import MouseHook, MouseEvent
+from core.device_hook import DeviceHook, DeviceEvent
 from core.key_simulator import (
     ACTIONS, execute_action, is_mouse_button_action,
     inject_mouse_down, inject_mouse_up,
 )
 from core.config import (
     load_config, get_active_mappings, get_profile_for_app_identity,
+    get_profile_crown_smooth, set_profile_crown_smooth,
     BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, SWIPE_SET_FOR_TAP,
     save_config, action_haptic_enabled, button_haptic_enabled,
     WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
 )
+from core.logi_device_catalog import KEYBOARD_KEY_CIDS
 from core.app_detector import AppDetector
-from core.mouse_hook_types import HidRuntimeState
+from core.device_hook_types import HidRuntimeState
 from core.linux_permissions import (
     linux_permission_log_message,
     linux_permission_report,
@@ -35,21 +37,31 @@ _VOLUME_ACTIONS = {"volume_up", "volume_down"}
 
 class Engine:
     """
-    Core logic: reads config, installs the mouse hook,
+    Core logic: reads config, installs the device hook,
     dispatches actions when mapped buttons are pressed,
     and auto-switches profiles when the foreground app changes.
     """
 
     def __init__(self):
-        self.hook = MouseHook()
+        self.hook = DeviceHook()
         self.cfg = load_config()
         self._enabled = True
         self._last_haptic_time = 0.0
         self._hscroll_state = {
-            MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
-            MouseEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
+            DeviceEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
+            DeviceEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
         }
         self._current_profile: str = self.cfg.get("active_profile", "default")
+        # Last backlight on/off state pushed this session, replayed on reconnect.
+        self._backlight_state = None
+        # Re-enable divert: when theme-following is on and the active theme leaves
+        # the backlight OFF (light theme), the backlight-up key is diverted so the
+        # first press turns it back on; then it returns to passthrough until the
+        # next theme change. Only the UP key, only when it isn't remapped.
+        self._backlight_reenable_capable = False
+        self._backlight_reenable_active = False
+        # Base keyboard-key divert set (remapped keys) captured in _setup_hooks.
+        self._diverted_keyboard_keys = {}
         self._app_detector = AppDetector(self._on_app_change)
         self._profile_change_cb = None       # UI callback
         self._connection_change_cb = None   # UI callback for device status
@@ -194,13 +206,25 @@ class Engine:
                 ring_suppressed_swipes.update(swipe_keys)
         if not defer_wheel_invert:
             self._apply_wheel_invert_setting()
-        # Divert mode shift CID only when the device has the button and
-        # at least one profile maps it to an action.  When no device is
-        # connected yet, assume the button exists (safe: if the device
-        # turns out not to have it, the divert simply has no effect).
-        device = getattr(self, "connected_device", None)
-        device_buttons = getattr(device, "supported_buttons", None)
-        has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
+        # Divert mode shift / DPI switch CIDs only when a device has the button
+        # and at least one profile maps it to an action.  When no device is
+        # connected yet, assume the button exists (safe: if the device turns
+        # out not to have it, the divert simply has no effect).
+        #
+        # Consider ALL connected devices, not just the primary one: on a
+        # multi-device receiver (e.g. Craft keyboard + MX Master mouse) the
+        # primary may be the keyboard, which has no mode-shift/DPI-switch
+        # button — gating on it alone would wrongly drop the mouse's divert.
+        button_sets = [
+            getattr(d, "supported_buttons", None) for d in self.connected_devices
+        ]
+
+        def _any_device_has(button_key):
+            if not button_sets:
+                return True  # nothing connected yet → assume present
+            return any(bs is None or button_key in bs for bs in button_sets)
+
+        has_mode_shift = _any_device_has("mode_shift")
         self.hook.divert_mode_shift = (
             has_mode_shift
             and any(
@@ -210,7 +234,7 @@ class Engine:
         )
 
         # Divert DPI switch CID (0x00FD) on MX Vertical when mapped.
-        has_dpi_switch = device_buttons is None or "dpi_switch" in device_buttons
+        has_dpi_switch = _any_device_has("dpi_switch")
         self.hook.divert_dpi_switch = (
             has_dpi_switch
             and any(
@@ -218,6 +242,33 @@ class Engine:
                 for pdata in self.cfg.get("profiles", {}).values()
             )
         )
+
+        # Divert Logitech Craft top-row keys only when remapped in some profile;
+        # un-mapped keys are left alone so their native function still works.
+        keyboard_keys = {}
+        for button_key, cid in KEYBOARD_KEY_CIDS.items():
+            if any(
+                pdata.get("mappings", {}).get(button_key, "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            ):
+                keyboard_keys[cid] = button_key
+
+        # Backlight re-enable divert (UP key only). Keep the base set so the
+        # divert can be toggled live as the theme/backlight state changes.
+        self._diverted_keyboard_keys = dict(keyboard_keys)
+        self._backlight_reenable_capable = (
+            settings.get("backlight_follow_theme", False)
+            and mappings.get("kbd_backlight_up", "none") == "none"
+        )
+        if not self._backlight_reenable_capable:
+            self._backlight_reenable_active = False
+        if self._backlight_reenable_capable and self._backlight_reenable_active:
+            cid = KEYBOARD_KEY_CIDS.get("kbd_backlight_up")
+            if cid is not None:
+                keyboard_keys[cid] = "kbd_backlight_up"
+
+        if hasattr(self.hook, "divert_keyboard_keys"):
+            self.hook.divert_keyboard_keys = keyboard_keys
 
         # Actions Ring controller — create/recreate on every hook setup so
         # profile switches pick up the new slot list automatically.
@@ -327,6 +378,45 @@ class Engine:
                     # "Do Nothing" but button has haptic enabled — observe without
                     # consuming the event so the click still passes through normally.
                     self.hook.register(evt_type, self._make_handler("none", btn_key))
+
+        # Re-enable handler for the backlight-up key. It only fires while the key
+        # is actually diverted (light theme, backlight off). DOWN is left as
+        # passthrough.
+        if self._backlight_reenable_capable:
+            self.hook.block("kbd_backlight_up")
+            self.hook.register("kbd_backlight_up", self._make_backlight_reenable_handler())
+
+        # Push divert-set changes (e.g. a newly mapped Craft key) to a running
+        # HID listener so they take effect without a reconnect.
+        if hasattr(self.hook, "refresh_diverts"):
+            self.hook.refresh_diverts()
+
+    def _make_backlight_reenable_handler(self):
+        """Backlight-up pressed while automation had it off: turn it on, which
+        also returns the key to passthrough (set_backlight un-diverts when on)
+        until the next theme change re-arms it."""
+        def handler(event):
+            if not self._enabled:
+                return
+            self._emit_debug("Backlight re-enabled by key; back to passthrough")
+            self.set_backlight(True, 100)
+        return handler
+
+    def _set_backlight_reenable_divert(self, want):
+        """Add/remove the backlight-up key from the live divert set, so it's only
+        intercepted while we need to catch a re-enable press (light theme)."""
+        want = bool(want) and self._backlight_reenable_capable
+        if want == self._backlight_reenable_active:
+            return
+        self._backlight_reenable_active = want
+        keys = dict(self._diverted_keyboard_keys)
+        cid = KEYBOARD_KEY_CIDS.get("kbd_backlight_up")
+        if want and cid is not None:
+            keys[cid] = "kbd_backlight_up"
+        if hasattr(self.hook, "divert_keyboard_keys"):
+            self.hook.divert_keyboard_keys = keys
+        if hasattr(self.hook, "refresh_diverts"):
+            self.hook.refresh_diverts()
 
     def _make_handler(self, action_id, btn_key=""):
         def handler(event):
@@ -462,6 +552,13 @@ class Engine:
             threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
 
     _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    def _toggle_crown_smooth(self):
+        """Flip the Craft crown feel between ratchet and smooth (active profile)."""
+        current = get_profile_crown_smooth(self.cfg, self._current_profile)
+        self.set_crown_smooth(not current)
+        print(f"[Engine] toggle_crown_smooth -> "
+              f"{'smooth' if not current else 'ratchet'}")
 
     def _cycle_dpi(self, btn_key=""):
         """Cycle through user-configured DPI presets.
@@ -795,6 +892,8 @@ class Engine:
             self.hook.reset_bindings()
             self._setup_hooks()
             self._emit_debug(f"Active profile -> {profile_name}")
+        # Apply this profile's crown feel (falls back to the global setting).
+        self._apply_profile_crown_smooth(profile_name)
         # Notify UI (if connected)
         if self._profile_change_cb:
             try:
@@ -898,6 +997,8 @@ class Engine:
             self._switch_scroll_mode(source_key)
         elif action_id == "cycle_dpi":
             self._cycle_dpi(source_key)
+        elif action_id == "toggle_crown_smooth":
+            self._toggle_crown_smooth()
         elif action_id == "cycle_desktops":
             self._cycle_desktops()
         else:
@@ -1023,12 +1124,21 @@ class Engine:
                     except Exception:
                         pass
 
+        # Restore the crown feel (ratchet/smooth) for the active profile on
+        # connect/reconnect (per-profile value, falling back to the global one).
+        if hasattr(hg, "set_crown_smooth"):
+            hg.set_crown_smooth(
+                get_profile_crown_smooth(self.cfg, self._current_profile))
+        # Restore the last backlight on/off state pushed this session.
+        if self._backlight_state is not None and hasattr(hg, "set_backlight"):
+            hg.set_backlight(*self._backlight_state)
+
         time.sleep(3)
         hg = self.hook._hid_gesture
         if hg is None or getattr(hg, "connected_device", None) is None:
             return False
 
-        if saved_dpi is not None:
+        if saved_dpi is not None and getattr(hg, "dpi_supported", True):
             if not hasattr(hg, "set_dpi"):
                 replay_ok = False
             elif hg.set_dpi(saved_dpi):
@@ -1184,12 +1294,12 @@ class Engine:
             if hg and hg.connected_device is not None:
                 if now - _last_battery >= _battery_poll_interval:
                     _last_battery = now
-                    level = hg.read_battery()
+                    levels = hg.read_all_batteries()
                     if stop_event.is_set():
                         return
-                    if level is not None and self._battery_read_cb:
+                    if levels and self._battery_read_cb:
                         try:
-                            self._battery_read_cb(level)
+                            self._battery_read_cb(levels)
                         except Exception:
                             pass
 
@@ -1217,7 +1327,7 @@ class Engine:
                 return
 
     def set_battery_callback(self, cb):
-        """Register ``cb(level: int)`` invoked when battery level is read (0-100)."""
+        """Register ``cb(levels: dict)`` invoked with {device_type: level} (0-100)."""
         self._battery_read_cb = cb
 
     def set_connection_change_callback(self, cb):
@@ -1236,6 +1346,20 @@ class Engine:
     @property
     def connected_device(self):
         return self._hid_runtime_state().connected_device
+
+    @property
+    def connected_devices(self):
+        """All bound HID++ devices (multiplexer); falls back to the single one."""
+        hg = self.hook._hid_gesture
+        devices = getattr(hg, "connected_devices", None) if hg else None
+        try:
+            devices = list(devices) if devices else []
+        except TypeError:
+            devices = []  # non-iterable stub (e.g. a Mock) → single-device path
+        if devices:
+            return devices
+        one = self.connected_device
+        return [one] if one is not None else []
 
     def dump_device_info(self):
         return getattr(self.hook, "dump_device_info", lambda: None)()
@@ -1286,6 +1410,57 @@ class Engine:
     def smart_shift_supported(self):
         hg = self.hook._hid_gesture
         return hg.smart_shift_supported if hg else False
+
+    def set_crown_smooth(self, smooth, profile_name=None):
+        """Set the crown feel (True=smooth, False=ratchet) for a profile and
+        persist it. ``profile_name`` defaults to the active profile; setting the
+        'default' profile also updates the global fallback."""
+        if profile_name is None:
+            profile_name = self._current_profile
+        set_profile_crown_smooth(self.cfg, bool(smooth), profile_name)
+        # Only push to the device when changing the currently active profile.
+        if profile_name == self._current_profile:
+            hg = self.hook._hid_gesture
+            if hg and hasattr(hg, "set_crown_smooth"):
+                hg.set_crown_smooth(bool(smooth))
+                return True
+            return False
+        return True
+
+    def _apply_profile_crown_smooth(self, profile_name):
+        """Push the resolved crown feel for ``profile_name`` to the device."""
+        smooth = get_profile_crown_smooth(self.cfg, profile_name)
+        hg = self.hook._hid_gesture
+        if hg and hasattr(hg, "set_crown_smooth"):
+            hg.set_crown_smooth(bool(smooth))
+
+    @property
+    def crown_supported(self):
+        hg = self.hook._hid_gesture
+        if hg and hasattr(hg, "crown_present"):
+            return hg.crown_present
+        return bool(getattr(hg, "_crown_idx", None)) if hg else False
+
+    def set_backlight(self, enabled, brightness):
+        """Set the keyboard backlight on/off. Called on theme change and by the
+        re-enable key. When it ends OFF (light theme) the backlight-up key is
+        diverted so the next press re-enables it; when ON it's passthrough."""
+        enabled = bool(enabled)
+        self._backlight_state = (enabled, int(brightness))
+        hg = self.hook._hid_gesture
+        applied = False
+        if hg and hasattr(hg, "set_backlight"):
+            hg.set_backlight(enabled, int(brightness))
+            applied = True
+        self._set_backlight_reenable_divert(not enabled)
+        return applied
+
+    @property
+    def backlight_supported(self):
+        hg = self.hook._hid_gesture
+        if hg and hasattr(hg, "backlight_supported"):
+            return hg.backlight_supported
+        return bool(getattr(hg, "_backlight_idx", None)) if hg else False
 
     @property
     def haptic_supported(self):

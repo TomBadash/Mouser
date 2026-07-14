@@ -13,6 +13,7 @@ Falls back gracefully if the package or device are unavailable.
 
 import atexit
 import os
+import re
 import stat
 import sys
 import queue
@@ -26,6 +27,7 @@ from core.logi_devices import (
     _coerce_cid,
     build_connected_device_info,
     clamp_dpi,
+    classify_device_kind,
     resolve_device,
 )
 
@@ -776,6 +778,49 @@ FEAT_THUMB_WHEEL          = 0x2150  # Thumbwheel (horizontal thumbwheel divert)
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
+FEAT_CROWN          = 0x4600      # Crown dial (Logitech Craft keyboard)
+FEAT_BACKLIGHT2     = 0x1982      # Keyboard backlight (Craft, MX Keys)
+# BACKLIGHT2 function indices (Solaar): getBacklightConfig=0, setBacklightConfig=1.
+BACKLIGHT2_GET_CONFIG = 0
+BACKLIGHT2_SET_CONFIG = 1
+# getBacklightConfig (fn 0) returns a config block whose byte 0 is the on/off
+# flag. On the Craft, software brightness is NOT settable over 0x1982 (verified on
+# hardware: supported byte reports no manual mode, and the level byte is ignored —
+# the keyboard manages brightness itself via its ambient sensor and backlight
+# keys). So we only toggle byte 0. See craft-hidpp-protocol / backlight notes.
+BACKLIGHT2_ENABLED_IDX = 0
+BACKLIGHT2_ENABLED_ON  = 0x01
+BACKLIGHT2_ENABLED_OFF = 0x00
+# Crown function indices follow Solaar (read_fnid 0x10 → fn 1, write 0x20 → fn 2).
+CROWN_GET_MODE      = 1
+CROWN_SET_MODE      = 2
+CROWN_DIVERT_ON     = 0x02        # setCrownMode byte0: send HID++ notifications
+CROWN_DIVERT_OFF    = 0x01
+# setCrownMode byte1 selects the rotation feel. 0x00 = leave unchanged.
+CROWN_SMOOTH_ON     = 0x01        # free-spinning
+CROWN_SMOOTH_OFF    = 0x02        # ratchet (detented)
+# Crown ratchet notification bytes (params = report bytes after the 4-byte
+# header): params[1] = signed ratchet delta, params[5] == 1 = tap, params[6] =
+# press progression (0x01 start … 0x05 end). See craft-hidpp-protocol memory.
+CROWN_RATCHET_DELTA_IDX = 1
+CROWN_TAP_IDX           = 5
+CROWN_PRESS_IDX         = 6
+# Accumulated |signed delta| that equals one emitted rotation step. One physical
+# ratchet detent sums to roughly this; tunable on hardware.
+CROWN_RATCHET_STEP      = 6
+# A click is always preceded by a touch. After a touch we wait this long: if a
+# physical click (or rotation) follows, the touch is suppressed; otherwise the
+# touch is treated as its own command.
+CROWN_TOUCH_CLICK_WINDOW_S = 0.25
+# Receiver register that gates HID++ notification delivery. Writing
+# wireless(0x000100) | software_present(0x000800) = 0x000900 makes crown events
+# arrive reliably; without it they are dropped even when the crown is diverted.
+RECEIVER_NOTIF_REGISTER = 0x00
+RECEIVER_NOTIF_FLAGS    = (0x00, 0x09, 0x00)
+# HID++ 1.0 receiver notifications (sub-id) for hot-plug: a paired device
+# powering on/off after the initial scan.
+RECEIVER_NOTIF_DEPARTURE = 0x40
+RECEIVER_NOTIF_ARRIVAL   = 0x41
 FEAT_HAPTIC         = 0x19B0      # Haptic Feedback (MX Master 4)
 FEAT_FORCE_SENSING  = 0x19C0      # Force Sensing Button (MX Master 4)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
@@ -912,12 +957,15 @@ class HidGestureListener:
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
                  on_thumb_button_down=None, on_thumb_button_up=None,
-                 on_thumb_button_move=None):
+                 on_thumb_button_move=None, on_crown=None):
+
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        self._on_crown      = on_crown
+        
         # Accepted for divert+inject-era callers; native-invert never
         # sees wheelMovement / thumbwheelEvent notifications.
         self._on_wheel = on_wheel
@@ -940,9 +988,14 @@ class HidGestureListener:
         # added DYNAMICALLY at connect time via `_install_thumb_button_extra`
         # because the choice depends on which CID `_divert` settled on.
         self._static_extra_diverts = dict(extra_diverts or {})
-        self._extra_diverts = {
+        # Base divert template; each device session gets its own copy so
+        # held-state is tracked per device.
+        self._base_extra_diverts = {
             cid: {**info, "held": False}
             for cid, info in self._static_extra_diverts.items()
+        }
+        self._extra_diverts = {
+            cid: dict(info) for cid, info in self._base_extra_diverts.items()
         }
         self._thumb_button_cid: int | None = None
         # Per-CID divert acknowledgment: a CID lives in ``_extra_diverts`` from
@@ -982,6 +1035,7 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        self._pending_extra_diverts = None  # queued extra-divert set change
         self._pending_battery = None
         self._battery_result = None
         self._battery_event = threading.Event()
@@ -989,6 +1043,36 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        # Crown (Logitech Craft) state.
+        self._crown_idx = None          # feature index of CROWN, or None
+        self._crown_accum = 0           # accumulated signed ratchet delta
+        self._crown_pressed = False     # physical crown click held
+        self._crown_rotated_while_pressed = False  # press+rotate vs plain click
+        self._crown_touch_active = False    # capacitive touch edge state
+        self._crown_touch_pending = False   # touch awaiting click/timeout
+        self._crown_touch_timer = None      # threading.Timer for touch resolve
+        self._crown_touch_lock = threading.Lock()
+        self._crown_smooth_pref = False     # desired feel: True=smooth, False=ratchet
+        self._pending_crown_smooth = None   # queued live feel change
+        # Keyboard backlight (BACKLIGHT2, feature 0x1982) state.
+        self._backlight_idx = None          # feature index of BACKLIGHT2, or None
+        self._backlight_pref = None         # desired (enabled: bool, pct: int 0-100)
+        self._pending_backlight = None      # queued live backlight change
+        self._device_type = "mouse"         # current cursor device type
+        # Multiplexer: per-device sessions keyed by a unique session id. The flat
+        # self._* fields above act as a transient "cursor" reused by the
+        # synchronous discovery/control helpers; persistent per-device state
+        # (including its owning HID handle) lives in these session snapshots.
+        # A USB receiver multiplexes several devices on one handle by
+        # device-index (1..6); direct Bluetooth devices each own a separate
+        # handle and all report on device-index 0xFF, so the session key must be
+        # handle-aware rather than the device-index. See craft-multidevice notes.
+        self._sessions = {}                 # session_key -> snapshot dict
+        self._session_key = None            # cursor's current session key
+        self._next_session_key = 0          # monotonic session-key allocator
+        self._primary_session = None        # session_key of the primary device
+        self._recv_handle = None        # short HID++ handle used to enable
+                                        # receiver notifications (kept open)
         # 0x2121 Hi-Res Wheel + 0x2150 Thumbwheel native-invert state.
         # Lock ordering: outer `_wheel_divert_call_lock` serializes
         # cross-thread callers, inner `_wheel_divert_lock` protects the
@@ -1067,13 +1151,75 @@ class HidGestureListener:
             except Exception:
                 pass
             self._dev = None
+        self._close_recv_handle()
         self._connected_device_info = None
         if self._thread:
             self._thread.join(timeout=3)
 
     @property
     def connected_device(self):
-        return self._connected_device_info
+        # Primary device (backward compatible). Prefer the cursor's info, else
+        # the primary session.
+        if self._connected_device_info is not None:
+            return self._connected_device_info
+        s = self._sessions.get(self._primary_session)
+        return s.get("_connected_device_info") if s else None
+
+    @property
+    def connected_devices(self):
+        """All bound devices' ConnectedDeviceInfo (multiplexer)."""
+        out = []
+        for s in self._sessions.values():
+            info = s.get("_connected_device_info")
+            if info is not None:
+                out.append(info)
+        return out
+
+    def _load_session_with(self, field):
+        """Load the cursor with the first session whose *field* is set."""
+        for key, s in self._sessions.items():
+            if s.get(field) is not None:
+                self._load_cursor(s)
+                return key
+        return None
+
+    def _save_cursor_session(self):
+        """Persist the current cursor back to its session."""
+        if self._session_key in self._sessions:
+            self._sessions[self._session_key] = self._snapshot_cursor()
+
+    def _distinct_session_handles(self):
+        """Every open HID handle backing a session (identity de-duplicated).
+
+        A USB receiver yields a single handle shared by all its device
+        sessions; direct Bluetooth devices each contribute their own handle."""
+        handles = []
+        for s in self._sessions.values():
+            dev = s.get("_dev")
+            if dev is not None and not any(dev is h for h in handles):
+                handles.append(dev)
+        return handles
+
+    @staticmethod
+    def _physical_device_key(info):
+        """Stable identity for the physical device behind a HID interface.
+
+        Used to de-duplicate the several HID collections a single Bluetooth
+        device exposes (all sharing one serial/MAC), so we bind it once rather
+        than once per collection. Prefers the serial number (a MAC for BLE),
+        falling back to a collection-stripped device path plus PID."""
+        serial = (info.get("serial_number") or "").strip()
+        if serial:
+            return ("sn", serial.lower())
+        path = info.get("path") or b""
+        if isinstance(path, bytes):
+            path = path.decode("utf-8", "replace")
+        # Group the per-collection paths of one device: drop the trailing
+        # "&Col0N" collection suffix and the interface-GUID tail.
+        base = re.split(r"&col[0-9a-f]+", path, flags=re.IGNORECASE)[0]
+        base = base.split("#{", 1)[0]
+        pid = int(info.get("product_id", 0) or 0)
+        return ("path", pid, base.lower())
 
     def _discovered_feature_ids(self):
         feature_ids = []
@@ -1089,6 +1235,10 @@ class HidGestureListener:
             )
         if self._battery_idx is not None and self._battery_feature_id is not None:
             feature_ids.append(self._battery_feature_id)
+        if self._crown_idx is not None:
+            feature_ids.append(FEAT_CROWN)
+        if self._backlight_idx is not None:
+            feature_ids.append(FEAT_BACKLIGHT2)
         feature_ids.extend(sorted(self._wheel_feature_indexes))
         return tuple(feature_ids)
 
@@ -1107,6 +1257,10 @@ class HidGestureListener:
                 ),
                 "index": self._smart_shift_idx,
             })
+        if self._crown_idx is not None:
+            features.append({"feature_id": FEAT_CROWN, "index": self._crown_idx})
+        if self._backlight_idx is not None:
+            features.append({"feature_id": FEAT_BACKLIGHT2, "index": self._backlight_idx})
         if self._battery_idx is not None and self._battery_feature_id is not None:
             features.append({
                 "feature_id": self._battery_feature_id,
@@ -1528,6 +1682,13 @@ class HidGestureListener:
 
         return ordered or list(preferred)
 
+    def _control_present(self, cid):
+        """True if *cid* is in the discovered REPROG control table. When no
+        table was discovered, assume present so we don't over-filter."""
+        if not self._last_controls:
+            return True
+        return any(c.get("cid") == cid for c in self._last_controls)
+
     def _divert(self):
         """Divert the selected gesture control. RawXY is requested for any
         CID not flagged as button-only in `_button_only_cids`.
@@ -1549,6 +1710,8 @@ class HidGestureListener:
         # hold hands it over (guards against a stuck owner across reconnects).
         self._rawxy_owner = "gesture"
         for cid in self._gesture_candidates:
+            if not self._control_present(cid):
+                continue  # device has no such control (e.g. a keyboard)
             self._gesture_cid = cid
             button_only = cid in self._button_only_cids
             if not button_only:
@@ -1688,6 +1851,8 @@ class HidGestureListener:
         self._extra_divert_acks.clear()
         failed: list[int] = []
         for cid in list(self._extra_diverts.keys()):
+            if not self._control_present(cid):
+                continue  # device has no such control (e.g. a keyboard)
             resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
             ok = resp is not None
             print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
@@ -1700,6 +1865,57 @@ class HidGestureListener:
             if cid == self._thumb_button_cid:
                 self._thumb_button_cid = None
             self._extra_diverts.pop(cid, None)
+
+    def update_extra_diverts(self, extra):
+        """Queue a new set of extra-divert CIDs (mode shift, Craft keys, …).
+
+        Callable from any thread; the change is applied on the listener thread so
+        re-mapping a key in the UI takes effect live without a reconnect."""
+        self._pending_extra_diverts = {
+            cid: {**info, "held": False} for cid, info in (extra or {}).items()
+        }
+
+    def _apply_pending_extra_diverts(self):
+        """Apply the queued extra-divert set to every device session (each only
+        diverts the CIDs it actually has)."""
+        pending = self._pending_extra_diverts
+        self._pending_extra_diverts = None
+        if pending is None:
+            return
+        targets = list(self._sessions) if self._sessions else [None]
+        for dev_idx in targets:
+            if dev_idx is not None:
+                self._load_cursor(self._sessions[dev_idx])
+            if self._feat_idx is None:
+                continue
+            self._apply_extra_divert_delta(pending)
+            if dev_idx is not None:
+                self._sessions[dev_idx] = self._snapshot_cursor()
+
+    def _apply_extra_divert_delta(self, pending):
+        """Converge the cursor device's diverts to *pending* (present CIDs only)."""
+        old = set(self._extra_diverts)
+        new = set(pending)
+        for cid in old - new:
+            hi, lo = (cid >> 8) & 0xFF, cid & 0xFF
+            try:
+                self._tx(LONG_ID, self._feat_idx, 3, [hi, lo, 0x02, 0x00, 0x00])
+                print(f"[HidGesture] Extra undivert {_format_cid(cid)}")
+            except Exception:
+                pass
+        for cid in new - old:
+            if not self._control_present(cid):
+                continue
+            ok = self._set_cid_reporting(cid, 0x03) is not None
+            print(f"[HidGesture] Extra divert {_format_cid(cid)}: "
+                  f"{'OK' if ok else 'FAILED'}")
+        # Preserve held-state for CIDs that remain diverted.
+        merged = {}
+        for cid, info in pending.items():
+            info = dict(info)
+            info["held"] = self._extra_diverts.get(cid, {}).get("held", False)
+            merged[cid] = info
+        self._extra_diverts = merged
 
     def _undivert(self):
         """Restore default button behaviour (best-effort).
@@ -1746,6 +1962,317 @@ class HidGestureListener:
                 print(f"[HidGesture] _undivert: horizontal invert revert failed: {exc}")
             self._wheel_divert_state = False
 
+    # ── Crown (Logitech Craft) ────────────────────────────────────
+
+    def _find_crown(self):
+        """Locate the CROWN feature (0x4600) on the current device index."""
+        fi = self._find_feature(FEAT_CROWN)
+        if fi:
+            self._crown_idx = fi
+            print(f"[HidGesture] Found CROWN @0x{fi:02X}")
+        return fi
+
+    def _divert_crown(self):
+        """Divert the crown (HID++ notifications) and set the rotation feel."""
+        if self._crown_idx is None:
+            return False
+        smooth = CROWN_SMOOTH_ON if self._crown_smooth_pref else CROWN_SMOOTH_OFF
+        resp = self._request(self._crown_idx, CROWN_SET_MODE,
+                             [CROWN_DIVERT_ON, smooth])
+        ok = resp is not None
+        print(f"[HidGesture] Divert CROWN ({'smooth' if self._crown_smooth_pref else 'ratchet'}): "
+              f"{'OK' if ok else 'FAILED'}")
+        return ok
+
+    def set_crown_smooth(self, smooth):
+        """Set the crown rotation feel (True=smooth, False=ratchet). Callable
+        from any thread; applied live on the listener thread when connected."""
+        self._crown_smooth_pref = bool(smooth)
+        self._pending_crown_smooth = bool(smooth)
+
+    def _apply_pending_crown_smooth(self):
+        smooth = self._pending_crown_smooth
+        self._pending_crown_smooth = None
+        if smooth is None:
+            return
+        if self._sessions:
+            self._load_session_with("_crown_idx")
+        if self._crown_idx is None:
+            return
+        byte1 = CROWN_SMOOTH_ON if smooth else CROWN_SMOOTH_OFF
+        self._crown_smooth_pref = bool(smooth)
+        self._request(self._crown_idx, CROWN_SET_MODE, [CROWN_DIVERT_ON, byte1])
+        print(f"[HidGesture] Crown feel: {'smooth' if smooth else 'ratchet'}")
+        self._save_cursor_session()
+
+    def _undivert_crown(self):
+        if self._crown_idx is None or self._dev is None:
+            return
+        try:
+            self._tx(LONG_ID, self._crown_idx, CROWN_SET_MODE, [CROWN_DIVERT_OFF])
+        except Exception:
+            pass
+
+    # ── Keyboard backlight (BACKLIGHT2, feature 0x1982) ───────────
+    def _find_backlight(self):
+        """Locate the BACKLIGHT2 feature (0x1982) on the current device index."""
+        fi = self._find_feature(FEAT_BACKLIGHT2)
+        if fi:
+            self._backlight_idx = fi
+            print(f"[HidGesture] Found BACKLIGHT2 @0x{fi:02X}")
+        return fi
+
+    def set_backlight(self, enabled, brightness):
+        """Set keyboard backlight on/off and brightness (0-100). Callable from
+        any thread; applied live on the listener thread when connected."""
+        try:
+            pct = max(0, min(100, int(brightness)))
+        except (TypeError, ValueError):
+            pct = 0
+        self._backlight_pref = (bool(enabled), pct)
+        self._pending_backlight = (bool(enabled), pct)
+
+    def _apply_pending_backlight(self):
+        pending = self._pending_backlight
+        self._pending_backlight = None
+        if pending is None:
+            return
+        enabled, pct = pending
+        if self._sessions:
+            self._load_session_with("_backlight_idx")
+        if self._backlight_idx is None:
+            return
+        self._backlight_pref = (enabled, pct)
+        # This firmware only honours the on/off (enabled) byte over 0x1982 — the
+        # brightness level is firmware-managed (ambient sensor + the keyboard's own
+        # backlight keys), so we toggle on/off and leave the level untouched via a
+        # read-modify-write. Never let a backlight quirk tear down the session.
+        try:
+            # _request returns the full (devIdx, feat, func, sw, params) tuple.
+            resp = self._request(self._backlight_idx, BACKLIGHT2_GET_CONFIG, [])
+            cfg = list(resp[4]) if resp else []
+            params = cfg + [0] * (16 - len(cfg)) if len(cfg) < 16 else cfg
+            params[BACKLIGHT2_ENABLED_IDX] = (
+                BACKLIGHT2_ENABLED_ON if enabled else BACKLIGHT2_ENABLED_OFF)
+            self._request(self._backlight_idx, BACKLIGHT2_SET_CONFIG, params[:16])
+            print(f"[HidGesture] Backlight: {'on' if enabled else 'off'}")
+        except Exception as exc:
+            print(f"[HidGesture] Backlight apply failed: {exc}")
+        self._save_cursor_session()
+
+    def _enable_receiver_notifications(self, pid):
+        """Write the receiver NOTIFICATIONS register so crown events are
+        delivered. Sent as a short HID++ report on the FF00/0x0001 collection;
+        the handle is kept open for the session to match observed behaviour."""
+        if not HIDAPI_OK or _HID_API_STYLE is None:
+            return False
+        try:
+            for info in _hid.enumerate(LOGI_VID, 0):
+                if (int(info.get("usage_page", 0) or 0) == 0xFF00
+                        and int(info.get("usage", 0) or 0) == 0x0001
+                        and int(info.get("product_id", 0) or 0) == int(pid or 0)):
+                    path = info.get("path")
+                    if not path:
+                        continue
+                    if _HID_API_STYLE == "hidapi":
+                        h = _hid.device()
+                        h.open_path(path)
+                    else:
+                        h = _HidDeviceCompat(path)
+                    h.write([SHORT_ID, BT_DEV_IDX, 0x80, RECEIVER_NOTIF_REGISTER,
+                             *RECEIVER_NOTIF_FLAGS])
+                    try:
+                        h.set_nonblocking(True)
+                    except Exception:
+                        pass
+                    self._close_recv_handle()
+                    self._recv_handle = h
+                    print("[HidGesture] Enabled receiver HID++ notifications")
+                    return True
+        except Exception as exc:
+            print(f"[HidGesture] enable receiver notifications failed: {exc}")
+        return False
+
+    def _discover_receiver_slots(self):
+        """Ask the receiver to announce its connected devices and collect their
+        device-indexes, so we probe only populated slots (fast + reliable).
+
+        Writing receiver register 0x02 = 0x02 makes a Unifying/Bolt receiver
+        re-emit a device-arrival (0x41) notification for every paired device.
+        Returns a sorted slot list, or None if the receiver doesn't answer."""
+        if self._recv_handle is None:
+            return None
+        try:
+            self._recv_handle.write(
+                [SHORT_ID, BT_DEV_IDX, 0x80, 0x02, 0x02, 0x00, 0x00])
+        except Exception:
+            return None
+        slots = set()
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            try:
+                # Receiver arrival/departure notifications are SHORT reports on
+                # the 0xFF00/0x0001 collection (recv_handle), not the long one.
+                data = self._recv_handle.read(64, 0)
+            except Exception:
+                break
+            if not data:
+                time.sleep(0.01)
+                continue
+            raw = list(data)
+            msg = _parse(raw)
+            if msg is None:
+                continue
+            dev_idx, feat, _func, _sw, _p = msg
+            if feat == RECEIVER_NOTIF_ARRIVAL and 1 <= dev_idx <= 6:
+                slots.add(dev_idx)
+        # Drain any remaining announcement reports so the post-connect poll
+        # doesn't mistake our own 0x41 burst for a genuine hot-plug arrival.
+        for _ in range(50):
+            try:
+                if not self._recv_handle.read(64, 0):
+                    break
+            except Exception:
+                break
+        if slots:
+            print(f"[HidGesture] Receiver announced device slots: "
+                  + ", ".join(f"0x{s:02X}" for s in sorted(slots)))
+        return sorted(slots) if slots else None
+
+    def _poll_receiver_notifications(self):
+        """Non-blocking poll of the receiver's short interface for device
+        arrival/departure, so a device powered on after the initial scan
+        triggers a re-scan that binds it (hot-plug)."""
+        if self._recv_handle is None or self._reconnect_requested:
+            return
+        try:
+            data = self._recv_handle.read(64, 0)
+        except Exception:
+            return
+        if not data:
+            return
+        msg = _parse(list(data))
+        if msg is None:
+            return
+        dev_idx, feat, _f, _s, _p = msg
+        if feat in (RECEIVER_NOTIF_ARRIVAL, RECEIVER_NOTIF_DEPARTURE):
+            print("[HidGesture] Receiver device "
+                  f"{'arrival' if feat == RECEIVER_NOTIF_ARRIVAL else 'departure'} "
+                  f"(devIdx=0x{dev_idx:02X}) -> re-scanning")
+            self._reconnect_requested = True
+
+    def _close_recv_handle(self):
+        if self._recv_handle is not None:
+            try:
+                self._recv_handle.close()
+            except Exception:
+                pass
+            self._recv_handle = None
+
+    def _handle_crown(self, params):
+        """Decode a CROWN notification → rotation / click / touch callbacks.
+
+        The crown reports a capacitive touch (params[CROWN_TAP_IDX]) and a
+        physical click (params[CROWN_PRESS_IDX], 0x01 start … 0x05 end). Because
+        a click is always preceded by a touch, a touch is held briefly: if a
+        click or rotation follows it is consumed, otherwise the touch fires as
+        its own command.
+
+        - rotate, not clicked       → crown_left / crown_right
+        - rotate while clicked       → crown_press_left / crown_press_right
+        - click (press + release)    → crown_tap
+        - touch, no click/rotate     → crown_touch
+        """
+        if len(params) <= CROWN_PRESS_IDX:
+            return
+
+        press_val = params[CROWN_PRESS_IDX]
+        pressed_now = 0x01 <= press_val <= 0x04
+        if pressed_now and not self._crown_pressed:
+            self._crown_pressed = True
+            self._crown_rotated_while_pressed = False
+            self._cancel_pending_touch()   # a click consumes the preceding touch
+
+        ratchet = params[CROWN_RATCHET_DELTA_IDX]
+        if ratchet:
+            self._cancel_pending_touch()   # turning is not a discrete touch
+            delta = ratchet - 256 if ratchet >= 0x80 else ratchet
+            self._crown_accum += delta
+            if self._crown_pressed:
+                right_key, left_key = "crown_press_right", "crown_press_left"
+            else:
+                right_key, left_key = "crown_right", "crown_left"
+            while self._crown_accum >= CROWN_RATCHET_STEP:
+                self._crown_accum -= CROWN_RATCHET_STEP
+                self._crown_rotated_while_pressed |= self._crown_pressed
+                self._emit_crown(right_key)
+            while self._crown_accum <= -CROWN_RATCHET_STEP:
+                self._crown_accum += CROWN_RATCHET_STEP
+                self._crown_rotated_while_pressed |= self._crown_pressed
+                self._emit_crown(left_key)
+
+        # Click = a press that ends without any rotation.
+        if self._crown_pressed and not pressed_now:
+            if not self._crown_rotated_while_pressed:
+                self._emit_crown("crown_tap")
+            self._crown_pressed = False
+            self._crown_rotated_while_pressed = False
+
+        # Touch start: arm the pending-touch timer (unless already clicking).
+        touch_now = params[CROWN_TAP_IDX] == 0x01
+        if touch_now and not self._crown_touch_active:
+            self._crown_touch_active = True
+            if not self._crown_pressed:
+                self._arm_touch_timer()
+        elif not touch_now and self._crown_touch_active:
+            self._crown_touch_active = False
+
+    def _arm_touch_timer(self):
+        # Capture the session key so the timer resolves against the right
+        # session even after the cursor has moved to another device.
+        session_key = self._session_key
+        with self._crown_touch_lock:
+            self._cancel_pending_touch_locked()
+            self._crown_touch_pending = True
+            timer = threading.Timer(
+                CROWN_TOUCH_CLICK_WINDOW_S, lambda: self._resolve_touch(session_key))
+            timer.daemon = True
+            self._crown_touch_timer = timer
+            timer.start()
+
+    def _resolve_touch(self, session_key=None):
+        with self._crown_touch_lock:
+            state = self._sessions.get(session_key) if session_key is not None else None
+            if state is not None:
+                if not state.get("_crown_touch_pending") or state.get("_crown_pressed"):
+                    return
+                state["_crown_touch_pending"] = False
+                state["_crown_touch_timer"] = None
+            else:
+                if not self._crown_touch_pending or self._crown_pressed:
+                    return
+                self._crown_touch_pending = False
+                self._crown_touch_timer = None
+        self._emit_crown("crown_touch")
+
+    def _cancel_pending_touch(self):
+        with self._crown_touch_lock:
+            self._cancel_pending_touch_locked()
+
+    def _cancel_pending_touch_locked(self):
+        self._crown_touch_pending = False
+        if self._crown_touch_timer is not None:
+            self._crown_touch_timer.cancel()
+            self._crown_touch_timer = None
+
+    def _emit_crown(self, button_key):
+        print(f"[HidGesture] Crown {button_key}")
+        if self._on_crown:
+            try:
+                self._on_crown(button_key)
+            except Exception as exc:
+                print(f"[HidGesture] crown callback error: {exc}")
+
     # ── DPI control ───────────────────────────────────────────────
 
     def set_dpi(self, dpi_value):
@@ -1766,8 +2293,10 @@ class HidGestureListener:
         dpi = self._pending_dpi
         if dpi is None:
             return
+        if self._sessions:
+            self._load_session_with("_dpi_idx")
         if self._dpi_idx is None or self._dev is None:
-            print("[HidGesture] Cannot set DPI -- not connected")
+            # Device has no Adjustable DPI feature (e.g. a keyboard); skip quietly.
             self._dpi_result = False
             self._pending_dpi = None
             self._dpi_event.set()
@@ -1802,6 +2331,8 @@ class HidGestureListener:
 
     def _apply_pending_read_dpi(self):
         """Called from the listener thread to read current DPI."""
+        if self._sessions:
+            self._load_session_with("_dpi_idx")
         if self._dpi_idx is None or self._dev is None:
             self._dpi_result = None
             self._pending_dpi = None
@@ -1832,8 +2363,37 @@ class HidGestureListener:
 
     @property
     def smart_shift_supported(self):
+        if self._sessions:
+            return any(s.get("_smart_shift_idx") is not None
+                       for s in self._sessions.values())
         return self._smart_shift_idx is not None
 
+    @property
+    def dpi_supported(self):
+        # True when any bound device exposes Adjustable DPI (a mouse). A
+        # keyboard-only session has no DPI feature, so a saved DPI value must
+        # not be replayed against it (and its absence is not a failure).
+        if self._sessions:
+            return any(s.get("_dpi_idx") is not None
+                       for s in self._sessions.values())
+        return self._dpi_idx is not None
+
+    @property
+    def backlight_supported(self):
+        # Check every bound device, not just the live cursor — in a multi-device
+        # session the cursor flips between devices as reports are processed.
+        if self._sessions:
+            return any(s.get("_backlight_idx") is not None
+                       for s in self._sessions.values())
+        return self._backlight_idx is not None
+
+    @property
+    def crown_present(self):
+        """True when any bound device exposes the crown (multi-device safe)."""
+        if self._sessions:
+            return any(s.get("_crown_idx") is not None
+                       for s in self._sessions.values())
+        return self._crown_idx is not None
     @property
     def hires_wheel_supported(self):
         return self._hires_wheel_idx is not None
@@ -1876,6 +2436,8 @@ class HidGestureListener:
             pending = self._pending_smart_shift
         if pending is None:
             return
+        if self._sessions:
+            self._load_session_with("_smart_shift_idx")
         if self._smart_shift_idx is None or self._dev is None:
             print("[HidGesture] Cannot set Smart Shift -- not connected")
             self._finish_pending_smart_shift(None if pending == "read" else False)
@@ -2046,6 +2608,8 @@ class HidGestureListener:
             target = self._pending_wheel_divert
         if target is None:
             return
+        if self._sessions and self._load_session_with("_hires_wheel_idx") is None:
+            self._load_session_with("_thumbwheel_idx")
         invert_v, invert_h = target
         no_features = (
             self._hires_wheel_idx is None and self._thumbwheel_idx is None
@@ -2221,6 +2785,8 @@ class HidGestureListener:
         cmd = self._pending_force_sensing
         if cmd is None:
             return
+        if self._sessions:
+            self._load_session_with("_force_sensing_idx")
         if self._force_sensing_idx is None or self._dev is None:
             print("[HidGesture] Cannot process force sensing -- not connected or unsupported")
             self._force_sensing_result = None if isinstance(cmd, str) else False
@@ -2322,6 +2888,8 @@ class HidGestureListener:
         cmd = self._pending_haptic
         if cmd is None:
             return
+        if self._sessions:
+            self._load_session_with("_haptic_idx")
         if self._haptic_idx is None or self._dev is None:
             print("[HidGesture] Cannot process haptic -- not connected or unsupported")
             self._haptic_result = None if isinstance(cmd, str) else False
@@ -2399,43 +2967,62 @@ class HidGestureListener:
             return None
         return self._battery_result
 
+    def read_all_batteries(self):
+        """Queue a per-device battery read; return {device_type: level}."""
+        self._battery_result = None
+        self._pending_battery = "read_all"
+        for _ in range(30):
+            if self._pending_battery is None:
+                return self._battery_result or {}
+            time.sleep(0.1)
+        print("[HidGesture] Battery read timed out")
+        self._pending_battery = None
+        return {}
+
+    def _read_current_battery(self):
+        """Read the battery level for the currently loaded cursor (or None)."""
+        if self._battery_idx is None or self._dev is None:
+            return None
+        func = 1 if self._battery_feature_id == FEAT_UNIFIED_BATT else 0
+        label = "unified" if func == 1 else "status"
+        resp = self._request(self._battery_idx, func, [])
+        if not resp:
+            return None
+        _, _, _, _, params = resp
+        level = params[0] if params else None
+        if level is None or not (0 <= level <= 100):
+            return None
+        if level != self._last_logged_battery:
+            print(f"[HidGesture] Battery ({label}): {level}%")
+            self._last_logged_battery = level
+        return level
+
     def _apply_pending_read_battery(self):
         """Called from the listener thread to read current battery level."""
-        if self._battery_idx is None or self._dev is None:
-            self._battery_result = None
-            self._pending_battery = None
-            self._battery_event.set()
-            return
+        if self._sessions:
+            self._load_session_with("_battery_idx")
+        self._battery_result = self._read_current_battery()
+        self._pending_battery = None
+        self._battery_event.set()
 
-        if self._battery_feature_id == FEAT_UNIFIED_BATT:
-            resp = self._request(self._battery_idx, 1, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (unified): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
+    def _apply_pending_read_battery_all(self):
+        """Read every device session's battery, keyed by device type."""
+        results = {}
+        if self._sessions:
+            saved = self._snapshot_cursor()
+            for dev_idx in list(self._sessions):
+                self._load_cursor(self._sessions[dev_idx])
+                level = self._read_current_battery()
+                if level is not None:
+                    results[self._device_type or "mouse"] = level
+                # Persist any updated last-logged value back to the session.
+                self._sessions[dev_idx] = self._snapshot_cursor()
+            self._load_cursor(saved)
         else:
-            resp = self._request(self._battery_idx, 0, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (status): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
-
+            level = self._read_current_battery()
+            if level is not None:
+                results[self._device_type or "mouse"] = level
+        self._battery_result = results
         self._pending_battery = None
         self._battery_event.set()
 
@@ -2463,37 +3050,105 @@ class HidGestureListener:
         self._force_sensing_event.set()
 
     def _force_release_stale_holds(self):
-        """Synthesize UP events for any buttons stuck in the held state.
+        """Synthesize UP events for any buttons stuck in the held state, across
+        every device session.
 
         Called from the main loop when consecutive _rx() calls return no data,
-        indicating the device may have stalled or gone to sleep while a
-        button was physically held.
+        indicating a device may have stalled or gone to sleep while a button
+        was physically held.
         """
-        if self._held:
-            self._held = False
-            print("[HidGesture] Gesture force-released (stale hold)")
-            if self._on_up:
-                try:
-                    self._on_up()
-                except Exception:
-                    pass
-        for info in self._extra_diverts.values():
-            if info["held"]:
-                info["held"] = False
-                cb = info.get("on_up")
-                if cb:
-                    print("[HidGesture] Extra button force-released (stale hold)")
+        for s in (list(self._sessions.values()) if self._sessions else [None]):
+            if s is not None:
+                self._load_cursor(s)
+            changed = False
+            if self._held:
+                self._held = False
+                changed = True
+                print("[HidGesture] Gesture force-released (stale hold)")
+                if self._on_up:
                     try:
-                        cb()
+                        self._on_up()
                     except Exception:
                         pass
+            for info in self._extra_diverts.values():
+                if info["held"]:
+                    info["held"] = False
+                    changed = True
+                    cb = info.get("on_up")
+                    if cb:
+                        print("[HidGesture] Extra button force-released (stale hold)")
+                        try:
+                            cb()
+                        except Exception:
+                            pass
+            if s is not None and changed:
+                self._sessions[self._session_key] = self._snapshot_cursor()
+
+    _CURSOR_FIELDS = (
+        "_dev", "_session_key",
+        "_dev_idx", "_feat_idx", "_dpi_idx", "_smart_shift_idx",
+        "_smart_shift_enhanced", "_battery_idx", "_battery_feature_id",
+        "_wheel_feature_indexes", "_crown_idx", "_gesture_cid",
+        "_gesture_candidates", "_rawxy_enabled", "_held", "_crown_accum",
+        "_crown_pressed", "_crown_rotated_while_pressed", "_crown_touch_active",
+        "_crown_touch_pending", "_crown_touch_timer", "_extra_diverts",
+        "_last_controls", "_connected_device_info", "_crown_smooth_pref",
+        "_backlight_idx", "_backlight_pref",
+        "_last_logged_battery", "_device_type",
+        "_haptic_idx", "_haptic_capabilities",
+        "_force_sensing_idx", "_force_sensing_range",
+        "_hires_wheel_idx", "_hires_wheel_multiplier",
+        "_thumbwheel_idx", "_thumbwheel_multiplier",
+        "_thumb_button_cid", "_button_only_cids",
+        "_extra_divert_acks", "_rawxy_owner",
+    )
+
+    def _snapshot_cursor(self):
+        return {f: getattr(self, f) for f in self._CURSOR_FIELDS}
+
+    def _load_cursor(self, session):
+        for f in self._CURSOR_FIELDS:
+            setattr(self, f, session[f])
 
     def _on_report(self, raw):
-        """Inspect an incoming HID++ report for diverted button / raw XY events."""
+        """Route an incoming HID++ report to its device session, then process."""
         msg = _parse(raw)
         if msg is None:
             return
-        _, feat, func, _sw, params = msg
+        dev_idx, feat, func, _sw, params = msg
+        if self._sessions:
+            key = self._route_session_key(dev_idx)
+            if key is None:
+                return  # report from a device we are not managing
+            self._load_cursor(self._sessions[key])
+            try:
+                self._process_report(feat, func, params)
+            finally:
+                self._sessions[key] = self._snapshot_cursor()
+            return
+        # During connect (no sessions yet) process against the live cursor.
+        self._process_report(feat, func, params)
+
+    def _route_session_key(self, dev_idx):
+        """Session key for an incoming report's device-index.
+
+        Bluetooth devices all report on device-index 0xFF, so the handle the
+        report was read from (self._dev) disambiguates them; a USB receiver
+        instead shares one handle across device-indexes 1..6. Match on both
+        handle and device-index first, then fall back to device-index alone."""
+        for key, s in self._sessions.items():
+            if s.get("_dev_idx") == dev_idx and s.get("_dev") is self._dev:
+                return key
+        for key, s in self._sessions.items():
+            if s.get("_dev_idx") == dev_idx:
+                return key
+        return None
+
+    def _process_report(self, feat, func, params):
+        """Process a parsed report against the current cursor device state."""
+        if self._crown_idx is not None and feat == self._crown_idx and func == 0:
+            self._handle_crown(params)
+            return
 
         if feat != self._feat_idx:
             return
@@ -2584,15 +3239,67 @@ class HidGestureListener:
 
     # ── connect / main loop ───────────────────────────────────────
 
-    def _try_connect(self):
-        """Open the vendor HID collection, discover features, divert.
+    def _reset_device_cursor(self, device_spec):
+        """Reset the per-device cursor before discovering a device-index, so a
+        device never inherits a previous device's feature indexes/state."""
+        self._feat_idx = None
+        self._dpi_idx = None
+        self._smart_shift_idx = None
+        self._smart_shift_enhanced = False
+        self._battery_idx = None
+        self._battery_feature_id = None
+        self._wheel_feature_indexes = {}
+        self._crown_idx = None
+        self._backlight_idx = None
+        self._crown_accum = 0
+        self._crown_pressed = False
+        self._crown_rotated_while_pressed = False
+        self._crown_touch_active = False
+        self._cancel_pending_touch()
+        self._gesture_cid = DEFAULT_GESTURE_CID
+        self._gesture_candidates = list(
+            getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
+        )
+        self._rawxy_enabled = False
+        self._held = False
+        self._last_controls = []
+        self._connected_device_info = None
+        self._last_logged_battery = None
+        self._device_type = getattr(device_spec, "device_type", "mouse") or "mouse"
+        self._haptic_idx = None
+        self._haptic_capabilities = None
+        self._force_sensing_idx = None
+        self._force_sensing_range = None
+        self._hires_wheel_idx = None
+        self._hires_wheel_multiplier = None
+        self._thumbwheel_idx = None
+        self._thumbwheel_multiplier = None
+        self._thumb_button_cid = None
+        self._extra_divert_acks = set()
+        self._rawxy_owner = "gesture"
+        # thumb_button CID must be diverted button-only (no rawXY) so
+        # firmware doesn't suppress OS cursor motion while it's held.
+        self._button_only_cids = set()
+        ar_cid = getattr(device_spec, "thumb_button_cid", None)
+        if ar_cid is not None:
+            self._button_only_cids.add(int(ar_cid))
+        self._extra_diverts = {
+            cid: dict(info) for cid, info in self._base_extra_diverts.items()
+        }
 
-        Warm path: a cached ``last_device.json`` biases candidate and
-        dev_idx ordering so the previously-working interface is probed
-        first with a tight 400 ms REPROG_V4 timeout. Cold path falls
-        back to the default direct-then-receiver scan with the same
-        per-slot timeout. On divert success the working tuple is
+    def _try_connect(self):
+        """Open the vendor HID collection(s), discover features, divert. Binds
+        ALL HID++ devices as per-device sessions (multiplexer): every device on
+        a USB receiver's single handle, plus each direct Bluetooth device on its
+        own handle.
+
+        Warm path: a cached ``last_device.json`` biases candidate ordering and
+        the receiver-slot probe order so the previously-working interface is
+        tried first. On divert success the primary device's working tuple is
         persisted so the next launch hits the warm path."""
+        self._sessions = {}
+        self._primary_session = None
+        self._next_session_key = 0
         infos = self._vendor_hid_infos()
         if not infos:
             return False
@@ -2605,17 +3312,32 @@ class HidGestureListener:
             cached.get("device") if isinstance(cached, dict) else None
         )
 
-        def _default_priority(info):
+        # Try direct devices (Bluetooth) before USB receivers, which require
+        # scanning multiple slots with slow timeouts. Within a device, prefer
+        # the HID++ 2.0 long-report collection (UP 0xFF00, usage 0x0002) where
+        # feature access works, so we don't burn ~14s per wrong interface first
+        # (e.g. the proprietary/DJ collections on a Unifying receiver).
+        def _direct_device_first(info):
             name = (info.get("product_string") or "").lower()
-            return (1 if "receiver" in name else 0, name)
+            up = int(info.get("usage_page", 0) or 0)
+            usage = int(info.get("usage", 0) or 0)
+            if up == 0xFF00 and usage == 0x0002:
+                iface_rank = 0
+            elif up == 0xFF00 and usage == 0x0001:
+                iface_rank = 1
+            elif up == 0xFF00:
+                iface_rank = 2
+            else:
+                iface_rank = 3
+            return (1 if "receiver" in name else 0, iface_rank, name)
 
-        # Negate the score so higher match (cached interface) sorts first.
+        # Negate the score so the cached (last-working) interface sorts first.
         def _priority(info):
             score = (
                 _candidate_match_score(info, cached_candidate)
                 if cached_candidate is not None else 0
             )
-            return (-score,) + _default_priority(info)
+            return (-score,) + _direct_device_first(info)
 
         infos.sort(key=_priority)
 
@@ -2641,6 +3363,10 @@ class HidGestureListener:
                   f"usage=0x{usage:04X} transport={transport or '-'} "
                   f"source={source} product={product} path={path or '-'}")
 
+        # Direct (Bluetooth) devices already bound via one of their HID
+        # collections; skip their remaining collections so a device is not bound
+        # twice (each BLE device exposes several 0xFF00 collections).
+        bound_direct_keys = set()
         for info in infos:
             pid = info.get("product_id", 0)
             up = info.get("usage_page", 0)
@@ -2649,33 +3375,14 @@ class HidGestureListener:
             source = info.get("source", "unknown")
             # Snapshot before inner branches rebind `info` to HID++ responses.
             candidate_signature = _candidate_signature(info)
+            is_receiver = "receiver" in (product or "").lower()
+            phys_key = None
+            if not is_receiver:
+                phys_key = self._physical_device_key(info)
+                if phys_key in bound_direct_keys:
+                    continue  # this direct device is already bound
             device_spec = resolve_device(product_id=pid, product_name=product)
-            self._feat_idx = None
-            self._dpi_idx = None
-            self._smart_shift_idx = None
-            self._battery_idx = None
-            self._battery_feature_id = None
-            self._haptic_idx = None
-            self._force_sensing_idx = None
-            self._force_sensing_range = None
-            self._haptic_capabilities = None
-            self._wheel_feature_indexes = {}
-            self._gesture_cid = DEFAULT_GESTURE_CID
-            self._gesture_candidates = list(
-                getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
-            )
-            # thumb_button CID must be diverted button-only (no rawXY) so
-            # firmware doesn't suppress OS cursor motion while it's held.
-            self._button_only_cids = set()
-            ar_cid = getattr(device_spec, "thumb_button_cid", None)
-            if ar_cid is not None:
-                self._button_only_cids.add(int(ar_cid))
-            self._rawxy_enabled = False
-            self._hires_wheel_idx = None
-            self._hires_wheel_multiplier = None
-            self._thumbwheel_idx = None
-            self._thumbwheel_multiplier = None
-            self._wheel_divert_state = False
+            self._reset_device_cursor(device_spec)
             opened_transport = None
             opened_up = int(up or 0)
             opened_usage = int(usage or 0)
@@ -2744,18 +3451,24 @@ class HidGestureListener:
             if self._dev is None:
                 continue
 
-            # Narrow the device-index search based on transport:
-            #  - BT candidates only use BT_DEV_IDX (0xFF)
-            #  - Bolt receivers only use slots 1-6
-            #  - Unknown: try all (BT first, then receiver slots)
-            bt_opened = "bluetooth" in (opened_transport or "").lower()
-            if bt_opened:
-                default_idx_order = (BT_DEV_IDX,)
-            elif pid == BOLT_RECEIVER_PID:
-                default_idx_order = (1, 2, 3, 4, 5, 6)
+            # Enable receiver-level HID++ notifications once: needed both for
+            # crown delivery AND for device arrival/departure (hot-plug) events.
+            self._enable_receiver_notifications(pid)
+
+            # A USB receiver multiplexes paired devices on slots 1-6; a direct
+            # (Bluetooth) device answers only on 0xFF. Prefer probing just the
+            # slots the receiver announces, so we neither stall on empty slots
+            # nor miss an idle device that needs a longer wake timeout.
+            if is_receiver:
+                announced = self._discover_receiver_slots()
+                scan_slots = tuple(announced) if announced else (1, 2, 3, 4, 5, 6)
+                # Only populated slots are probed when announced, so we can give
+                # an idle device a long wake timeout without stalling overall.
+                scan_timeout = 3000 if announced else 1200
             else:
-                default_idx_order = (BT_DEV_IDX, 1, 2, 3, 4, 5, 6)
-            cached_dev_idx = None
+                scan_slots = (BT_DEV_IDX,)
+                scan_timeout = 2000
+            # Warm path: probe the cached devIdx first on the cached interface.
             if (
                 cached_candidate is not None
                 and cached_device is not None
@@ -2765,19 +3478,24 @@ class HidGestureListener:
                     cached_dev_idx = int(cached_device.get("dev_idx"))
                 except (TypeError, ValueError):
                     cached_dev_idx = None
-            if cached_dev_idx is not None and cached_dev_idx in default_idx_order:
-                idx_order = (cached_dev_idx,) + tuple(
-                    i for i in default_idx_order if i != cached_dev_idx
-                )
-            else:
-                idx_order = default_idx_order
+                if cached_dev_idx is not None and cached_dev_idx in scan_slots:
+                    scan_slots = (cached_dev_idx,) + tuple(
+                        i for i in scan_slots if i != cached_dev_idx
+                    )
             reprog_found = False
             hidpp_name = None
-            for idx in idx_order:
+            sessions_before = len(self._sessions)
+            for idx in scan_slots:
                 self._dev_idx = idx
-                fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=400)
+                fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=scan_timeout)
                 if fi is not None:
                     reprog_found = True
+                    # Resolve this specific device-index (the HID++ name is
+                    # per-device) and start from a fresh cursor so one device
+                    # never inherits another's feature indexes (multiplexer).
+                    idx_spec = resolve_device(product_id=pid, product_name=product)
+                    self._reset_device_cursor(idx_spec)
+                    self._dev_idx = idx
                     self._feat_idx = fi
                     print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
                           f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
@@ -2786,24 +3504,27 @@ class HidGestureListener:
                     hidpp_name = self._query_device_name()
                     if hidpp_name:
                         print(f"[HidGesture] HID++ device name: '{hidpp_name}'")
-                        device_spec = resolve_device(
+                        idx_spec = resolve_device(
                             product_id=pid, product_name=hidpp_name,
-                        ) or device_spec
+                        ) or idx_spec
                         self._gesture_candidates = list(
-                            getattr(device_spec, "gesture_cids", ())
+                            getattr(idx_spec, "gesture_cids", ())
                             or DEFAULT_GESTURE_CIDS
                         )
                         # Re-evaluate hints when HID++ name resolves a more
                         # specific spec than the receiver PID alone.
                         self._button_only_cids = set()
-                        ar_cid = getattr(device_spec, "thumb_button_cid", None)
+                        ar_cid = getattr(idx_spec, "thumb_button_cid", None)
                         if ar_cid is not None:
                             self._button_only_cids.add(int(ar_cid))
+                    self._device_type = (
+                        getattr(idx_spec, "device_type", "mouse") or "mouse"
+                    )
                     controls = self._discover_reprog_controls()
                     self._last_controls = controls
                     self._gesture_candidates = self._choose_gesture_candidates(
                         controls,
-                        device_spec=device_spec,
+                        device_spec=idx_spec,
                     )
                     print("[HidGesture] Gesture CID candidates: "
                           + ", ".join(_format_cid(cid) for cid in self._gesture_candidates))
@@ -2812,7 +3533,7 @@ class HidGestureListener:
                     if dpi_fi:
                         self._dpi_idx = dpi_fi
                         print(f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}")
-                    # Prefer 0x2111 (Enhanced) -- used by MX Master 3/3S/4 and Logi Options+.
+                    # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
                     # Fall back to 0x2110 (basic) for older devices.
                     ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
                     if ss_fi:
@@ -2929,12 +3650,38 @@ class HidGestureListener:
                             f"[HidGesture] THUMB_WHEEL @0x{tw_fi:02X} "
                             f"divertedRes={self._thumbwheel_multiplier}"
                         )
-                    if self._divert():
-                        # Install BEFORE _divert_extras so it lands in the
-                        # same setCidReporting round. Pass the live REPROG_V4
-                        # controls so the helper can refuse to divert CIDs the
-                        # firmware does not advertise.
-                        self._install_thumb_button_extra(device_spec, controls)
+                    # Probe + divert the crown dial (Logitech Craft). Reliable
+                    # crown delivery requires enabling the receiver's
+                    # NOTIFICATIONS register first.
+                    crown_ok = False
+                    if self._find_crown() is not None:
+                        crown_ok = self._divert_crown()
+                    # Probe the keyboard backlight (BACKLIGHT2). No divert needed;
+                    # just locate it so set_backlight() can drive it.
+                    self._find_backlight()
+
+                    # Bind if we can divert the gesture button OR the crown.
+                    # Keyboards have no gesture CID, so gesture divert fails on
+                    # them: the Craft still binds via its crown, but a plain
+                    # keyboard (e.g. MX Keys) has neither a gesture button nor a
+                    # crown. Classify it from its HID++ profile and bind it
+                    # anyway — its top-row keys are diverted on demand once the
+                    # user remaps them, so it just needs to claim a session and
+                    # appear on the Keyboard page.
+                    gesture_ok = self._divert()
+                    device_kind = classify_device_kind(
+                        product_name=hidpp_name or product,
+                        discovered_features=self._discovered_feature_inventory(),
+                        reprog_controls=controls,
+                    )
+                    keyboard_ok = device_kind == "keyboard"
+                    if gesture_ok or crown_ok or keyboard_ok:
+                        if gesture_ok:
+                            # Install BEFORE _divert_extras so it lands in the
+                            # same setCidReporting round. Pass the live REPROG_V4
+                            # controls so the helper can refuse to divert CIDs
+                            # the firmware does not advertise.
+                            self._install_thumb_button_extra(idx_spec, controls)
                         self._divert_extras()
                         if idx == BT_DEV_IDX:
                             actual_transport = "Bluetooth"
@@ -2966,6 +3713,11 @@ class HidGestureListener:
                             thumbwheel_active=False,
                             thumb_button_via_hid=self.thumb_button_via_hid,
                         )
+                        # Authoritative device type: catalog when recognized,
+                        # otherwise the auto-classification computed above.
+                        self._device_type = (
+                            self._connected_device_info.device_type
+                        )
                         # Replay the last desired native-invert state on
                         # reconnect; listener loop drains this next iter.
                         if (
@@ -2979,20 +3731,55 @@ class HidGestureListener:
                                 self._wheel_divert_result = None
                                 self._pending_wheel_divert = self._wheel_divert_target
                                 self._wheel_divert_event.clear()
-                        try:
-                            _save_last_device_cache(
-                                candidate=candidate_signature,
-                                device={
-                                    "name": hidpp_name or product,
-                                    "dev_idx": int(idx),
-                                    "transport": actual_transport,
-                                    "feat_idx_reprog": int(fi),
-                                },
-                            )
-                        except Exception as exc:
-                            print(f"[HidGesture] Cache write skipped: {exc}")
-                        return True
-                    continue     # divert failed -- try next receiver slot
+                        # Save this device under a unique session key (device
+                        # indexes are not unique across Bluetooth handles, which
+                        # all report on 0xFF) and keep scanning for more devices.
+                        self._session_key = self._next_session_key
+                        self._next_session_key += 1
+                        self._sessions[self._session_key] = self._snapshot_cursor()
+                        if self._primary_session is None:
+                            self._primary_session = self._session_key
+                            # Warm-start cache: remember the primary device's
+                            # working interface + devIdx for the next launch.
+                            try:
+                                _save_last_device_cache(
+                                    candidate=candidate_signature,
+                                    device={
+                                        "name": hidpp_name or product,
+                                        "dev_idx": int(idx),
+                                        "transport": actual_transport,
+                                        "feat_idx_reprog": int(fi),
+                                    },
+                                )
+                            except Exception as exc:
+                                print(f"[HidGesture] Cache write skipped: {exc}")
+                        print(f"[HidGesture] Bound {self._device_type} "
+                              f"'{hidpp_name or product}' @devIdx=0x{idx:02X} "
+                              f"transport={actual_transport} "
+                              f"crown={'y' if crown_ok else 'n'} "
+                              f"backlight={'y' if self._backlight_idx else 'n'}")
+                        if idx == BT_DEV_IDX:
+                            # A Bluetooth HID interface represents exactly one
+                            # device; additional Bluetooth keyboards/mice surface
+                            # as separate interfaces handled by the outer
+                            # candidate loop below.
+                            break
+                        continue
+                    continue     # divert failed — try next receiver slot
+
+            bound_this_iface = len(self._sessions) > sessions_before
+            if bound_this_iface:
+                if is_receiver:
+                    # A receiver multiplexes all its devices on this one handle;
+                    # its remaining collections would only rediscover the same
+                    # devices, so stop scanning candidates.
+                    break
+                # A direct device keeps its own handle open and we keep scanning
+                # the remaining candidates for additional Bluetooth devices.
+                if phys_key is not None:
+                    bound_direct_keys.add(phys_key)
+                continue
+
             if not reprog_found:
                 print(
                     "[HidGesture] Opened candidate but REPROG_V4 was not found "
@@ -3001,12 +3788,26 @@ class HidGestureListener:
                     f"transport={opened_transport or '-'} source={source}"
                 )
 
-            # Couldn't use this interface -- close and try next
+            # Couldn't use this interface — close and try next
             try:
                 self._dev.close()
             except Exception:
                 pass
             self._dev = None
+
+        # Activate the primary device's cursor/handle; the main loop then polls
+        # every distinct session handle (receiver handle + each Bluetooth one).
+        if self._sessions:
+            self._load_cursor(self._sessions[self._primary_session])
+            self._consecutive_request_timeouts = 0
+            bound = ", ".join(
+                f"{s.get('_device_type', '?')}@0x{int(s.get('_dev_idx', 0) or 0):02X}"
+                for s in self._sessions.values()
+            )
+            print(f"[HidGesture] Bound {len(self._sessions)} device(s) across "
+                  f"{len(self._distinct_session_handles())} handle(s) "
+                  f"[{bound}] primary={self._primary_session}")
+            return True
 
         return False
 
@@ -3093,18 +3894,41 @@ class HidGestureListener:
                             self._apply_pending_dpi()
                     if self._pending_smart_shift is not None:
                         self._apply_pending_smart_shift()
+                    if self._pending_extra_diverts is not None:
+                        self._apply_pending_extra_diverts()
+                    if self._pending_crown_smooth is not None:
+                        self._apply_pending_crown_smooth()
+                    if self._pending_backlight is not None:
+                        self._apply_pending_backlight()
                     if self._pending_wheel_divert is not None:
                         self._apply_pending_native_wheel_invert()
-                    if self._pending_battery is not None:
-                        self._apply_pending_read_battery()
                     if self._pending_haptic is not None:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
-                    raw = self._rx(1000)
-                    if raw:
+                    if self._pending_battery is not None:
+                        if self._pending_battery == "read_all":
+                            self._apply_pending_read_battery_all()
+                        else:
+                            self._apply_pending_read_battery()
+                    self._poll_receiver_notifications()
+                    # Poll every distinct session handle. A USB receiver has a
+                    # single handle; multiple direct Bluetooth devices each have
+                    # their own, so we read from each in turn and let _on_report
+                    # route by handle. Split the ~1s budget across handles.
+                    handles = self._distinct_session_handles()
+                    if not handles and self._dev is not None:
+                        handles = [self._dev]
+                    per_handle_ms = max(50, 1000 // max(1, len(handles)))
+                    got_data = False
+                    for handle in handles:
+                        self._dev = handle
+                        raw = self._rx(per_handle_ms)
+                        if raw:
+                            got_data = True
+                            self._on_report(raw)
+                    if got_data:
                         _no_data_count = 0
-                        self._on_report(raw)
                     else:
                         _no_data_count += 1
                         # Force-release buttons stuck in held state when the
@@ -3114,10 +3938,45 @@ class HidGestureListener:
             except Exception as e:
                 print(f"[HidGesture] read error: {e}")
 
-            # Cleanup before potential reconnect
-            self._undivert()
+            # Cleanup before potential reconnect: undivert + force-release every
+            # device session (multiplexer), then the shared handle.
+            for s in (list(self._sessions.values()) if self._sessions else [None]):
+                if s is not None:
+                    self._load_cursor(s)
+                self._undivert()
+                self._undivert_crown()
+                if self._held and self._on_up:
+                    try:
+                        self._on_up()
+                    except Exception:
+                        pass
+                self._held = False
+                for info in self._extra_diverts.values():
+                    if info.get("held"):
+                        info["held"] = False
+                        cb = info.get("on_up")
+                        if cb:
+                            try:
+                                cb()
+                            except Exception:
+                                pass
+                self._cancel_pending_touch()
+            # Close every distinct session handle (receiver + each Bluetooth
+            # device), then drop the sessions.
+            session_handles = self._distinct_session_handles()
+            self._sessions = {}
+            self._primary_session = None
+            self._session_key = None
+            self._close_recv_handle()
+            for handle in session_handles:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             try:
-                if self._dev:
+                if self._dev is not None and not any(
+                    self._dev is h for h in session_handles
+                ):
                     self._dev.close()
             except Exception:
                 pass
@@ -3128,6 +3987,16 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._wheel_feature_indexes = {}
+            self._crown_idx = None
+            self._crown_accum = 0
+            self._crown_pressed = False
+            self._crown_rotated_while_pressed = False
+            self._crown_touch_active = False
+            self._cancel_pending_touch()
+            self._pending_battery = None
+            self._pending_dpi = None
+            self._dpi_result = None
+            self._abort_pending_smart_shift()
             self._drain_pending_requests()
             self._hires_wheel_idx = None
             self._hires_wheel_multiplier = None
