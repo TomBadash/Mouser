@@ -172,6 +172,15 @@ def _candidate_signature(info) -> dict:
     }
 
 
+def _candidate_cooldown_key(info) -> tuple:
+    """Hashable interface identity for the REPROG_V4-absent cooldown map."""
+    sig = _candidate_signature(info)
+    return (
+        sig["pid"], sig["usage_page"], sig["usage"],
+        sig["transport"], sig["source"], sig["path"],
+    )
+
+
 def _candidate_match_score(info, cached_candidate) -> int:
     """Ranking score for a candidate against the cached identity tuple.
     0 = no match, 1 = PID+usage match, 2 = +same source backend,
@@ -351,6 +360,8 @@ if sys.platform == "darwin":
         _iokit.IOHIDManagerSetDeviceMatching.argtypes = [c_void_p, c_void_p]
         _iokit.IOHIDManagerOpen.argtypes = [c_void_p, c_int]
         _iokit.IOHIDManagerOpen.restype = c_int
+        _iokit.IOHIDManagerClose.argtypes = [c_void_p, c_int]
+        _iokit.IOHIDManagerClose.restype = c_int
         _iokit.IOHIDManagerCopyDevices.argtypes = [c_void_p]
         _iokit.IOHIDManagerCopyDevices.restype = c_void_p
 
@@ -477,6 +488,23 @@ if _MAC_NATIVE_OK:
             finally:
                 _cf.CFRelease(key)
 
+        @staticmethod
+        def _close_manager(manager):
+            """Balance IOHIDManagerOpen before releasing the CF wrapper.
+
+            IOHIDManagerClose releases the IOKit user-client (its Mach ports)
+            and the enclosed-device opens; a bare CFRelease does not, so the
+            manager object and roughly two Mach ports leak on every open. This
+            was the dominant leak in issue #238: tens of thousands of live
+            IOHIDManager objects after a day of reconnect churn."""
+            if not manager:
+                return
+            try:
+                _iokit.IOHIDManagerClose(manager, 0)
+            except Exception:
+                pass
+            _cf.CFRelease(manager)
+
         @classmethod
         def enumerate_infos(cls):
             infos = []
@@ -539,12 +567,24 @@ if _MAC_NATIVE_OK:
                 if matching:
                     _cf.CFRelease(matching)
                 if manager:
-                    _cf.CFRelease(manager)
+                    cls._close_manager(manager)
                 for item in matching_refs:
                     _cf.CFRelease(item)
             return infos
 
         def open(self):
+            """Exception-safe open. On any partial failure, release every
+            CoreFoundation object allocated so far so a failed open cannot
+            leak the manager, matching dict, matching refs, or the retained
+            device. ``close()`` is idempotent and guards each field, so a
+            failed open is safe to unwind through it (issue #238)."""
+            try:
+                self._open()
+            except Exception:
+                self.close()
+                raise
+
+        def _open(self):
             keys = [
                 self._cfstring("VendorID"),
                 self._cfstring("ProductID"),
@@ -641,7 +681,7 @@ if _MAC_NATIVE_OK:
                 _cf.CFRelease(self._matching)
                 self._matching = None
             if self._manager:
-                _cf.CFRelease(self._manager)
+                self._close_manager(self._manager)
                 self._manager = None
             for item in self._matching_refs:
                 _cf.CFRelease(item)
@@ -708,6 +748,15 @@ if _MAC_NATIVE_OK:
                     if deadline is not None:
                         continue
                     return b""
+
+        def __del__(self):
+            # Backstop: an instance discarded without an explicit close() (for
+            # example a caller that drops a half-open device) must not leak
+            # IOKit resources. close() is idempotent; never raise from __del__.
+            try:
+                self.close()
+            except Exception:
+                pass
 
 # ── Constants ─────────────────────────────────────────────────────
 LOGI_VID       = 0x046D
@@ -923,6 +972,12 @@ def _control_present(controls, cid: int) -> bool:
 class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
+    # Cooldown before an interface that opened but exposed no REPROG_V4 is
+    # re-probed, so a stable set of incompatible interfaces is not re-scanned
+    # every pass during a reconnect storm. Bypassed when it is the only
+    # candidate so a woken device reconnects promptly (issue #238).
+    _REPROG_ABSENT_COOLDOWN_S = 10.0
+
     def __init__(self, on_down=None, on_up=None, on_move=None,
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
@@ -1001,6 +1056,8 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        # signature -> monotonic deadline; see _REPROG_ABSENT_COOLDOWN_S.
+        self._reprog_absent_until = {}
         self._pending_battery = None
         self._battery_result = None
         self._battery_event = threading.Event()
@@ -2778,7 +2835,31 @@ class HidGestureListener:
                   f"usage=0x{usage:04X} transport={transport or '-'} "
                   f"source={source} product={product} path={path or '-'}")
 
+        # REPROG_V4-absent cooldown (issue #238): skip interfaces that recently
+        # opened but exposed no REPROG_V4, so a stable set of incompatible
+        # interfaces is not re-probed on every pass. Never skip when *all*
+        # candidates are cooling down, so a sole (e.g. just-woken) device is
+        # still probed; the connect backoff throttles that case instead.
+        now = time.monotonic()
+        self._reprog_absent_until = {
+            k: t for k, t in self._reprog_absent_until.items() if t > now
+        }
+        cooled = {
+            _candidate_cooldown_key(info)
+            for info in infos
+            if _candidate_cooldown_key(info) in self._reprog_absent_until
+        }
+        skip_cooled = bool(cooled) and len(cooled) < len(infos)
+
         for info in infos:
+            cand_key = _candidate_cooldown_key(info)
+            if skip_cooled and cand_key in cooled:
+                print(
+                    "[HidGesture] Skipping recently-incompatible interface "
+                    f"PID=0x{int(info.get('product_id', 0) or 0):04X} "
+                    "(no REPROG_V4; cooling down)"
+                )
+                continue
             pid = info.get("product_id", 0)
             up = info.get("usage_page", 0)
             usage = info.get("usage", 0)
@@ -3131,6 +3212,7 @@ class HidGestureListener:
                             )
                         except Exception as exc:
                             print(f"[HidGesture] Cache write skipped: {exc}")
+                        self._reprog_absent_until.pop(cand_key, None)
                         return True
                     continue     # divert failed -- try next receiver slot
             if not reprog_found:
@@ -3139,6 +3221,9 @@ class HidGestureListener:
                     f"on tested devIdx values PID=0x{int(pid or 0):04X} "
                     f"UP=0x{opened_up:04X} usage=0x{opened_usage:04X} "
                     f"transport={opened_transport or '-'} source={source}"
+                )
+                self._reprog_absent_until[cand_key] = (
+                    time.monotonic() + self._REPROG_ABSENT_COOLDOWN_S
                 )
 
             # Couldn't use this interface -- close and try next
@@ -3150,20 +3235,40 @@ class HidGestureListener:
 
         return False
 
+    def _interruptible_sleep(self, seconds):
+        """Sleep up to ``seconds`` in 0.1 s slices, returning early if the
+        listener has been stopped so teardown stays responsive."""
+        for _ in range(int(max(0.0, seconds) / 0.1)):
+            if not self._running:
+                return
+            time.sleep(0.1)
+
     def _main_loop(self):
         """Outer loop: connect → listen → reconnect on error/disconnect."""
         retry_logged = False
+        # Backoff for repeated failed connects. A sleeping or unreachable BLE
+        # mouse can stay enumerable while every open+probe fails; a flat 1.5 s
+        # retry then re-enumerates constantly, which on macOS also multiplies
+        # the per-attempt IOKit work (issue #238). Grow 1.5 s to 30 s on
+        # consecutive failures; reset on any successful connect.
+        _CONNECT_BACKOFF_BASE_S = 1.5
+        _CONNECT_BACKOFF_MAX_S = 30.0
+        connect_backoff_s = _CONNECT_BACKOFF_BASE_S
         while self._running:
             if not self._try_connect():
                 if not retry_logged:
-                    print("[HidGesture] No compatible device; retrying in 1.5 s…")
+                    print(
+                        "[HidGesture] No compatible device; retrying with "
+                        f"backoff up to {_CONNECT_BACKOFF_MAX_S:.0f} s…"
+                    )
                     retry_logged = True
-                for _ in range(15):
-                    if not self._running:
-                        return
-                    time.sleep(0.1)
+                self._interruptible_sleep(connect_backoff_s)
+                connect_backoff_s = min(
+                    connect_backoff_s * 2, _CONNECT_BACKOFF_MAX_S
+                )
                 continue
             retry_logged = False
+            connect_backoff_s = _CONNECT_BACKOFF_BASE_S
 
             self._connected = True
             if self._on_connect:
@@ -3313,4 +3418,4 @@ class HidGestureListener:
                         pass
 
             if self._running:
-                time.sleep(2)
+                self._interruptible_sleep(2)
