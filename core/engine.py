@@ -88,6 +88,7 @@ class Engine:
         self.hook.set_status_callback(self._emit_status)
         self._setup_hooks()
         self.hook.set_connection_change_callback(self._on_connection_change)
+        self.hook.set_battery_notify_callback(self._on_hid_battery_notification)
         # Apply persisted DPI setting
         dpi = self.cfg.get("settings", {}).get("dpi", 1000)
         try:
@@ -1184,12 +1185,13 @@ class Engine:
             if hg and hg.connected_device is not None:
                 if now - _last_battery >= _battery_poll_interval:
                     _last_battery = now
-                    level = hg.read_battery()
+                    result = hg.read_battery()
                     if stop_event.is_set():
                         return
-                    if level is not None and self._battery_read_cb:
+                    if result is not None and self._battery_read_cb:
+                        level, charging = result
                         try:
-                            self._battery_read_cb(level)
+                            self._battery_read_cb(level, charging)
                         except Exception:
                             pass
 
@@ -1217,8 +1219,20 @@ class Engine:
                 return
 
     def set_battery_callback(self, cb):
-        """Register ``cb(level: int)`` invoked when battery level is read (0-100)."""
+        """Register ``cb(level: int, charging: bool)`` invoked when battery is read.
+
+        ``level`` is 0-100; ``charging`` is True while the device reports it is
+        plugged in / recharging.
+        """
         self._battery_read_cb = cb
+
+    def _on_hid_battery_notification(self, level, charging):
+        """Forward an unsolicited HID++ battery event to the UI (instant)."""
+        if self._battery_read_cb:
+            try:
+                self._battery_read_cb(level, charging)
+            except Exception:
+                pass
 
     def set_connection_change_callback(self, cb):
         """Register ``cb(connected: bool)`` invoked on device connect/disconnect."""

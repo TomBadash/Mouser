@@ -218,6 +218,7 @@ class Backend(QObject):
     mouseConnectedChanged = Signal()
     hidFeaturesReadyChanged = Signal()
     batteryLevelChanged = Signal()
+    batteryChargingChanged = Signal()
     debugLogChanged = Signal()
     debugEventsEnabledChanged = Signal()
     gestureStateChanged = Signal()
@@ -234,7 +235,7 @@ class Backend(QObject):
     _profileSwitchRequest = Signal(str)
     _dpiReadRequest = Signal(int)
     _connectionChangeRequest = Signal(bool)
-    _batteryChangeRequest = Signal(int)
+    _batteryChangeRequest = Signal(int, bool)
     _debugMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
     _smartShiftReadRequest = Signal()
@@ -261,6 +262,7 @@ class Backend(QObject):
         self._connected_device_source = ""
         self._connected_device_transport = ""
         self._battery_level = -1
+        self._battery_charging = False
         self._hid_features_ready = False
         self._debug_lines = []
         self._debug_events_enabled = bool(
@@ -976,6 +978,10 @@ class Backend(QObject):
     @Property(int, notify=batteryLevelChanged)
     def batteryLevel(self):
         return self._battery_level
+
+    @Property(bool, notify=batteryChargingChanged)
+    def batteryCharging(self):
+        return self._battery_charging
 
     @Property(str, notify=debugLogChanged)
     def debugLog(self):
@@ -2030,9 +2036,9 @@ class Backend(QObject):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._connectionChangeRequest.emit(connected)
 
-    def _onEngineBatteryRead(self, level):
+    def _onEngineBatteryRead(self, level, charging):
         """Called from engine thread — posts to Qt main thread."""
-        self._batteryChangeRequest.emit(level)
+        self._batteryChangeRequest.emit(level, charging)
 
     def _onEngineDebugMessage(self, message):
         """Called from engine/hook thread — posts to Qt main thread."""
@@ -2211,6 +2217,9 @@ class Backend(QObject):
         if (not connected or device_source == "evdev") and self._battery_level != -1:
             self._battery_level = -1
             self.batteryLevelChanged.emit()
+        if (not connected or device_source == "evdev") and self._battery_charging:
+            self._battery_charging = False
+            self.batteryChargingChanged.emit()
         if self._hid_features_ready != previous_hid_features_ready:
             self.hidFeaturesReadyChanged.emit()
             self.forceSensingChanged.emit()
@@ -2361,11 +2370,15 @@ class Backend(QObject):
         if eff != old_eff:
             self.deviceLayoutChanged.emit()
 
-    @Slot(int)
-    def _handleBatteryChange(self, level):
+    @Slot(int, bool)
+    def _handleBatteryChange(self, level, charging):
         """Runs on Qt main thread."""
-        self._battery_level = level
-        self.batteryLevelChanged.emit()
+        if level != self._battery_level:
+            self._battery_level = level
+            self.batteryLevelChanged.emit()
+        if charging != self._battery_charging:
+            self._battery_charging = charging
+            self.batteryChargingChanged.emit()
 
     @Slot(str)
     def _handleDebugMessage(self, message):

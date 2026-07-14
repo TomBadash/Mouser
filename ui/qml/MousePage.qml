@@ -855,7 +855,7 @@ Item {
                                         anchors.verticalCenter: parent.verticalCenter
                                         width: 14
                                         height: 14
-                                        name: "battery-high"
+                                        name: backend.batteryCharging ? "battery-charging" : "battery-high"
                                         iconColor: {
                                             var lvl = backend.batteryLevel
                                             if (lvl <= 20) return "#e05555"

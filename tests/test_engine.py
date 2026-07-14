@@ -35,6 +35,9 @@ class _FakeMouseHook:
     def set_connection_change_callback(self, cb):
         self._connection_change_callback = cb
 
+    def set_battery_notify_callback(self, cb):
+        self._battery_notify_callback = cb
+
     def configure_gestures(self, **kwargs):
         self._gesture_config = kwargs
 

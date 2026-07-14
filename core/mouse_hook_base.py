@@ -45,6 +45,7 @@ class BaseMouseHook:
         self._hid_gesture = None
         self._device_connected = False
         self._connection_change_cb = None
+        self._battery_notify_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
         self.wheel_native_invert_active = False
@@ -196,6 +197,10 @@ class BaseMouseHook:
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
 
+    def set_battery_notify_callback(self, cb):
+        """Register ``cb(level, charging)`` for unsolicited battery events."""
+        self._battery_notify_cb = cb
+
     @property
     def device_connected(self):
         return self._device_connected
@@ -344,6 +349,7 @@ class BaseMouseHook:
             on_thumb_button_down=self._on_hid_thumb_button_down,
             on_thumb_button_up=self._on_hid_thumb_button_up,
             on_thumb_button_move=self._on_hid_thumb_button_move,
+            on_battery=self._on_hid_battery,
         )
         self._hid_gesture = listener
         if not listener.start():
@@ -370,6 +376,14 @@ class BaseMouseHook:
     def _on_hid_disconnect(self):
         self._connected_device = None
         self._set_device_connected(False)
+
+    def _on_hid_battery(self, level, charging):
+        cb = self._battery_notify_cb
+        if cb:
+            try:
+                cb(level, charging)
+            except Exception:
+                pass
 
     def _on_hid_gesture_down(self):
         if getattr(self, "_ui_passthrough", False):

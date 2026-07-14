@@ -912,12 +912,16 @@ class HidGestureListener:
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
                  on_thumb_button_down=None, on_thumb_button_up=None,
-                 on_thumb_button_move=None):
+                 on_thumb_button_move=None, on_battery=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        # Invoked ``on_battery(level, charging)`` when the device sends an
+        # unsolicited HID++ battery status broadcast (e.g. USB plugged in),
+        # so the UI updates instantly instead of waiting for the next poll.
+        self._on_battery    = on_battery
         # Accepted for divert+inject-era callers; native-invert never
         # sees wheelMovement / thumbwheelEvent notifications.
         self._on_wheel = on_wheel
@@ -986,6 +990,7 @@ class HidGestureListener:
         self._battery_result = None
         self._battery_event = threading.Event()
         self._last_logged_battery = None
+        self._last_battery_event = None
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
@@ -2389,7 +2394,11 @@ class HidGestureListener:
         self._haptic_event.set()
 
     def read_battery(self):
-        """Queue a battery read and wait for the listener thread result."""
+        """Queue a battery read and wait for the listener thread result.
+
+        Returns ``(level, charging)`` on success (level 0-100, charging bool)
+        or ``None`` on failure/timeout.
+        """
         self._battery_result = None
         self._battery_event.clear()
         self._pending_battery = "read"
@@ -2398,6 +2407,22 @@ class HidGestureListener:
             self._pending_battery = None
             return None
         return self._battery_result
+
+    @staticmethod
+    def _parse_battery_params(params):
+        """Extract ``(level, charging)`` from a 0x1004/0x1000 battery payload.
+
+        Both features put the state-of-charge % in ``params[0]`` and the
+        charge-state byte in ``params[2]`` (0=discharging, 1=recharging,
+        2=near-full, 3=full/complete, 4=slow-recharge). The same layout is
+        used for both the polled getStatus response and the unsolicited
+        status broadcast. Returns None if the level is missing/out of range.
+        """
+        level = params[0] if params else None
+        if level is None or not (0 <= level <= 100):
+            return None
+        charging = len(params) > 2 and params[2] in (1, 2, 3, 4)
+        return (level, charging)
 
     def _apply_pending_read_battery(self):
         """Called from the listener thread to read current battery level."""
@@ -2408,36 +2433,47 @@ class HidGestureListener:
             return
 
         if self._battery_feature_id == FEAT_UNIFIED_BATT:
-            resp = self._request(self._battery_idx, 1, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (unified): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
+            func, label = 1, "unified"
         else:
-            resp = self._request(self._battery_idx, 0, [])
-            if resp:
-                _, _, _, _, params = resp
-                level = params[0] if params else None
-                if level is not None and 0 <= level <= 100:
-                    if level != self._last_logged_battery:
-                        print(f"[HidGesture] Battery (status): {level}%")
-                        self._last_logged_battery = level
-                    self._battery_result = level
-                else:
-                    self._battery_result = None
-            else:
-                self._battery_result = None
+            func, label = 0, "status"
+
+        resp = self._request(self._battery_idx, func, [])
+        result = None
+        if resp:
+            _, _, _, _, params = resp
+            result = self._parse_battery_params(params)
+        if result is not None:
+            level, charging = result
+            if level != self._last_logged_battery:
+                suffix = " (charging)" if charging else ""
+                print(f"[HidGesture] Battery ({label}): {level}%{suffix}")
+                self._last_logged_battery = level
+        self._battery_result = result
 
         self._pending_battery = None
         self._battery_event.set()
+
+    def _handle_battery_notification(self, params):
+        """Push an unsolicited battery status broadcast straight to the UI.
+
+        Fires on the listener thread when the device reports a battery/charge
+        change (e.g. USB just plugged in), so the charging indicator updates
+        immediately instead of on the next 300s poll.
+        """
+        result = self._parse_battery_params(params)
+        if result is None:
+            return
+        level, charging = result
+        if (level, charging) == self._last_battery_event:
+            return
+        self._last_battery_event = (level, charging)
+        suffix = " (charging)" if charging else ""
+        print(f"[HidGesture] Battery event: {level}%{suffix}")
+        if self._on_battery:
+            try:
+                self._on_battery(level, charging)
+            except Exception as e:
+                print(f"[HidGesture] battery callback error: {e}")
 
     # ── notification handling ─────────────────────────────────────
 
@@ -2494,6 +2530,16 @@ class HidGestureListener:
         if msg is None:
             return
         _, feat, func, _sw, params = msg
+
+        # Unsolicited battery status broadcast (feature 0x1004 / 0x1000,
+        # event func 0) — pushed to the UI so charging shows instantly.
+        # `_sw != MY_SW` excludes our own polled getStatus responses (which
+        # carry our software-id); genuine broadcasts use software-id 0.
+        if (self._battery_idx is not None
+                and feat == self._battery_idx
+                and func == 0 and _sw != MY_SW):
+            self._handle_battery_notification(params)
+            return
 
         if feat != self._feat_idx:
             return
@@ -3135,6 +3181,7 @@ class HidGestureListener:
             self._thumbwheel_multiplier = None
             self._wheel_divert_state = False
             self._last_logged_battery = None
+            self._last_battery_event = None
             self._consecutive_request_timeouts = 0
             self._haptic_idx = None
             self._force_sensing_idx = None

@@ -259,6 +259,7 @@ class _FakeMouseHook:
     def set_gesture_callback(self, cb): pass
     def set_status_callback(self, cb): pass
     def set_connection_change_callback(self, cb): pass
+    def set_battery_notify_callback(self, cb): pass
     def configure_gestures(self, **kwargs): pass
     def block(self, event_type): pass
     def register(self, event_type, callback): pass

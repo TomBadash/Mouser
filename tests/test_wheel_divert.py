@@ -667,6 +667,7 @@ class _FakeHook:
     def set_gesture_callback(self, cb): pass
     def set_status_callback(self, cb): pass
     def set_connection_change_callback(self, cb): pass
+    def set_battery_notify_callback(self, cb): pass
     def configure_gestures(self, **kwargs): pass
     def configure_wheel_multipliers(self, v, h): return None
     def block(self, event_type): pass
