@@ -427,5 +427,109 @@ class MouseButtonActionTests(unittest.TestCase):
             self.assertTrue(len(label) > 0)
 
 
+class WindowsZoomActionTests(unittest.TestCase):
+    def _reload_for_windows(self):
+        import ctypes
+
+        def fake_send_input(*_args):
+            return 1
+
+        fake_send_input.argtypes = []
+        fake_send_input.restype = 1
+        fake_windll = types.SimpleNamespace(
+            user32=types.SimpleNamespace(SendInput=fake_send_input)
+        )
+        platform_patch = patch.object(sys, "platform", "win32")
+        windll_patch = patch.object(ctypes, "windll", fake_windll, create=True)
+        platform_patch.start()
+        windll_patch.start()
+        module = importlib.reload(key_simulator)
+        self.addCleanup(importlib.reload, key_simulator)
+        self.addCleanup(platform_patch.stop)
+        self.addCleanup(windll_patch.stop)
+        return module
+
+    def test_zoom_actions_exist(self):
+        module = self._reload_for_windows()
+
+        self.assertEqual(module.ACTIONS["zoom_in"]["label"], "Zoom In")
+        self.assertEqual(module.ACTIONS["zoom_in"]["category"], "Navigation")
+        self.assertEqual(
+            module.ACTIONS["zoom_in"]["keys"],
+            [module.VK_CONTROL, module.VK_OEM_PLUS],
+        )
+        self.assertEqual(module.ACTIONS["zoom_out"]["label"], "Zoom Out")
+        self.assertEqual(module.ACTIONS["zoom_out"]["category"], "Navigation")
+        self.assertEqual(
+            module.ACTIONS["zoom_out"]["keys"],
+            [module.VK_CONTROL, module.VK_OEM_MINUS],
+        )
+
+    def test_zoom_in_sends_single_ctrl_equal_press(self):
+        module = self._reload_for_windows()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("zoom_in")
+
+        send_key_combo.assert_called_once_with([module.VK_CONTROL, module.VK_OEM_PLUS])
+
+    def test_zoom_out_sends_single_ctrl_minus_press(self):
+        module = self._reload_for_windows()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("zoom_out")
+
+        send_key_combo.assert_called_once_with([module.VK_CONTROL, module.VK_OEM_MINUS])
+
+
+class LinuxZoomActionTests(unittest.TestCase):
+    def _reload_for_linux(self, desktop: str = "GNOME"):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": desktop}, clear=False),
+        ):
+            importlib.reload(key_simulator)
+        self.addCleanup(importlib.reload, key_simulator)
+        return key_simulator
+
+    def test_zoom_actions_exist(self):
+        module = self._reload_for_linux()
+
+        self.assertEqual(module.ACTIONS["zoom_in"]["label"], "Zoom In")
+        self.assertEqual(module.ACTIONS["zoom_in"]["category"], "Navigation")
+        self.assertEqual(
+            module.ACTIONS["zoom_in"]["keys"],
+            [module.KEY_LEFTCTRL, module.KEY_EQUAL],
+        )
+        self.assertEqual(module.ACTIONS["zoom_out"]["label"], "Zoom Out")
+        self.assertEqual(module.ACTIONS["zoom_out"]["category"], "Navigation")
+        self.assertEqual(
+            module.ACTIONS["zoom_out"]["keys"],
+            [module.KEY_LEFTCTRL, module.KEY_MINUS],
+        )
+
+    def test_zoom_key_codes_registered_for_virtual_keyboard(self):
+        module = self._reload_for_linux()
+
+        self.assertIn(module.KEY_EQUAL, module._ALL_KEY_CODES)
+        self.assertIn(module.KEY_MINUS, module._ALL_KEY_CODES)
+
+    def test_zoom_in_dispatches_single_ctrl_equal(self):
+        module = self._reload_for_linux()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("zoom_in")
+
+        send_key_combo.assert_called_once_with([module.KEY_LEFTCTRL, module.KEY_EQUAL])
+
+    def test_zoom_out_dispatches_single_ctrl_minus(self):
+        module = self._reload_for_linux()
+
+        with patch.object(module, "send_key_combo") as send_key_combo:
+            module.execute_action("zoom_out")
+
+        send_key_combo.assert_called_once_with([module.KEY_LEFTCTRL, module.KEY_MINUS])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -226,6 +226,9 @@ if sys.platform == "win32":
     VK_F = 0x46
     VK_D = 0x44
 
+    VK_OEM_PLUS = 0xBB    # '=/+' main-row key (Ctrl+= zooms in)
+    VK_OEM_MINUS = 0xBD   # '-/_' main-row key (Ctrl+- zooms out)
+
     class KEYBDINPUT(Structure):
         _fields_ = [
             ("wVk", c_ushort),
@@ -555,6 +558,16 @@ if sys.platform == "win32":
         "end": {
             "label": "End",
             "keys": [VK_END],
+            "category": "Navigation",
+        },
+        "zoom_in": {
+            "label": "Zoom In",
+            "keys": [VK_CONTROL, VK_OEM_PLUS],
+            "category": "Navigation",
+        },
+        "zoom_out": {
+            "label": "Zoom Out",
+            "keys": [VK_CONTROL, VK_OEM_MINUS],
             "category": "Navigation",
         },
         "switch_scroll_mode": {
@@ -1357,6 +1370,8 @@ elif sys.platform == "linux":
     KEY_8 = 9
     KEY_9 = 10
     KEY_0 = 11
+    KEY_MINUS = 12
+    KEY_EQUAL = 13
     KEY_A = 30; KEY_B = 48; KEY_C = 46; KEY_D = 32; KEY_E = 18
     KEY_F = 33; KEY_G = 34; KEY_H = 35; KEY_I = 23; KEY_J = 36
     KEY_K = 37; KEY_L = 38; KEY_M = 50; KEY_N = 49; KEY_O = 24
@@ -1392,6 +1407,7 @@ elif sys.platform == "linux":
         KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END,
         KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
         KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+        KEY_MINUS, KEY_EQUAL,
         KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
         KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
         KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
@@ -1650,6 +1666,16 @@ elif sys.platform == "linux":
         "end": {
             "label": "End",
             "keys": [KEY_END],
+            "category": "Navigation",
+        },
+        "zoom_in": {
+            "label": "Zoom In",
+            "keys": [KEY_LEFTCTRL, KEY_EQUAL],
+            "category": "Navigation",
+        },
+        "zoom_out": {
+            "label": "Zoom Out",
+            "keys": [KEY_LEFTCTRL, KEY_MINUS],
             "category": "Navigation",
         },
         "switch_scroll_mode": {

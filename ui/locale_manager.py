@@ -882,6 +882,8 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         "Page Down":                                "\u5411\u4e0b\u7ffb\u9875",
         "Home":                                     "\u884c\u9996 (Home)",
         "End":                                      "\u884c\u5c3e (End)",
+        "Zoom In":                                  "\u653e\u5927",
+        "Zoom Out":                                 "\u7f29\u5c0f",
 
         # ── Navigation (macOS) ────────────────────────────────────────
         "Cmd + Tab (Switch Windows)":               "Cmd + Tab\uff08\u5207\u6362\u7a97\u53e3\uff09",
@@ -963,6 +965,8 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         "Page Down":                                "\u5411\u4e0b\u7ffb\u9801",
         "Home":                                     "\u884c\u9996 (Home)",
         "End":                                      "\u884c\u5c3e (End)",
+        "Zoom In":                                  "\u653e\u5927",
+        "Zoom Out":                                 "\u7e2e\u5c0f",
 
         # ── Navigation (macOS) ────────────────────────────────────────
         "Cmd + Tab (Switch Windows)":               "Cmd + Tab\uff08\u5207\u63db\u8996\u7a97\uff09",
