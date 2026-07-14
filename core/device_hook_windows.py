@@ -82,6 +82,12 @@ GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 GetMessageW = windll.user32.GetMessageW
 PostThreadMessageW = windll.user32.PostThreadMessageW
 
+GetAsyncKeyState = windll.user32.GetAsyncKeyState
+GetAsyncKeyState.argtypes = [c_int]
+GetAsyncKeyState.restype = ctypes.c_short
+
+VK_SHIFT = 0x10
+
 WM_QUIT = 0x0012
 INJECTED_FLAG = 0x00000001
 
@@ -208,6 +214,7 @@ def hiword(dword):
 WM_APP = 0x8000
 WM_APP_INJECT_VSCROLL = WM_APP + 1
 WM_APP_INJECT_HSCROLL = WM_APP + 2
+WM_APP_INJECT_SHIFT_HSCROLL = WM_APP + 3
 
 WM_DEVICECHANGE = 0x0219
 DBT_DEVNODES_CHANGED = 0x0007
@@ -232,8 +239,10 @@ class DeviceHook(BaseDeviceHook):
         self._hook_proc = None
         self._pending_vscroll = 0
         self._pending_hscroll = 0
+        self._pending_shift_hscroll = 0
         self._vscroll_posted = False
         self._hscroll_posted = False
+        self._shift_hscroll_posted = False
         self._ri_wndproc_ref = None
         self._ri_hwnd = None
         self._device_name_cache = {}
@@ -243,110 +252,6 @@ class DeviceHook(BaseDeviceHook):
         self._last_rehook_time = 0
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_worker_thread = None
-
-    def _accumulate_gesture_delta(self, delta_x, delta_y, source):
-        if not (self._gesture_direction_enabled and self._gesture_active):
-            return
-        if self._gesture_cooldown_active():
-            self._emit_debug(
-                f"Gesture cooldown active source={source} dx={delta_x} dy={delta_y}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "cooldown_active",
-                    "source": source,
-                    "dx": delta_x,
-                    "dy": delta_y,
-                }
-            )
-            return
-        if not self._gesture_tracking:
-            self._emit_debug(f"Gesture tracking started source={source}")
-            self._emit_gesture_event(
-                {
-                    "type": "tracking_started",
-                    "source": source,
-                }
-            )
-            self._start_gesture_tracking()
-
-        now = time.monotonic()
-        idle_ms = (now - self._gesture_last_move_at) * 1000.0
-        if idle_ms > self._gesture_timeout_ms:
-            self._emit_debug(
-                f"Gesture segment reset timeout source={source} "
-                f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
-            )
-            self._start_gesture_tracking()
-
-        if self._gesture_input_source not in (None, source):
-            self._emit_debug(
-                f"Gesture source locked to {self._gesture_input_source}; "
-                f"ignoring {source} dx={delta_x} dy={delta_y}"
-            )
-            return
-        self._gesture_input_source = source
-
-        self._gesture_delta_x += delta_x
-        self._gesture_delta_y += delta_y
-        self._gesture_last_move_at = now
-        self._emit_debug(
-            f"Gesture segment source={source} "
-            f"accum_x={self._gesture_delta_x} accum_y={self._gesture_delta_y}"
-        )
-        self._emit_gesture_event(
-            {
-                "type": "segment",
-                "source": source,
-                "dx": self._gesture_delta_x,
-                "dy": self._gesture_delta_y,
-            }
-        )
-
-        gesture_event = self._detect_gesture_event()
-        if not gesture_event:
-            return
-
-        self._gesture_triggered = True
-        self._emit_debug(
-            "Gesture detected "
-            f"{gesture_event} source={source} "
-            f"delta_x={self._gesture_delta_x} delta_y={self._gesture_delta_y}"
-        )
-        self._emit_gesture_event(
-            {
-                "type": "detected",
-                "event_name": gesture_event,
-                "source": source,
-                "dx": self._gesture_delta_x,
-                "dy": self._gesture_delta_y,
-            }
-        )
-        self._dispatch(
-            DeviceEvent(
-                gesture_event,
-                {
-                    "delta_x": self._gesture_delta_x,
-                    "delta_y": self._gesture_delta_y,
-                    "source": source,
-                },
-            )
-        )
-        self._gesture_cooldown_until = (
-            time.monotonic() + self._gesture_cooldown_ms / 1000.0
-        )
-        self._emit_debug(
-            f"Gesture cooldown started source={source} "
-            f"for_ms={self._gesture_cooldown_ms}"
-        )
-        self._emit_gesture_event(
-            {
-                "type": "cooldown_started",
-                "source": source,
-                "for_ms": self._gesture_cooldown_ms,
-            }
-        )
-        self._finish_gesture_tracking()
 
     _WM_NAMES = {
         0x0200: "WM_MOUSEMOVE",
@@ -400,6 +305,16 @@ class DeviceHook(BaseDeviceHook):
             if flags & INJECTED_FLAG:
                 return CallNextHookEx(self._hook, nCode, wParam, lParam)
 
+            # KVM / cold-start guard: when no Logitech is currently bound to
+            # this host, the WH_MOUSE_LL hook must be a complete pass-through.
+            # The hook sees events from every input device, so without this
+            # guard a trackpad scroll or generic USB mouse's xbutton click
+            # would still run through Mouser's remap pipeline -- the exact
+            # failure mode users hit when their KVM switches the Logitech
+            # to another machine while Mouser keeps running here.
+            if not self._should_intercept_events():
+                return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
             if wParam == WM_XBUTTONDOWN:
                 xbutton = hiword(mouse_data)
                 if xbutton == XBUTTON1:
@@ -427,8 +342,25 @@ class DeviceHook(BaseDeviceHook):
                 should_block = DeviceEvent.MIDDLE_UP in self._blocked_events
 
             elif wParam == WM_MOUSEWHEEL:
-                if self.invert_vscroll:
-                    delta = hiword(mouse_data)
+                delta = hiword(mouse_data)
+                if delta != 0 and (GetAsyncKeyState(VK_SHIFT) & 0x8000):
+                    if self._ri_hwnd:
+                        h_delta = -delta if self.invert_hscroll else delta
+                        self._pending_shift_hscroll += h_delta
+                        if self._shift_hscroll_posted:
+                            return 1
+                        if PostMessageW(
+                            self._ri_hwnd, WM_APP_INJECT_SHIFT_HSCROLL, 0, 0
+                        ):
+                            self._shift_hscroll_posted = True
+                            return 1
+                        self._pending_shift_hscroll -= h_delta
+                    else:
+                        self._emit_debug(
+                            "Shift+wheel translation skipped: "
+                            "raw input window unavailable"
+                        )
+                if self.invert_vscroll and not self.wheel_native_invert_active:
                     if delta != 0 and self._ri_hwnd:
                         self._pending_vscroll += -delta
                         if self._vscroll_posted:
@@ -451,7 +383,7 @@ class DeviceHook(BaseDeviceHook):
                     event = DeviceEvent(DeviceEvent.HSCROLL_RIGHT, abs(delta))
                     should_block = DeviceEvent.HSCROLL_RIGHT in self._blocked_events
 
-                if self.invert_hscroll:
+                if self.invert_hscroll and not self.wheel_native_invert_active:
                     if delta != 0 and self._ri_hwnd and not should_block:
                         self._pending_hscroll += -delta
                         if self._hscroll_posted:
@@ -516,6 +448,14 @@ class DeviceHook(BaseDeviceHook):
                 _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
             return 0
 
+        if msg == WM_APP_INJECT_SHIFT_HSCROLL:
+            delta = self._pending_shift_hscroll
+            self._pending_shift_hscroll = 0
+            self._shift_hscroll_posted = False
+            if delta != 0:
+                _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
+            return 0
+
         if msg == WM_DEVICECHANGE:
             if wParam == DBT_DEVNODES_CHANGED:
                 self._on_device_change()
@@ -559,14 +499,16 @@ class DeviceHook(BaseDeviceHook):
             return
         if extra_now and not extra_prev:
             if not self._gesture_active:
+                self._gesture_recognizer.begin()
                 self._gesture_active = True
-                self._gesture_triggered = False
                 print(f"[DeviceHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
         elif not extra_now and extra_prev:
             if self._gesture_active:
                 self._gesture_active = False
+                was_click = self._gesture_recognizer.end()
                 print("[DeviceHook] Gesture UP")
-                self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
+                if was_click:
+                    self._enqueue_dispatch_event(DeviceEvent(DeviceEvent.GESTURE_CLICK))
 
     def _setup_raw_input(self):
         instance = GetModuleHandleW(None)
@@ -704,63 +646,10 @@ class DeviceHook(BaseDeviceHook):
         else:
             print("[DeviceHook] Failed to reinstall hook!")
 
-    def _on_hid_gesture_down(self):
-        if not self._gesture_active:
-            self._gesture_active = True
-            self._gesture_triggered = False
-            self._emit_debug("HID gesture button down")
-            self._emit_gesture_event({"type": "button_down"})
-            if self._gesture_direction_enabled and not self._gesture_cooldown_active():
-                self._start_gesture_tracking()
-            else:
-                self._gesture_tracking = False
-                self._gesture_triggered = False
-
-    def _on_hid_gesture_up(self):
-        if self._gesture_active:
-            should_click = not self._gesture_triggered
-            self._gesture_active = False
-            self._finish_gesture_tracking()
-            self._gesture_triggered = False
-            self._emit_debug(
-                f"HID gesture button up click_candidate={str(should_click).lower()}"
-            )
-            self._emit_gesture_event(
-                {
-                    "type": "button_up",
-                    "click_candidate": should_click,
-                }
-            )
-            if should_click:
-                self._dispatch(DeviceEvent(DeviceEvent.GESTURE_CLICK))
-
-    def _on_hid_mode_shift_down(self):
-        self._emit_debug("HID mode shift button down")
-        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_DOWN))
-
-    def _on_hid_mode_shift_up(self):
-        self._emit_debug("HID mode shift button up")
-        self._dispatch(DeviceEvent(DeviceEvent.MODE_SHIFT_UP))
-
-    def _on_hid_dpi_switch_down(self):
-        self._emit_debug("HID DPI switch button down")
-        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_DOWN))
-
-    def _on_hid_dpi_switch_up(self):
-        self._emit_debug("HID DPI switch button up")
-        self._dispatch(DeviceEvent(DeviceEvent.DPI_SWITCH_UP))
-
-    def _on_hid_gesture_move(self, delta_x, delta_y):
-        self._emit_debug(f"HID rawxy move dx={delta_x} dy={delta_y}")
-        self._emit_gesture_event(
-            {
-                "type": "move",
-                "source": "hid_rawxy",
-                "dx": delta_x,
-                "dy": delta_y,
-            }
-        )
-        self._accumulate_gesture_delta(delta_x, delta_y, "hid_rawxy")
+    def _emit_gesture_swipe(self, mouse_event):
+        """Route gesture swipes through the dispatch queue so they run on
+        the dispatch-worker thread, not inline on the HID callback thread."""
+        self._enqueue_dispatch_event(mouse_event)
 
     def start(self):
         if self._hook_thread and self._hook_thread.is_alive():

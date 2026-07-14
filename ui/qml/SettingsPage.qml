@@ -444,7 +444,7 @@ Item {
                             checked: backend.smartShiftEnabled
                             focusPolicy: Qt.StrongFocus
                             Material.accent: settingsPage.theme.accent
-                            Accessible.name: "SmartShift"
+                            Accessible.name: s["scroll.smart_shift"]
                             onClicked: backend.setSmartShiftEnabled(checked)
                         }
                     }
@@ -565,6 +565,12 @@ Item {
                                     border.color: backend.smartShiftMode === modelData.value
                                                   ? settingsPage.theme.accent
                                                   : settingsPage.theme.border
+
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: ssText.text
+                                    Accessible.checkable: true
+                                    Accessible.checked: backend.smartShiftMode === modelData.value
+                                    Accessible.onPressAction: backend.setSmartShift(modelData.value)
 
                                     Text {
                                         id: ssText
@@ -1056,6 +1062,12 @@ Item {
                                               : settingsPage.theme.border
 
                                 Behavior on color { ColorAnimation { duration: 120 } }
+
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData.name
+                                Accessible.checkable: true
+                                Accessible.checked: lm.language === modelData.code
+                                Accessible.onPressAction: lm.setLanguage(modelData.code)
 
                                 Text {
                                     id: langText

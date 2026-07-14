@@ -2,6 +2,14 @@
 
 var radius = 12
 
+// Brand-asset colors are intentionally theme-independent: the sidebar
+// brand mark draws a pocket-sized echo of the macOS Dock tile, so it
+// must render identically under light and dark appearances. Keep these
+// in one place so a future brand refresh updates the squircle, the
+// Dock icon source artwork, and the build pipeline together.
+var brandMarkBg = "#0b1220"
+var brandMarkFg = "#ffffff"
+
 function palette(isDark) {
     if (isDark) {
         return {
@@ -24,7 +32,9 @@ function palette(isDark) {
             success: "#00d4aa",
             warning: "#ffb347",
             tooltipBg: "#314055",
-            tooltipText: "#f8fafc"
+            tooltipText: "#f8fafc",
+            brandMarkBg: brandMarkBg,
+            brandMarkFg: brandMarkFg
         }
     }
 
@@ -48,6 +58,8 @@ function palette(isDark) {
         success: "#0ea5a4",
         warning: "#b7791f",
         tooltipBg: "#202938",
-        tooltipText: "#f8fafc"
+        tooltipText: "#f8fafc",
+        brandMarkBg: brandMarkBg,
+        brandMarkFg: brandMarkFg
     }
 }

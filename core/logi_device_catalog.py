@@ -9,6 +9,49 @@ review and maintain.
 from __future__ import annotations
 
 
+MX_MASTER_BUTTONS = (
+    "middle",
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+    "xbutton1",
+    "xbutton2",
+    "hscroll_left",
+    "hscroll_right",
+    "mode_shift",
+)
+
+# MX Master 4 layout: two gesture-capable controls, each with its own swipe
+# set (config keys are tied to the physical button — see core/config.py):
+#  - Sense Panel (CID 0x01A0): large top surface → config key "actions_ring",
+#    labeled "Actions Ring". Primary gesture control; tap can activate the
+#    Actions Ring, and (when tap = Do Nothing) it has its own swipe set
+#    "actions_ring_left/right/up/down".
+#  - Gesture button (CID 0x00C3): small thumb-area button → config key
+#    "gesture", labeled "Gesture button". Its click uses the gesture_* family
+#    and (when tap = Do Nothing) it has its own swipe set
+#    "gesture_left/right/up/down" via a rawXY hand-off while held.
+MX_MASTER_4_BUTTONS = (
+    "middle",
+    "actions_ring",
+    "actions_ring_left",
+    "actions_ring_right",
+    "actions_ring_up",
+    "actions_ring_down",
+    "gesture",
+    "gesture_left",
+    "gesture_right",
+    "gesture_up",
+    "gesture_down",
+    "xbutton1",
+    "xbutton2",
+    "hscroll_left",
+    "hscroll_right",
+    "mode_shift",
+)
+
 MX_ANYWHERE_BUTTONS = (
     "middle",
     "gesture",
@@ -124,6 +167,30 @@ def keyboard_buttons_for_cids(cids) -> tuple[str, ...]:
         k["key"] for k in STANDARD_KEYBOARD_KEYS if k["cid"] in present
     )
 
+# G502 family (G-series gaming mice). These run onboard profiles and do not
+# expose REPROG_CONTROLS_V4 (0x1B04), so HID++ button diversion -- gesture,
+# mode_shift, dpi_switch -- is unavailable. The buttons below are the ones the
+# firmware emits as standard OS events in its default profile: middle click,
+# back/forward side buttons, and wheel tilt left/right. The DPI up/down and
+# sniper buttons are consumed onboard and never reach the OS. ADJUSTABLE_DPI
+# (0x2201) is exposed, so the DPI slider works.
+G502_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+    "hscroll_left",
+    "hscroll_right",
+)
+
+# M650 Signature family: no horizontal scroll, no mode-shift, no dedicated gesture button.
+# Exposes a Virtual Gesture Button (CID 0x00D7) via REPROG_CONTROLS_V4 but no physical
+# gesture key. Middle click, back, and forward side buttons are the configurable controls.
+M650_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+)
+
 
 def _hotspot(
     button_key: str,
@@ -157,6 +224,8 @@ def _layout(
     image_width: int,
     image_height: int,
     hotspots: list[dict[str, object]],
+    *,
+    manual_selectable: bool = False,
 ) -> dict[str, object]:
     return {
         "key": key,
@@ -165,7 +234,7 @@ def _layout(
         "image_width": image_width,
         "image_height": image_height,
         "interactive": True,
-        "manual_selectable": False,
+        "manual_selectable": manual_selectable,
         "note": "",
         "hotspots": hotspots,
     }
@@ -268,6 +337,12 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_4",
         "image_asset": "logitech-mice/mx_master_4/mouse.png",
+        "supported_buttons": MX_MASTER_4_BUTTONS,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
+        "gesture_cids": (0x01A0, 0x00C3, 0x00D7),
+        "thumb_button_cid": 0x00C3,
+        "gesture_via_sense_panel": True,
     },
     {
         "key": "mx_master_3s",
@@ -280,6 +355,8 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_3s",
         "image_asset": "logitech-mice/mx_master_3s/mouse.png",
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master_3",
@@ -293,6 +370,8 @@ LOGI_DEVICE_SPECS = (
         ),
         "ui_layout": "mx_master_3",
         "image_asset": "logitech-mice/mx_master_3/mouse.png",
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master_2s",
@@ -305,6 +384,8 @@ LOGI_DEVICE_SPECS = (
         "ui_layout": "mx_master_2s",
         "image_asset": "logitech-mice/mx_master_2s/mouse.png",
         "dpi_max": 4000,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_master",
@@ -317,6 +398,8 @@ LOGI_DEVICE_SPECS = (
         "ui_layout": "mx_master_classic",
         "image_asset": "logitech-mice/mx_master/mouse.png",
         "dpi_max": 4000,
+        "has_hires_wheel": True,
+        "has_thumbwheel": True,
     },
     {
         "key": "mx_anywhere_3s",
@@ -397,6 +480,99 @@ LOGI_DEVICE_SPECS = (
         "dpi_min": 0,
         "dpi_max": 0,
         "device_type": "keyboard",
+    },
+    # -- M650 Signature family ------------------------------------------------
+    # Compact wireless mouse (middle, back, forward buttons). Connects via Logi
+    # Bolt receiver or Bluetooth LE. HID++ reports device name "Signature M650".
+    # Confirmed via live HID++ probe: REPROG_CONTROLS_V4 (slot 2 on Bolt receiver),
+    # LOWRES_WHEEL, ADJUSTABLE_DPI (200–4000 DPI), UNIFIED_BATTERY.
+    # Bluetooth LE product ID confirmed in issue #215 as 0xB02A; keep the
+    # common HID/OS name variants as fallbacks because some platforms only
+    # surface the product string.
+    {
+        "key": "m650",
+        "display_name": "M650 Signature",
+        "product_ids": (0xB02A,),
+        "aliases": (
+            "Signature M650",
+            "Logi M650",
+            "Logitech Signature M650",
+            "M650",
+            "M650 Signature",
+            "Logitech M650 Signature",
+            "M650 L",
+            "M650 L Signature",
+            "Signature M650 L",
+            "M650 Signature for Business",
+        ),
+        "ui_layout": "m650",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": M650_BUTTONS,
+        "dpi_min": 200,
+        "dpi_max": 4000,
+    },
+    # -- G502 family ----------------------------------------------------------
+    # Product IDs verified against Solaar's device descriptors. Wireless
+    # variants list both the wired USB PID and the Lightspeed receiver WPID.
+    {
+        "key": "g502_hero",
+        "display_name": "G502 HERO",
+        "product_ids": (0xC08B,),
+        "aliases": (
+            "G502 HERO Gaming Mouse",
+            "G502 SE HERO Gaming Mouse",
+            "G502 HERO SE",
+        ),
+        "ui_layout": "g502",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": G502_BUTTONS,
+        "dpi_min": 100,
+        "dpi_max": 25600,
+    },
+    {
+        "key": "g502_lightspeed",
+        "display_name": "G502 LIGHTSPEED",
+        "product_ids": (0xC08D, 0x407F),
+        "aliases": (
+            "G502 LIGHTSPEED Wireless Gaming Mouse",
+            "G502 Lightspeed Gaming Mouse",
+        ),
+        "ui_layout": "g502",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": G502_BUTTONS,
+        "dpi_min": 100,
+        "dpi_max": 25600,
+    },
+    {
+        "key": "g502_x",
+        "display_name": "G502 X",
+        "product_ids": (0xC099, 0xC098, 0xC095, 0x409F, 0x4099),
+        "aliases": (
+            "G502 X Gaming Mouse",
+            "G502 X LIGHTSPEED",
+            "G502 X PLUS",
+        ),
+        "ui_layout": "g502",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": G502_BUTTONS,
+        "dpi_min": 100,
+        "dpi_max": 25600,
+    },
+    {
+        "key": "g502",
+        "display_name": "G502",
+        "product_ids": (0xC07D, 0xC332),
+        "aliases": (
+            "G502 Gaming Mouse",
+            "Tunable FPS Gaming Mouse G502",
+            "G502 Proteus Spectrum",
+            "G502 Proteus Core",
+        ),
+        "ui_layout": "g502",
+        "image_asset": "icons/mouse-simple.svg",
+        "supported_buttons": G502_BUTTONS,
+        "dpi_min": 200,
+        "dpi_max": 12000,
     },
 )
 
@@ -479,6 +655,44 @@ LOGI_DEVICE_LAYOUTS = {
         key_w=0.034,
         key_h=0.048,
     ),
+    # M650 Signature: no device art yet; shows generic silhouette with the
+    # three-button layout. Interactive hotspot diagram can be added once
+    # mouse artwork is sourced and product_ids are confirmed.
+    "m650": {
+        "key": "m650",
+        "label": "M650 Signature",
+        "image_asset": "icons/mouse-simple.svg",
+        "image_width": 220,
+        "image_height": 220,
+        "interactive": False,
+        "manual_selectable": True,
+        "note": (
+            "M650 Signature — middle click, back, and forward side buttons "
+            "are all configurable. No gesture button or horizontal scroll."
+        ),
+        "hotspots": [],
+    },
+    # Shared placeholder for the G502 family: no device art has been
+    # contributed yet, so the page shows the generic silhouette with the
+    # G502 button list instead of an interactive hotspot diagram.
+    "g502": {
+        "key": "g502",
+        "label": "G502 family",
+        "image_asset": "icons/mouse-simple.svg",
+        "image_width": 220,
+        "image_height": 220,
+        "interactive": False,
+        # Manual-selectable so G502 owners whose device connects with an
+        # unrecognized PID/name (e.g. via a receiver) can still pick the
+        # right button set from the layout dropdown.
+        "manual_selectable": True,
+        "note": (
+            "G502 buttons are remapped at the OS level. DPI up/down and the "
+            "sniper button are handled by the mouse's onboard profile and "
+            "cannot be remapped here yet."
+        ),
+        "hotspots": [],
+    },
     "mx_master_4": _layout(
         "mx_master_4",
         "MX Master 4",
@@ -490,64 +704,75 @@ LOGI_DEVICE_LAYOUTS = {
                 "middle",
                 "Middle button",
                 "mapping",
-                0.755,
-                0.19,
+                0.741,
+                0.226,
                 label_side="right",
-                label_off_x=120,
-                label_off_y=-120,
+                label_off_x=85,
+                label_off_y=-16,
             ),
             _hotspot(
-                "xbutton1",
-                "Back button",
-                "mapping",
-                0.473,
-                0.60,
-                label_side="right",
-                label_off_x=160,
-                label_off_y=20,
+                "actions_ring",
+                "Actions Ring",
+                "gesture",
+                0.289,
+                0.698,
+                label_side="left",
+                label_off_x=-75,
+                label_off_y=49,
             ),
             _hotspot(
                 "xbutton2",
                 "Forward button",
                 "mapping",
-                0.425,
-                0.47,
+                0.441,
+                0.496,
+                label_side="left",
+                label_off_x=-143,
+                label_off_y=-30,
+            ),
+            _hotspot(
+                "hscroll_left",
+                "Horizontal scroll",
+                "hscroll",
+                0.550,
+                0.510,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=-90,
+                label_off_x=138,
+                label_off_y=90,
+                is_hscroll=True,
+            ),
+            _hotspot(
+                "xbutton1",
+                "Back button",
+                "mapping",
+                0.477,
+                0.590,
+                label_side="left",
+                label_off_x=-165,
+                label_off_y=18,
             ),
             _hotspot(
                 "gesture",
                 "Gesture button",
                 "gesture",
-                0.386,
-                0.361,
+                0.403,
+                0.388,
                 label_side="left",
-                label_off_x=-260,
-                label_off_y=20,
-            ),
-            _hotspot(
-                "hscroll_left",
-                "Horizontal scroll left",
-                "hscroll",
-                0.565,
-                0.564,
-                label_side="right",
-                label_off_x=160,
-                label_off_y=-70,
-                is_hscroll=True,
+                label_off_x=-62,
+                label_off_y=-57,
             ),
             _hotspot(
                 "mode_shift",
                 "Mode shift button",
                 "mapping",
-                0.805,
-                0.395,
+                0.810,
+                0.425,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=60,
+                label_off_x=90,
+                label_off_y=9,
             ),
         ],
+        manual_selectable=True,
     ),
     "mx_master_3s": _layout(
         "mx_master_3s",
@@ -560,62 +785,62 @@ LOGI_DEVICE_LAYOUTS = {
                 "middle",
                 "Middle button",
                 "mapping",
-                0.71,
-                0.15,
+                0.7,
+                0.1864,
                 label_side="right",
-                label_off_x=120,
-                label_off_y=-120,
+                label_off_x=74,
+                label_off_y=-44,
             ),
             _hotspot(
                 "xbutton1",
                 "Back button",
                 "mapping",
-                0.45,
-                0.60,
-                label_side="right",
-                label_off_x=160,
-                label_off_y=20,
+                0.4227,
+                0.5522,
+                label_side="left",
+                label_off_x=-124,
+                label_off_y=108,
             ),
             _hotspot(
                 "xbutton2",
                 "Forward button",
                 "mapping",
-                0.35,
-                0.43,
+                0.3663,
+                0.4465,
                 label_side="left",
-                label_off_x=-260,
-                label_off_y=-10,
+                label_off_x=-63,
+                label_off_y=-90,
             ),
             _hotspot(
                 "gesture",
                 "Gesture button",
                 "gesture",
-                0.08,
-                0.58,
+                0.095,
+                0.5978,
                 label_side="left",
-                label_off_x=-260,
-                label_off_y=40,
+                label_off_x=-64,
+                label_off_y=-31,
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
-                0.55,
-                0.515,
+                0.4959,
+                0.4639,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=-70,
+                label_off_x=157,
+                label_off_y=66,
                 is_hscroll=True,
             ),
             _hotspot(
                 "mode_shift",
                 "Mode shift button",
                 "mapping",
-                0.81,
-                0.34,
+                0.7994,
+                0.3741,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=60,
+                label_off_x=78,
+                label_off_y=-14,
             ),
         ],
     ),
@@ -630,62 +855,62 @@ LOGI_DEVICE_LAYOUTS = {
                 "middle",
                 "Middle button",
                 "mapping",
-                0.71,
-                0.15,
+                0.7,
+                0.1864,
                 label_side="right",
-                label_off_x=120,
-                label_off_y=-120,
+                label_off_x=74,
+                label_off_y=-44,
             ),
             _hotspot(
                 "xbutton1",
                 "Back button",
                 "mapping",
-                0.45,
-                0.60,
-                label_side="right",
-                label_off_x=160,
-                label_off_y=20,
+                0.4227,
+                0.5522,
+                label_side="left",
+                label_off_x=-124,
+                label_off_y=108,
             ),
             _hotspot(
                 "xbutton2",
                 "Forward button",
                 "mapping",
-                0.35,
-                0.43,
+                0.3663,
+                0.4465,
                 label_side="left",
-                label_off_x=-260,
-                label_off_y=-10,
+                label_off_x=-63,
+                label_off_y=-90,
             ),
             _hotspot(
                 "gesture",
                 "Gesture button",
                 "gesture",
-                0.08,
-                0.58,
+                0.095,
+                0.5978,
                 label_side="left",
-                label_off_x=-260,
-                label_off_y=40,
+                label_off_x=-64,
+                label_off_y=-31,
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
-                0.55,
-                0.515,
+                0.4959,
+                0.4639,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=-70,
+                label_off_x=157,
+                label_off_y=66,
                 is_hscroll=True,
             ),
             _hotspot(
                 "mode_shift",
                 "Mode shift button",
                 "mapping",
-                0.81,
-                0.34,
+                0.7994,
+                0.3741,
                 label_side="right",
-                label_off_x=160,
-                label_off_y=60,
+                label_off_x=78,
+                label_off_y=-14,
             ),
         ],
     ),
@@ -738,7 +963,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.40,
                 0.46,
@@ -808,7 +1033,7 @@ LOGI_DEVICE_LAYOUTS = {
             ),
             _hotspot(
                 "hscroll_left",
-                "Horizontal scroll left",
+                "Horizontal scroll",
                 "hscroll",
                 0.40,
                 0.46,

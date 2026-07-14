@@ -27,6 +27,7 @@ build/
 .envrc
 .env
 .env.*
+!.env.local.example
 *.local.json
 
 # OS

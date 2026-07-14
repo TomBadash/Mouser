@@ -2,6 +2,7 @@
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,9 +16,13 @@ MACOS_LAUNCH_AGENT_LABEL = "io.github.tombadash.mouser"
 MACOS_PLIST_NAME = f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
 
 # Linux
+LINUX_APP_ID = "io.github.tombadash.mouser"
 LINUX_DESKTOP_ENTRY_NAME = "io.github.tombadash.mouser.desktop"
 LINUX_DESKTOP_TEMPLATE_NAME = f"{LINUX_DESKTOP_ENTRY_NAME}.in"
 LINUX_AUTOSTART_DELAY_SECONDS = 15
+LINUX_ICON_NAME = LINUX_APP_ID
+LINUX_ICON_FILENAME = f"{LINUX_ICON_NAME}.png"
+LINUX_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 APP_DISPLAY_NAME = "Mouser"
 
 
@@ -147,6 +152,117 @@ def _linux_icon_path() -> str:
     return os.path.join(_repo_root_dir(), "images", "logo_icon.png")
 
 
+def _linux_icon_theme_source_root() -> str:
+    candidates = []
+    if getattr(sys, "frozen", False):
+        bundle_root = getattr(sys, "_MEIPASS", "")
+        if bundle_root:
+            candidates.append(os.path.join(bundle_root, "linux", "icons", "hicolor"))
+        candidates.append(
+            os.path.join(_runtime_root_dir(), "linux", "icons", "hicolor")
+        )
+    candidates.append(
+        os.path.join(_repo_root_dir(), "packaging", "linux", "icons", "hicolor")
+    )
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return ""
+
+
+def _linux_user_icon_theme_root() -> str:
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    data_home = (
+        os.path.expanduser(xdg_data_home)
+        if xdg_data_home
+        else os.path.expanduser(os.path.join("~", ".local", "share"))
+    )
+    return os.path.join(data_home, "icons", "hicolor")
+
+
+def _linux_icon_source_path(source_root: str, size: int) -> str:
+    return os.path.join(
+        source_root,
+        f"{size}x{size}",
+        "apps",
+        LINUX_ICON_FILENAME,
+    )
+
+
+def _linux_icon_destination_path(destination_root: str, size: int) -> str:
+    return os.path.join(
+        destination_root,
+        f"{size}x{size}",
+        "apps",
+        LINUX_ICON_FILENAME,
+    )
+
+
+def _refresh_linux_icon_theme_cache(destination_root: str) -> None:
+    tool = shutil.which("gtk-update-icon-cache")
+    if not tool:
+        return
+    try:
+        subprocess.run(
+            [tool, "-qtf", destination_root],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
+
+def _sync_linux_icon_theme() -> bool:
+    source_root = _linux_icon_theme_source_root()
+    if not source_root:
+        return False
+    sources = [
+        _linux_icon_source_path(source_root, size)
+        for size in LINUX_ICON_SIZES
+    ]
+    if not all(os.path.isfile(source) for source in sources):
+        return False
+    destination_root = _linux_user_icon_theme_root()
+    try:
+        for size, source in zip(LINUX_ICON_SIZES, sources):
+            destination = _linux_icon_destination_path(destination_root, size)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copyfile(source, destination)
+            try:
+                os.chmod(destination, 0o644)
+            except OSError:
+                pass
+    except OSError as exc:
+        print(f"[startup] failed to sync Linux icon theme: {exc}")
+        return False
+    _refresh_linux_icon_theme_cache(destination_root)
+    return True
+
+
+def _linux_icon_name_or_path() -> str:
+    if _sync_linux_icon_theme():
+        return LINUX_ICON_NAME
+    return _linux_icon_path()
+
+
+def sync_linux_icon_theme() -> bool:
+    """Best-effort sync of Mouser's hicolor icons into the user's icon theme."""
+    return _sync_linux_icon_theme()
+
+
+def linux_runtime_icon_path(preferred_size: int = 256) -> str:
+    """Return the best Linux runtime icon asset for window/tray surfaces."""
+    source_root = _linux_icon_theme_source_root()
+    if source_root:
+        sizes = sorted(LINUX_ICON_SIZES, key=lambda size: abs(size - preferred_size))
+        for size in sizes:
+            candidate = _linux_icon_source_path(source_root, size)
+            if os.path.isfile(candidate):
+                return candidate
+    return _linux_icon_path()
+
+
 def _linux_source_path() -> str:
     if getattr(sys, "frozen", False):
         return os.path.abspath(sys.executable)
@@ -177,7 +293,7 @@ def _render_linux_desktop_entry(*, autostart: bool) -> str:
         "@EXEC@": _desktop_exec_string(exec_parts),
         "@TRY_EXEC@": exec_parts[0],
         "@WORKDIR@": _runtime_root_dir(),
-        "@ICON@": _linux_icon_path(),
+        "@ICON@": _linux_icon_name_or_path(),
         "@SOURCE_PATH@": _linux_source_path(),
         "@AUTOSTART_LINES@": autostart_lines,
     }

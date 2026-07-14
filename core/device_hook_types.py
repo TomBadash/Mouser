@@ -25,13 +25,29 @@ class DeviceEvent:
     XBUTTON2_UP = "xbutton2_up"
     MIDDLE_DOWN = "middle_down"
     MIDDLE_UP = "middle_up"
-    GESTURE_DOWN = "gesture_down"
-    GESTURE_UP = "gesture_up"
+    # ── Gesture button (thumb) — config key "gesture" ───────────────
+    # The physical "Gesture button": the *primary* gesture control on the
+    # MX Master 3/3S/classic, and the small thumb-area button (CID 0x00C3)
+    # on the MX Master 4. Its click/hold/swipes always use this family so
+    # the button behaves identically across the whole device lineup.
     GESTURE_CLICK = "gesture_click"
+    GESTURE_BUTTON_DOWN = "gesture_button_down"
+    GESTURE_BUTTON_UP = "gesture_button_up"
     GESTURE_SWIPE_LEFT = "gesture_swipe_left"
     GESTURE_SWIPE_RIGHT = "gesture_swipe_right"
     GESTURE_SWIPE_UP = "gesture_swipe_up"
     GESTURE_SWIPE_DOWN = "gesture_swipe_down"
+    # ── Sense Panel ("Actions Ring") — config key "actions_ring" ────
+    # The MX Master 4's large touch/press panel (CID 0x01A0), the primary
+    # gesture control on that device. MX4-only; other devices never emit
+    # this family.
+    SENSE_CLICK = "sense_click"
+    SENSE_BUTTON_DOWN = "sense_button_down"
+    SENSE_BUTTON_UP = "sense_button_up"
+    SENSE_SWIPE_LEFT = "sense_swipe_left"
+    SENSE_SWIPE_RIGHT = "sense_swipe_right"
+    SENSE_SWIPE_UP = "sense_swipe_up"
+    SENSE_SWIPE_DOWN = "sense_swipe_down"
     HSCROLL_LEFT = "hscroll_left"
     HSCROLL_RIGHT = "hscroll_right"
     MODE_SHIFT_DOWN = "mode_shift_down"

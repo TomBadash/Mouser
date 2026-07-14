@@ -464,7 +464,7 @@ X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
                     ],
                 ),
                 patch.object(st, "_runtime_root_dir", return_value="/tmp/Mouser Build"),
-                patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser Build/images/logo_icon.png"),
+                patch.object(st, "_linux_icon_name_or_path", return_value="/tmp/Mouser Build/images/logo_icon.png"),
                 patch.object(st, "_linux_source_path", return_value="/tmp/Mouser Build/main_qml.py"),
                 patch.object(st, "_linux_template_path", return_value=template_path),
                 patch.object(st, "_linux_desktop_path", return_value=launcher_path),
@@ -480,6 +480,7 @@ X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
         self.assertIn('Exec="/tmp/Mouser Build/.venv/bin/python" "/tmp/Mouser Build/main_qml.py"', launcher_text)
         self.assertIn("TryExec=/tmp/Mouser Build/.venv/bin/python", launcher_text)
         self.assertIn("Path=/tmp/Mouser Build", launcher_text)
+        self.assertIn("Icon=/tmp/Mouser Build/images/logo_icon.png", launcher_text)
         self.assertIn("X-Mouser-SourcePath=/tmp/Mouser Build/main_qml.py", launcher_text)
         self.assertIn(
             "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2",
@@ -534,7 +535,7 @@ X-Mouser-SourcePath=@SOURCE_PATH@
                 patch.object(st, "supports_login_startup", return_value=True),
                 patch.object(st, "_desktop_exec_parts", return_value=["/tmp/Mouser/python"]),
                 patch.object(st, "_runtime_root_dir", return_value="/tmp/Mouser"),
-                patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+                patch.object(st, "_linux_icon_name_or_path", return_value="/tmp/Mouser/images/logo_icon.png"),
                 patch.object(st, "_linux_source_path", return_value="/tmp/Mouser"),
                 patch.object(st, "_linux_template_path", return_value=template_path),
                 patch.object(st, "_linux_desktop_path", return_value=launcher_path),
@@ -559,7 +560,7 @@ X-Mouser-SourcePath=@SOURCE_PATH@
                 patch.object(st, "supports_login_startup", return_value=True),
                 patch.object(st, "_desktop_exec_parts", return_value=["/tmp/Mouser/python"]),
                 patch.object(st, "_runtime_root_dir", return_value="/tmp/Mouser"),
-                patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+                patch.object(st, "_linux_icon_name_or_path", return_value="/tmp/Mouser/images/logo_icon.png"),
                 patch.object(st, "_linux_source_path", return_value="/tmp/Mouser"),
                 patch.object(st, "_linux_template_path", return_value=missing_template),
                 patch.object(st, "_linux_desktop_path", return_value=launcher_path),
@@ -569,6 +570,111 @@ X-Mouser-SourcePath=@SOURCE_PATH@
 
             self.assertFalse(os.path.exists(autostart_path))
             self.assertFalse(os.path.exists(launcher_path))
+
+    def test_linux_icon_theme_sync_copies_hicolor_icons(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            destination_root = os.path.join(tmpdir, "dest", "hicolor")
+            for size in st.LINUX_ICON_SIZES:
+                icon_dir = os.path.join(source_root, f"{size}x{size}", "apps")
+                os.makedirs(icon_dir, exist_ok=True)
+                with open(os.path.join(icon_dir, st.LINUX_ICON_FILENAME), "wb") as fh:
+                    fh.write(f"png-{size}".encode("ascii"))
+
+            with (
+                patch.object(st, "_linux_icon_theme_source_root", return_value=source_root),
+                patch.object(st, "_linux_user_icon_theme_root", return_value=destination_root),
+            ):
+                self.assertTrue(st._sync_linux_icon_theme())
+
+            for size in st.LINUX_ICON_SIZES:
+                with self.subTest(size=size):
+                    destination = os.path.join(
+                        destination_root,
+                        f"{size}x{size}",
+                        "apps",
+                        st.LINUX_ICON_FILENAME,
+                    )
+                    with open(destination, "rb") as fh:
+                        self.assertEqual(fh.read(), f"png-{size}".encode("ascii"))
+
+    def test_linux_icon_theme_sync_requires_complete_ladder(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            os.makedirs(os.path.join(source_root, "48x48", "apps"), exist_ok=True)
+            with open(
+                os.path.join(source_root, "48x48", "apps", st.LINUX_ICON_FILENAME),
+                "wb",
+            ) as fh:
+                fh.write(b"png")
+
+            with patch.object(st, "_linux_icon_theme_source_root", return_value=source_root):
+                self.assertFalse(st._sync_linux_icon_theme())
+
+    def test_linux_icon_theme_sync_refreshes_cache_when_tool_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            destination_root = os.path.join(tmpdir, "dest", "hicolor")
+            for size in st.LINUX_ICON_SIZES:
+                icon_dir = os.path.join(source_root, f"{size}x{size}", "apps")
+                os.makedirs(icon_dir, exist_ok=True)
+                with open(os.path.join(icon_dir, st.LINUX_ICON_FILENAME), "wb") as fh:
+                    fh.write(b"png")
+
+            with (
+                patch.object(st, "_linux_icon_theme_source_root", return_value=source_root),
+                patch.object(st, "_linux_user_icon_theme_root", return_value=destination_root),
+                patch.object(st.shutil, "which", return_value="/usr/bin/gtk-update-icon-cache"),
+                patch.object(st.subprocess, "run") as run,
+            ):
+                self.assertTrue(st._sync_linux_icon_theme())
+
+            run.assert_called_once_with(
+                ["/usr/bin/gtk-update-icon-cache", "-qtf", destination_root],
+                check=False,
+                stdout=st.subprocess.DEVNULL,
+                stderr=st.subprocess.DEVNULL,
+            )
+
+    def test_linux_icon_resolver_prefers_icon_name_after_sync(self):
+        with (
+            patch.object(st, "_sync_linux_icon_theme", return_value=True),
+            patch.object(st, "_linux_icon_path") as icon_path,
+        ):
+            self.assertEqual(st._linux_icon_name_or_path(), st.LINUX_ICON_NAME)
+        icon_path.assert_not_called()
+
+    def test_linux_icon_resolver_falls_back_to_absolute_png(self):
+        with (
+            patch.object(st, "_sync_linux_icon_theme", return_value=False),
+            patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+        ):
+            self.assertEqual(
+                st._linux_icon_name_or_path(),
+                "/tmp/Mouser/images/logo_icon.png",
+            )
+
+    def test_linux_runtime_icon_path_prefers_hicolor_asset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_root = os.path.join(tmpdir, "source", "hicolor")
+            icon_dir = os.path.join(source_root, "256x256", "apps")
+            os.makedirs(icon_dir, exist_ok=True)
+            icon_path = os.path.join(icon_dir, st.LINUX_ICON_FILENAME)
+            with open(icon_path, "wb") as fh:
+                fh.write(b"png")
+
+            with patch.object(st, "_linux_icon_theme_source_root", return_value=source_root):
+                self.assertEqual(st.linux_runtime_icon_path(), icon_path)
+
+    def test_linux_runtime_icon_path_falls_back_to_master_png(self):
+        with (
+            patch.object(st, "_linux_icon_theme_source_root", return_value=""),
+            patch.object(st, "_linux_icon_path", return_value="/tmp/Mouser/images/logo_icon.png"),
+        ):
+            self.assertEqual(
+                st.linux_runtime_icon_path(),
+                "/tmp/Mouser/images/logo_icon.png",
+            )
 
 
 if __name__ == "__main__":

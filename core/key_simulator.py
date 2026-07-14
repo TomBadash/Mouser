@@ -730,6 +730,11 @@ if sys.platform == "win32":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "activate_actions_ring": {
+            "label": "Actions Ring",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Other",
+        },
         "mouse_left_click": {
             "label": "Left Click",
             "keys": [],
@@ -1305,6 +1310,11 @@ elif sys.platform == "darwin":
             "keys": _MAC_ACTION_FALLBACKS["space_right"],
             "category": "Navigation",
         },
+        "cycle_desktops": {
+            "label": "Cycle Desktops",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Navigation",
+        },
         "show_desktop": {
             "label": "Show Desktop",
             "keys": _MAC_ACTION_FALLBACKS["show_desktop"],
@@ -1400,6 +1410,11 @@ elif sys.platform == "darwin":
             "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
+        },
+        "activate_actions_ring": {
+            "label": "Actions Ring",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Other",
         },
         "mouse_left_click": {
             "label": "Left Click",
@@ -1861,6 +1876,11 @@ elif sys.platform == "linux":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "activate_actions_ring": {
+            "label": "Actions Ring",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Other",
+        },
         "mouse_left_click": {
             "label": "Left Click",
             "keys": [],
@@ -1995,6 +2015,11 @@ else:
             "label": "Toggle Crown Ratchet/Smooth",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
+        },
+        "activate_actions_ring": {
+            "label": "Actions Ring",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Other",
         },
         "none": {
             "label": "Do Nothing (Pass-through)",

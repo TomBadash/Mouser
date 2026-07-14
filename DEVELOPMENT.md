@@ -175,7 +175,7 @@ All settings live in `config.json` under the platform config dir (`%APPDATA%\Mou
 - Per-profile app associations (list of `.exe` / bundle / process names)
 - Global settings: DPI, scroll inversion, macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift mode + sensitivity, language, and startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
-- Automatic migration from older config versions (current version `9`)
+- Automatic migration from older config versions (current version `10`)
 
 Logs are written via [`core/log_setup.py`](core/log_setup.py) to a 5 × 5 MB rotating file in `~/Library/Logs/Mouser`, `%APPDATA%\Mouser\logs`, or `$XDG_STATE_HOME/Mouser/logs`. The setup is idempotent and safe to call multiple times — `main_qml.py` invokes it before any Qt or core import so startup output is captured from the very first line.
 
@@ -319,7 +319,7 @@ pip install pyinstaller
 pyinstaller Mouser-linux.spec --noconfirm
 ```
 
-Output: `dist/Mouser/`. The release pipeline additionally bundles `69-mouser-logitech.rules` and `install-linux-permissions.sh`, runs `ldd` on the resulting binary to flag missing libraries, and performs an offscreen smoke test (`QT_QPA_PLATFORM=offscreen`).
+Output: `dist/Mouser/`. The release pipeline additionally bundles the Linux permission helper files and hicolor app-icon ladder, runs `ldd` on the resulting binary to flag missing libraries, and performs an offscreen smoke test (`QT_QPA_PLATFORM=offscreen`).
 
 ## Desktop shortcut (Windows)
 

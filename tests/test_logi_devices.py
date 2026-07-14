@@ -6,9 +6,10 @@ from core.logi_devices import (
     GENERIC_BUTTONS,
     KNOWN_LOGI_DEVICES,
     MX_MASTER_BUTTONS,
+    MX_MASTER_4_BUTTONS,
     MX_VERTICAL_BUTTONS,
-    build_device_capability_inventory,
     build_connected_device_info,
+    build_device_capability_inventory,
     clamp_dpi,
     classify_device_kind,
     derive_supported_buttons_from_reprog_controls,
@@ -85,6 +86,47 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                     device.image_asset,
                     "logitech-mice/mx_anywhere_3/mouse.png",
                 )
+
+    def test_resolve_m650_by_bluetooth_pid(self):
+        device = resolve_device(product_id=0xB02A)
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "m650")
+        self.assertEqual(device.ui_layout, "m650")
+
+    def test_resolve_m650_by_common_name_variants(self):
+        for product_name in (
+            "Signature M650",
+            "Logi M650",
+            "Logitech Signature M650",
+        ):
+            with self.subTest(product_name=product_name):
+                device = resolve_device(product_name=product_name)
+
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "m650")
+                self.assertEqual(device.ui_layout, "m650")
+
+    def test_build_m650_connected_device_info_uses_catalog_layout_and_buttons(self):
+        info = build_connected_device_info(
+            product_id=0xB02A,
+            product_name="Signature M650",
+            reprog_controls=[
+                {"cid": 0x0052},
+                {"cid": 0x0053},
+                {"cid": 0x0056},
+                {"cid": 0x00D7},
+            ],
+            gesture_cids=(0x00D7,),
+        )
+
+        self.assertEqual(info.key, "m650")
+        self.assertEqual(info.display_name, "M650 Signature")
+        self.assertEqual(info.ui_layout, "m650")
+        self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
+        self.assertEqual(info.supported_buttons, ("middle", "xbutton1", "xbutton2"))
+        self.assertEqual(info.dpi_min, 200)
+        self.assertEqual(info.dpi_max, 4000)
 
     def test_mx_anywhere_3s_uses_exact_catalog_layout(self):
         info = build_connected_device_info(product_id=0xB037)
@@ -274,6 +316,74 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertFalse(
             any(b.startswith("crown_") for b in info.supported_buttons)
         )
+    def test_resolve_g502_hero_by_product_id(self):
+        device = resolve_device(product_id=0xC08B)
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "g502_hero")
+        self.assertEqual(device.ui_layout, "g502")
+
+    def test_resolve_g502_lightspeed_by_receiver_wpid(self):
+        for product_id in (0xC08D, 0x407F):
+            with self.subTest(product_id=f"0x{product_id:04X}"):
+                device = resolve_device(product_id=product_id)
+
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g502_lightspeed")
+
+    def test_resolve_g502_x_plus_by_alias(self):
+        device = resolve_device(product_name="G502 X PLUS")
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "g502_x")
+
+    def test_resolve_g502_x_plus_by_product_id(self):
+        for product_id in (0xC095, 0x4099):
+            with self.subTest(product_id=f"0x{product_id:04X}"):
+                device = resolve_device(product_id=product_id)
+
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g502_x")
+
+    def test_resolve_g502_proteus_by_reported_name(self):
+        device = resolve_device(product_name="Tunable FPS Gaming Mouse G502")
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.key, "g502")
+
+    def test_g502_buttons_are_os_level_only(self):
+        buttons = get_buttons_for_layout("g502")
+
+        self.assertIn("middle", buttons)
+        self.assertIn("xbutton1", buttons)
+        self.assertIn("xbutton2", buttons)
+        self.assertIn("hscroll_left", buttons)
+        self.assertIn("hscroll_right", buttons)
+        # No REPROG_CONTROLS_V4 on G-series onboard-profile mice, so no
+        # HID++-gated buttons may be offered.
+        self.assertNotIn("gesture", buttons)
+        self.assertNotIn("mode_shift", buttons)
+        self.assertNotIn("dpi_switch", buttons)
+
+    def test_g502_layout_is_placeholder_not_generic(self):
+        layout = get_device_layout("g502")
+
+        self.assertEqual(layout["key"], "g502")
+        self.assertFalse(layout["interactive"])
+        self.assertEqual(layout["hotspots"], [])
+
+    def test_build_g502_hero_connected_info(self):
+        info = build_connected_device_info(
+            product_id=0xC08B,
+            product_name="G502 HERO Gaming Mouse",
+            transport="usb",
+        )
+
+        self.assertEqual(info.key, "g502_hero")
+        self.assertEqual(info.display_name, "G502 HERO")
+        self.assertEqual(info.ui_layout, "g502")
+        self.assertEqual(clamp_dpi(50000, info), 25600)
+        self.assertEqual(clamp_dpi(50, info), 100)
 
     def test_known_device_layout_metadata_is_valid(self):
         for device in iter_known_devices():
@@ -294,6 +404,33 @@ class LogiDeviceRegistryTests(unittest.TestCase):
     def test_clamp_dpi_defaults_without_device(self):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
+
+    # ── MX Master 4 specific tests ─────────────────────────────
+
+    def test_mx_master_4_has_actions_ring_button(self):
+        device = resolve_device(product_id=0xB042)
+        self.assertIn("actions_ring", device.supported_buttons)
+
+    def test_mx_master_4_buttons_superset_of_mx_master(self):
+        self.assertTrue(
+            set(MX_MASTER_BUTTONS).issubset(set(MX_MASTER_4_BUTTONS)),
+            "MX Master 4 buttons must include all MX Master buttons",
+        )
+
+    def test_mx_master_3s_lacks_actions_ring(self):
+        device = resolve_device(product_id=0xB034)
+        self.assertNotIn("actions_ring", device.supported_buttons)
+
+    def test_mx_master_4_build_info_has_actions_ring(self):
+        info = build_connected_device_info(
+            product_id=0xB042,
+            product_name="MX Master 4",
+            transport="Bluetooth Low Energy",
+            source="hidapi-enumerate",
+        )
+        self.assertIn("actions_ring", info.supported_buttons)
+        self.assertEqual(info.image_asset, "logitech-mice/mx_master_4/mouse.png")
+        self.assertEqual(info.ui_layout, "mx_master_4")
 
     def test_mx_anywhere_2s_supported_buttons_include_middle_and_hscroll(self):
         device = resolve_device(product_id=0xB01A)
@@ -356,10 +493,12 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertTrue(inventory.smart_shift)
         self.assertTrue(inventory.adjustable_dpi)
         self.assertTrue(inventory.battery)
-        self.assertEqual(
-            inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
-        )
+        # 0x01A0 is the Actions Ring / haptic CID; it is now a supported button
+        # (actions_ring) on MX Master 4 and does not appear as unsupported.
+        unsupported_cids = [
+            c["cid"] for c in inventory.to_dict()["known_unsupported_controls"]
+        ]
+        self.assertNotIn("0x01A0", unsupported_cids)
 
     def test_reprog_control_filter_removes_missing_gesture_group(self):
         buttons = derive_supported_buttons_from_reprog_controls(
@@ -648,10 +787,12 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertIn("gesture_down", info.supported_buttons)
         self.assertNotIn("action_ring", info.supported_buttons)
         self.assertNotIn("haptic", info.supported_buttons)
-        self.assertEqual(
-            info.capability_inventory.to_dict()["known_unsupported_controls"],
-            [{"cid": "0x01A0", "name": "haptic"}],
-        )
+        # 0x01A0 is the Actions Ring CID; it is now a supported button
+        # (actions_ring) on MX Master 4 and does not appear as unsupported.
+        unsupported_cids = [
+            c["cid"] for c in info.capability_inventory.to_dict()["known_unsupported_controls"]
+        ]
+        self.assertNotIn("0x01A0", unsupported_cids)
 
 
 if __name__ == "__main__":

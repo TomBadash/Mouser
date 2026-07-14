@@ -342,7 +342,7 @@ The first normal Linux launch creates or refreshes:
 ~/.local/share/applications/io.github.tombadash.mouser.desktop
 ```
 
-The generated launcher uses absolute paths for the current portable app or source checkout. If you move the checkout, launch Mouser once from the new path to refresh the app-menu entry. Enabling **Start at login** also manages:
+The generated launcher uses absolute paths for the current portable app or source checkout, and syncs Mouser's app icon into the per-user hicolor icon theme when possible. If you move the checkout, launch Mouser once from the new path to refresh the app-menu entry. Enabling **Start at login** also manages:
 
 ```text
 ~/.config/autostart/io.github.tombadash.mouser.desktop
@@ -424,6 +424,14 @@ Every bit helps keep the project going — thank you.
 - **[@vcanuel](https://github.com/vcanuel)** — Logi Bolt receiver support on macOS via the `hidapi` fallback path.
 - **[@farfromrefug](https://github.com/farfromrefug)** — smaller macOS bundle (Qt Quick Controls trim, QtDBus, Qt asset filtering).
 - **[@MysticalMike60t](https://github.com/MysticalMike60t)** — README structure ideas (collapsible per-OS build sections).
+- **[@davidnoyes](https://github.com/davidnoyes)** - Full Logitech MX Master 4 support: Actions Ring radial menu, per-slot haptics, stroke-aware gestures, dual-CID HID++ routing, and force-sensitivity control, integrating and adapting a range of community contributions.
+- **[@hughesyadaddy](https://github.com/hughesyadaddy)** - MX Master 4 firmware-first HID++ runtime, hardware-reported DPI persistence, Backend list-property memoization, and OS mouse-event passthrough when no Logitech device is connected.
+- **[@laziukdavid](https://github.com/laziukdavid)** - Reworked swipe-gesture recognition and faster HID++ device detection.
+- **[@FunJim](https://github.com/FunJim)** - Shift+wheel horizontal scroll on macOS/Windows/Linux, and preserving a symlinked config.json on atomic save.
+- **[@chenqianhe](https://github.com/chenqianhe)** - macOS nested app-identity matching for per-app profiles.
+- **[@liuxuAP369](https://github.com/liuxuAP369)** - Fractional macOS horizontal scroll delta handling.
+- **[@winniesi](https://github.com/winniesi)** - Ping-pong desktop cycling action (macOS).
+- **[@Archetipo95](https://github.com/Archetipo95)** - Physical scroll-wheel tilt support and reduced remapping latency on macOS.
 
 ---
 

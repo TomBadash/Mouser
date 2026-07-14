@@ -65,5 +65,56 @@ class LocaleManagerTranslationTests(unittest.TestCase):
                     self.assertTrue(strings[key].strip())
 
 
+class AccessibilityLocaleTests(unittest.TestCase):
+    """The QML accessibility labels added in this batch reference these
+    keys. Missing them in a non-English locale silently regresses to a
+    KeyError-as-empty-string in the QML lookup ``s[...]``, which leaves
+    screen readers reading nothing for an interactive control.
+    """
+
+    REQUIRED_KEYS = frozenset({
+        "dialog.close",
+        "scroll.ignore_trackpad",
+        "scroll.ignore_trackpad_desc",
+        "scroll.smart_shift",
+    })
+    ENGLISH_VALUES = frozenset({
+        "Close",
+        "Ignore trackpad",
+        "Only respond to mouse events, not trackpad or Magic Mouse",
+    })
+
+    def test_required_accessibility_keys_present_in_all_locales(self):
+        for locale, strings in _TRANSLATIONS.items():
+            with self.subTest(locale=locale):
+                missing = self.REQUIRED_KEYS - strings.keys()
+                self.assertFalse(missing, f"{locale} missing keys: {missing}")
+                for key in self.REQUIRED_KEYS:
+                    self.assertTrue(
+                        strings[key].strip(),
+                        f"{locale}.{key} is blank",
+                    )
+
+    def test_chinese_locales_do_not_passthrough_english(self):
+        """Trackpad strings used to ship English text in the zh_CN and
+        zh_TW maps. Pin that they are now actually localized."""
+        for locale in ("zh_CN", "zh_TW"):
+            with self.subTest(locale=locale):
+                for key in (
+                    "scroll.ignore_trackpad",
+                    "scroll.ignore_trackpad_desc",
+                ):
+                    self.assertNotIn(
+                        _TRANSLATIONS[locale][key],
+                        self.ENGLISH_VALUES,
+                        f"{locale}.{key} still ships English",
+                    )
+                self.assertNotEqual(
+                    _TRANSLATIONS[locale]["scroll.smart_shift"],
+                    "SmartShift",
+                    f"{locale}.scroll.smart_shift still ships English",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,10 @@ class DeviceHookLike(Protocol):
     invert_hscroll: bool
     divert_mode_shift: bool
     divert_dpi_switch: bool
+    # When True, the connected Logitech device is performing scroll
+    # inversion at the firmware level (HID++ 0x2121 / 0x2150). The OS-layer
+    # inversion path must be skipped to avoid double flipping.
+    wheel_native_invert_active: bool
     _hid_gesture: Any
 
     def register(self, event_type: str, callback: Callable[[Any], None]) -> None: ...
@@ -24,9 +28,9 @@ class DeviceHookLike(Protocol):
         self,
         enabled: bool = False,
         threshold: int = 50,
-        deadzone: int = 40,
-        timeout_ms: int = 3000,
-        cooldown_ms: int = 500,
+        commit_window_ms: int = 400,
+        settle_ms: int = 90,
+        cross_ratio: float = 0.5,
     ) -> None: ...
     def set_connection_change_callback(self, cb: Callable[[bool], None]) -> None: ...
     def set_debug_callback(self, callback: Callable[[str], None]) -> None: ...

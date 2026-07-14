@@ -7,8 +7,8 @@ import "Theme.js" as Theme
 ApplicationWindow {
     id: root
     visible: !launchHidden
-    width: 1060
-    height: 700
+    width: 1500
+    height: 800
     minimumWidth: 920
     minimumHeight: 620
     readonly property string versionLabel: "v" + appVersion
@@ -35,12 +35,31 @@ ApplicationWindow {
                                                : (Qt.platform.os === "windows"
                                                   ? "Consolas"
                                                   : "monospace")
+    property var s: lm.strings
     property int currentPage: 0
     property Item hoveredNavItem: null
     property string hoveredNavText: ""
     property string hoveredNavTipKey: ""
     property real hoveredNavCenterX: 0
     property real hoveredNavCenterY: 0
+    readonly property bool shortcutsBlocked: aboutDialog.visible
+                                            || mousePageView.hasBlockingDialog
+                                            || keyboardPageView.hasBlockingDialog
+
+    property var navModel: {
+        var items = [
+            { icon: "mouse-simple", tipKey: "nav.mouse", page: 0 },
+            { icon: "keyboard-simple", tipKey: "nav.keyboard", page: 2 },
+            { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
+        ]
+        if (backend.hapticSupported) {
+            items.push({ icon: "circle", tipKey: "nav.haptic_feedback", page: 3 })
+        }
+        if (backend.deviceHasActionsRing && backend.actionsRingActive) {
+            items.push({ icon: "target", tipKey: "nav.actions_ring", page: 4 })
+        }
+        return items
+    }
 
     function openPage(page) {
         if (root.currentPage === page)
@@ -85,32 +104,36 @@ ApplicationWindow {
                     spacing: 6
 
                     Rectangle {
+                        // Brand mark in the top-left of the sidebar -- a
+                        // pocket-sized echo of the Dock icon: same navy
+                        // squircle, same white mouse glyph. Renders
+                        // identically across light / dark themes so the
+                        // brand stays recognisable regardless of system
+                        // appearance, and distinguishes itself from the
+                        // teal-accented navigation items below.
                         width: 44
                         height: 44
                         radius: 14
-                        color: root.theme.accent
+                        color: root.theme.brandMarkBg
                         anchors.horizontalCenter: parent.horizontalCenter
 
-                        Text {
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: "Mouser"
+                        Accessible.description: root.versionLabel
+
+                        AppIcon {
                             anchors.centerIn: parent
-                            text: "M"
-                            font {
-                                family: uiState.fontFamily
-                                pixelSize: 20
-                                bold: true
-                            }
-                            color: root.theme.bgSidebar
+                            width: 24
+                            height: 24
+                            name: "mouse-simple"
+                            iconColor: root.theme.brandMarkFg
                         }
                     }
 
                     Item { width: 1; height: 18 }
 
                     Repeater {
-                        model: [
-                            { icon: "mouse-simple", tipKey: "nav.mouse", page: 0 },
-                            { icon: "keyboard-simple", tipKey: "nav.keyboard", page: 2 },
-                            { icon: "sliders-horizontal", tipKey: "nav.point_scroll", page: 1 }
-                        ]
+                        model: root.navModel
 
                         delegate: FocusScope {
                             id: navItem
@@ -266,12 +289,26 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: root.currentPage
 
-            DevicePage { deviceFilter: "mouse" }      // index 0
+            DevicePage {                              // index 0
+                id: mousePageView
+                deviceFilter: "mouse"
+            }
             Loader {                                  // index 1
                 active: root.currentPage === 1 || item
                 source: "SettingsPage.qml"
             }
-            DevicePage { deviceFilter: "keyboard" }    // index 2 — keyboards
+            DevicePage {                              // index 2 — keyboards
+                id: keyboardPageView
+                deviceFilter: "keyboard"
+            }
+            Loader {                                  // index 3
+                active: (root.currentPage === 3 || item) && backend.hapticSupported
+                source: "HapticPage.qml"
+            }
+            Loader {                                  // index 4
+                active: (root.currentPage === 4 || item) && backend.deviceHasActionsRing && backend.actionsRingActive
+                source: "ActionsRingConfig.qml"
+            }
         }
     }
 
@@ -400,6 +437,10 @@ ApplicationWindow {
                     color: closeAboutMouse.containsMouse
                            ? Qt.rgba(1, 1, 1, uiState.darkMode ? 0.08 : 0.65)
                            : "transparent"
+
+                    Accessible.role: Accessible.Button
+                    Accessible.name: s["dialog.close"]
+                    Accessible.onPressAction: aboutDialog.close()
 
                     AppIcon {
                         anchors.centerIn: parent
@@ -643,9 +684,47 @@ ApplicationWindow {
         }
     }
 
+    // Hide-to-tray: every "close window" idiom on every supported platform routes through
+    // dismiss() so the engine and tray icon keep running. macOS LSUIElement bundles depend
+    // on this because the Dock close button never terminates the process; Linux and Windows
+    // tray builds inherit the same behavior for consistency.
+    function dismiss() {
+        if (!root.visible) {
+            return
+        }
+        root.hide()
+    }
+
     onClosing: function(close) {
         close.accepted = false
-        root.hide()
+        root.dismiss()
+    }
+
+    // LSUIElement apps have no platform menu bar binding StandardKey.Close to Cmd-W, and
+    // Ctrl/Cmd+M mirrors the OS "minimize" idiom. Keep these scoped to the main window
+    // and disable them while any blocking dialog / shortcut-capture overlay is open so
+    // typing flows cannot get swallowed by a global hide-to-tray shortcut.
+    Shortcut {
+        sequence: StandardKey.Close
+        context: Qt.WindowShortcut
+        enabled: root.visible && !root.shortcutsBlocked
+        onActivated: root.dismiss()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+M"
+        context: Qt.WindowShortcut
+        enabled: root.visible && !root.shortcutsBlocked
+        onActivated: root.dismiss()
+    }
+
+    // Keep Esc on the same main-window path; blocking dialogs and the key-capture overlay
+    // own Escape while open, so dismiss() only runs when the real shell is frontmost.
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: root.visible && !root.shortcutsBlocked
+        onActivated: root.dismiss()
     }
 
     Connections {

@@ -7,6 +7,11 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import sys
+
+# Allow running as `python tools/generate_update_manifest.py` from the repo
+# root: put the repo root on sys.path so the `core` package resolves.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.update_installer import (
     APP_ID,

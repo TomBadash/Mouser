@@ -4,6 +4,7 @@ current configuration.  Sits between the hook layer and the UI.
 Supports per-application auto-switching of profiles.
 """
 
+import sys
 import threading
 import time
 from core.device_hook import DeviceHook, DeviceEvent
@@ -12,9 +13,11 @@ from core.key_simulator import (
     inject_mouse_down, inject_mouse_up,
 )
 from core.config import (
-    load_config, get_active_mappings, get_profile_for_app,
+    load_config, get_active_mappings, get_profile_for_app_identity,
     get_profile_crown_smooth, set_profile_crown_smooth,
-    BUTTON_TO_EVENTS, GESTURE_DIRECTION_BUTTONS, save_config,
+    BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, SWIPE_SET_FOR_TAP,
+    save_config, action_haptic_enabled, button_haptic_enabled,
+    WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
 )
 from core.logi_device_catalog import KEYBOARD_KEY_CIDS
 from core.app_detector import AppDetector
@@ -25,6 +28,7 @@ from core.linux_permissions import (
     linux_permission_status_message,
 )
 from core.logi_devices import clamp_dpi
+from core.actions_ring import ActionsRingController
 
 HSCROLL_ACTION_COOLDOWN_S = 0.35
 HSCROLL_VOLUME_COOLDOWN_S = 0.06
@@ -42,6 +46,7 @@ class Engine:
         self.hook = DeviceHook()
         self.cfg = load_config()
         self._enabled = True
+        self._last_haptic_time = 0.0
         self._hscroll_state = {
             DeviceEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
             DeviceEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
@@ -72,12 +77,23 @@ class Engine:
         self._battery_poll_stop = threading.Event()
         self._battery_poll_thread = None          # track the poller thread
         self._last_connection_state = bool(self._hid_runtime_state().input_ready)
+        self._wheel_divert_change_cb = None
+        self._wheel_divert_active_local = False
+        self._last_native_invert_target = (False, False)
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
+        self._desktop_info_cache = None
+        self._desktop_info_ts = 0.0
+        self._desktop_direction = "right"
         self._replay_inflight = False
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
         self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
+        self._ring = None                 # ActionsRingController (created in _setup_hooks)
+        self._ring_show_cb = None         # UI callback for showing ring overlay
+        self._ring_hide_cb = None         # UI callback for hiding ring overlay
+        self._ring_sector_cb = None       # UI callback to get current overlay sector
+        self._ring_move_cb = None         # UI callback for rawXY deltas → overlay
         self._lock = threading.Lock()
         self.hook.set_debug_callback(self._emit_debug)
         self.hook.set_gesture_callback(self._emit_gesture_event)
@@ -107,8 +123,13 @@ class Engine:
     # ------------------------------------------------------------------
     # Hook wiring
     # ------------------------------------------------------------------
-    def _setup_hooks(self):
-        """Register callbacks and block events for all mapped buttons."""
+    def _setup_hooks(self, *, defer_wheel_invert=False):
+        """Register callbacks and block events for all mapped buttons.
+
+        When ``defer_wheel_invert`` is True the blocking native wheel-invert
+        write is skipped; the caller is responsible for applying it off the
+        HID listener thread (see ``_on_connection_change``).
+        """
         mappings = get_active_mappings(self.cfg)
 
         # Apply scroll inversion settings to the hook
@@ -118,14 +139,73 @@ class Engine:
         if hasattr(self.hook, "ignore_trackpad"):
             self.hook.ignore_trackpad = settings.get("ignore_trackpad", True)
         self.hook.debug_mode = self._debug_events_enabled
-        self.hook.configure_gestures(
-            enabled=any(mappings.get(key, "none") != "none"
-                        for key in GESTURE_DIRECTION_BUTTONS),
-            threshold=settings.get("gesture_threshold", 50),
-            deadzone=settings.get("gesture_deadzone", 40),
-            timeout_ms=settings.get("gesture_timeout_ms", 3000),
-            cooldown_ms=settings.get("gesture_cooldown_ms", 500),
+        ring_btn_key = next(
+            (k for k, v in mappings.items()
+             if isinstance(v, str) and v == "activate_actions_ring"),
+            None,
         )
+
+        # Map the two swipe-capable tap buttons to the hook's two recognizers.
+        # The hook's *primary* recognizer is whichever control emits the
+        # device's primary gesture events: the Sense Panel ("actions_ring") on
+        # the MX Master 4, else the Gesture button ("gesture"). The MX4's thumb
+        # ("gesture") drives the *thumb* recognizer.
+        via_sense = bool(
+            getattr(self.connected_device, "gesture_via_sense_panel", False)
+        )
+        primary_tap_key = "actions_ring" if via_sense else "gesture"
+        thumb_tap_key = "gesture" if via_sense else None
+
+        g_threshold = settings.get("gesture_threshold", 25)
+        g_commit = settings.get("gesture_commit_window_ms", 400)
+        g_settle = settings.get("gesture_settle_ms", 90)
+        g_cross = settings.get("gesture_cross_ratio", 0.5)
+
+        def _swipe_enabled(tap_key):
+            # A button's swipe set is active only when its tap is "Do Nothing"
+            # and at least one direction is mapped.
+            if mappings.get(tap_key, "none") != "none":
+                return False
+            return any(mappings.get(k, "none") != "none"
+                       for k in SWIPE_SET_FOR_TAP.get(tap_key, ()))
+
+        primary_ring = mappings.get(primary_tap_key) == "activate_actions_ring"
+        self.hook.configure_gestures(
+            enabled=_swipe_enabled(primary_tap_key),
+            threshold=g_threshold, commit_window_ms=g_commit,
+            settle_ms=g_settle, cross_ratio=g_cross,
+        )
+        if hasattr(self.hook, "set_gesture_os_passthrough"):
+            self.hook.set_gesture_os_passthrough(
+                primary_ring,
+                move_callback=self._on_gesture_rawxy if primary_ring else None,
+            )
+
+        if thumb_tap_key and hasattr(self.hook, "configure_thumb_gestures"):
+            thumb_ring = mappings.get(thumb_tap_key) == "activate_actions_ring"
+            self.hook.configure_thumb_gestures(
+                enabled=_swipe_enabled(thumb_tap_key),
+                threshold=g_threshold, commit_window_ms=g_commit,
+                settle_ms=g_settle, cross_ratio=g_cross,
+            )
+            if hasattr(self.hook, "set_thumb_os_passthrough"):
+                self.hook.set_thumb_os_passthrough(
+                    thumb_ring,
+                    move_callback=self._on_gesture_rawxy if thumb_ring else None,
+                )
+        elif hasattr(self.hook, "configure_thumb_gestures"):
+            # No secondary control on this device — keep it disabled.
+            self.hook.configure_thumb_gestures(enabled=False)
+
+        # Swipe-direction keys whose owning tap button is set to the Actions
+        # Ring: their movement drives the ring, so the swipe events never fire
+        # and we must not block them.
+        ring_suppressed_swipes = set()
+        for tap_key, swipe_keys in SWIPE_SET_FOR_TAP.items():
+            if mappings.get(tap_key) == "activate_actions_ring":
+                ring_suppressed_swipes.update(swipe_keys)
+        if not defer_wheel_invert:
+            self._apply_wheel_invert_setting()
         # Divert mode shift / DPI switch CIDs only when a device has the button
         # and at least one profile maps it to an action.  When no device is
         # connected yet, assume the button exists (safe: if the device turns
@@ -190,9 +270,83 @@ class Engine:
         if hasattr(self.hook, "divert_keyboard_keys"):
             self.hook.divert_keyboard_keys = keyboard_keys
 
+        # Actions Ring controller — create/recreate on every hook setup so
+        # profile switches pick up the new slot list automatically.
+        if self._ring:
+            self._ring.shutdown()
+            self._ring = None
+
+        any_ring = any(
+            v == "activate_actions_ring"
+            for v in mappings.values() if isinstance(v, str)
+        )
+        if any_ring:
+            # Ring slot contents are global (shared by every app) unless the
+            # user opts into per-app rings.  Global mode ignores any per-app
+            # actions_ring_slots; per-app mode falls back to the global list
+            # when the active profile has none.
+            if settings.get("actions_ring_use_global", True):
+                slots = settings.get("actions_ring_slots", [])
+            else:
+                slots = (mappings.get("actions_ring_slots")
+                         or settings.get("actions_ring_slots", []))
+            hold_ms = settings.get("actions_ring_hold_ms", 250)
+            ring_btn = ring_btn_key or ""
+            self._ring = ActionsRingController(
+                slots=slots,
+                hold_ms=hold_ms,
+                execute_cb=self._execute_ring_action,
+                play_haptic_cb=lambda wf, _b=ring_btn: (
+                    self._play_haptic_async(wf)
+                    if button_haptic_enabled(self.cfg, _b) else None
+                ),
+                show_ring_cb=self._on_ring_show,
+                hide_ring_cb=self._on_ring_hide,
+                move_cb=self._on_ring_move,
+            )
+
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
 
         for btn_key, action_id in mappings.items():
+            if not isinstance(action_id, str):
+                continue
+            # Actions Ring — route through controller when mapped to the ring action.
+            if action_id == "activate_actions_ring" and self._ring is not None:
+                ring = self._ring
+                events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
+                has_down = any(e.endswith("_down") for e in events)
+                has_up = any(e.endswith("_up") for e in events)
+                if has_down and has_up:
+                    down_evt = next(e for e in events if e.endswith("_down"))
+                    up_evt = next(e for e in events if e.endswith("_up"))
+                    self.hook.block(down_evt)
+                    self.hook.block(up_evt)
+                    self.hook.register(down_evt,
+                                       lambda e, r=ring: r.on_button_down())
+                    self.hook.register(up_evt,
+                                       lambda e, r=ring: self._on_ring_button_up(r))
+                else:
+                    hold_events = BUTTON_HOLD_EVENTS.get(btn_key)
+                    if hold_events:
+                        down_evt, up_evt = hold_events
+                        self.hook.block(down_evt)
+                        self.hook.block(up_evt)
+                        self.hook.register(down_evt,
+                                           lambda e, r=ring: r.on_button_down())
+                        self.hook.register(up_evt,
+                                           lambda e, r=ring: self._on_ring_button_up(r))
+                        for evt_type in events:
+                            self.hook.block(evt_type)
+                    else:
+                        for evt_type in events:
+                            self.hook.block(evt_type)
+                            self.hook.register(evt_type,
+                                               lambda e, r=ring: r.on_click())
+                continue
+
+            if btn_key in ring_suppressed_swipes:
+                continue
+
             events = list(BUTTON_TO_EVENTS.get(btn_key, ()))
             has_paired_down = any(e.endswith("_down") for e in events)
             has_up = any(e.endswith("_up") for e in events)
@@ -216,9 +370,14 @@ class Engine:
                             self.hook.register(evt_type, self._make_mouse_down_handler(action_id))
                         else:
                             # Single-fire event (gesture, swipe) → full click
-                            self.hook.register(evt_type, self._make_handler(action_id))
+                            self.hook.register(evt_type, self._make_handler(action_id, btn_key))
                     else:
-                        self.hook.register(evt_type, self._make_handler(action_id))
+                        self.hook.register(evt_type, self._make_handler(action_id, btn_key))
+                elif (not evt_type.endswith("_up")
+                      and button_haptic_enabled(self.cfg, btn_key)):
+                    # "Do Nothing" but button has haptic enabled — observe without
+                    # consuming the event so the click still passes through normally.
+                    self.hook.register(evt_type, self._make_handler("none", btn_key))
 
         # Re-enable handler for the backlight-up key. It only fires while the key
         # is actually diverted (light theme, backlight off). DOWN is left as
@@ -259,7 +418,7 @@ class Engine:
         if hasattr(self.hook, "refresh_diverts"):
             self.hook.refresh_diverts()
 
-    def _make_handler(self, action_id):
+    def _make_handler(self, action_id, btn_key=""):
         def handler(event):
             try:
                 if self._enabled:
@@ -267,23 +426,24 @@ class Engine:
                         f"Mapped {event.event_type} -> {action_id} "
                         f"({self._action_label(action_id)})"
                     )
-                    if event.event_type.startswith("gesture_"):
+                    if event.event_type.startswith(("gesture_", "sense_")):
                         self._emit_gesture_event({
                             "type": "mapped",
                             "event_name": event.event_type,
                             "action_id": action_id,
                             "action_label": self._action_label(action_id),
                         })
-                    if action_id == "toggle_smart_shift":
-                        self._toggle_smart_shift()
-                    elif action_id == "switch_scroll_mode":
-                        self._switch_scroll_mode()
-                    elif action_id == "cycle_dpi":
-                        self._cycle_dpi()
-                    elif action_id == "toggle_crown_smooth":
-                        self._toggle_crown_smooth()
-                    else:
-                        execute_action(action_id)
+                        # Gesture resolved — same OR gate as regular presses.
+                        if (action_haptic_enabled(self.cfg, action_id)
+                                or button_haptic_enabled(self.cfg, btn_key)):
+                            self._play_haptic_async(7)  # COMPLETED
+                    elif not event.event_type.endswith("_up"):
+                        # Regular press — fires when EITHER action OR button gate passes.
+                        if (action_haptic_enabled(self.cfg, action_id)
+                                or button_haptic_enabled(self.cfg, btn_key)):
+                            wf = 3 if action_id == "cycle_dpi" else 1
+                            self._play_haptic_async(wf)
+                    self._dispatch_action(action_id, btn_key)
             except Exception as exc:
                 print(f"[Engine] _make_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
@@ -337,7 +497,7 @@ class Engine:
                 import traceback; traceback.print_exc()
         return handler
 
-    def _toggle_smart_shift(self):
+    def _toggle_smart_shift(self, btn_key=""):
         """Toggle SmartShift auto-switching on/off.
 
         IMPORTANT: this is called from a HID event callback which runs on the HID
@@ -365,7 +525,7 @@ class Engine:
                 print(f"[Engine] toggle_smart_shift device write -> {'OK' if ok else 'FAILED'}")
             threading.Thread(target=_write, daemon=True, name="ToggleSmartShift").start()
 
-    def _switch_scroll_mode(self):
+    def _switch_scroll_mode(self, btn_key=""):
         """Switch between ratchet and free-spin (Logi Options+ physical button behaviour).
 
         SmartShift auto-switching is disabled so the chosen fixed mode takes effect.
@@ -400,7 +560,7 @@ class Engine:
         print(f"[Engine] toggle_crown_smooth -> "
               f"{'smooth' if not current else 'ratchet'}")
 
-    def _cycle_dpi(self):
+    def _cycle_dpi(self, btn_key=""):
         """Cycle through user-configured DPI presets.
 
         Advances to the next preset in the list.  If the current DPI doesn't
@@ -431,6 +591,242 @@ class Engine:
             def _write():
                 hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
+
+    def _apply_wheel_invert_setting(self, *, force: bool = False) -> None:
+        settings = self.cfg.get("settings", {})
+        kill_switch_off = (
+            coerce_wheel_divert_setting(settings.get("wheel_divert")) == WHEEL_DIVERT_OFF
+        )
+        invert_v = bool(settings.get("invert_vscroll", False))
+        invert_h = bool(settings.get("invert_hscroll", False))
+        device = self.connected_device
+        capable = bool(device and (
+            getattr(device, "has_hires_wheel", False)
+            or getattr(device, "has_thumbwheel", False)
+        ))
+        target_active = bool(capable and not kill_switch_off)
+        hg = self.hook._hid_gesture
+        if (
+            not force
+            and target_active == self._wheel_divert_active_local
+            and target_active == bool(getattr(self.hook, "wheel_native_invert_active", False))
+            and (not target_active or self._last_native_invert_target == (invert_v, invert_h))
+        ):
+            return
+        ack = False
+        if target_active and hg is not None and hasattr(hg, "request_wheel_native_invert"):
+            try:
+                ack = bool(hg.request_wheel_native_invert(invert_v, invert_h))
+            except Exception as exc:
+                print(f"[Engine] wheel native-invert request failed: {exc}")
+                ack = False
+        elif not target_active and hg is not None and hasattr(hg, "request_wheel_native_invert"):
+            try:
+                hg.request_wheel_native_invert(False, False)
+            except Exception as exc:
+                print(f"[Engine] wheel native-invert release failed: {exc}")
+        new_active = bool(target_active and ack)
+        prev_active = self._wheel_divert_active_local
+        self._wheel_divert_active_local = new_active
+        self.hook.wheel_native_invert_active = new_active
+        self._last_native_invert_target = (invert_v, invert_h) if new_active else (False, False)
+        if hg is not None and hasattr(hg, "set_wheel_divert_active_flags"):
+            try:
+                hg.set_wheel_divert_active_flags(
+                    bool(new_active and invert_v
+                         and getattr(hg, "_hires_wheel_idx", None) is not None),
+                    bool(new_active and invert_h
+                         and getattr(hg, "_thumbwheel_idx", None) is not None),
+                )
+            except Exception as exc:
+                print(f"[Engine] set_wheel_divert_active_flags failed: {exc}")
+        if new_active != prev_active:
+            print(
+                f"[Engine] wheel native-invert -> "
+                f"{'ON (HID++)' if new_active else 'OFF (OS fallback)'} "
+                f"capable={capable} kill_switch_off={kill_switch_off} "
+                f"invert_v={invert_v} invert_h={invert_h} ack={ack}"
+            )
+            if not new_active and target_active:
+                self._emit_status(
+                    "Firmware wheel invert FAILED on a capable device -- "
+                    "falling back to OS-level inversion."
+                )
+            self._notify_wheel_divert_change(new_active)
+
+    def _notify_wheel_divert_change(self, active: bool) -> None:
+        if self._wheel_divert_change_cb is None:
+            return
+        try:
+            self._wheel_divert_change_cb(bool(active))
+        except Exception as exc:
+            print(f"[Engine] wheel divert change callback raised: {exc}")
+
+    def set_wheel_divert_change_callback(self, cb) -> None:
+        self._wheel_divert_change_cb = cb
+        if cb is None:
+            return
+        try:
+            cb(bool(self._wheel_divert_active_local))
+        except Exception as exc:
+            print(f"[Engine] wheel divert change callback (initial) raised: {exc}")
+
+    @property
+    def wheel_native_invert_active(self) -> bool:
+        return bool(self._wheel_divert_active_local)
+
+    @staticmethod
+    def _get_macos_desktop_info():
+        """Get macOS desktop count and current position (1-indexed).
+
+        Returns (desktop_count, current_position) for the display that
+        currently has the cursor.
+
+        Uses CGSGetActiveSpace to get the current space id64, then finds
+        which display's Spaces list contains that id64.  Only id64 values
+        inside the Spaces array are counted (not from "Current Space" or
+        "Collapsed Space" blocks).
+
+        Only works on macOS; returns (4, 1) on other platforms.
+        """
+        if sys.platform != "darwin":
+            return 4, 1
+
+        import ctypes
+        import subprocess
+        import re
+
+        try:
+            # CGSGetActiveSpace returns the current space id64 of the
+            # display where the cursor is located.
+            cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+            cg.CGSMainConnectionID.restype = ctypes.c_uint32
+            cg.CGSGetActiveSpace.restype = ctypes.c_int64
+            cg.CGSGetActiveSpace.argtypes = [ctypes.c_uint32]
+            conn = cg.CGSMainConnectionID()
+            current_id64 = cg.CGSGetActiveSpace(conn)
+
+            # Read spaces config
+            result = subprocess.run(
+                ['defaults', 'read', 'com.apple.spaces', 'SpacesDisplayConfiguration'],
+                capture_output=True, text=True, timeout=5
+            )
+            output = result.stdout
+
+            # Split by Display Identifier to get per-monitor sections
+            sections = re.split(r'"Display Identifier"\s*=\s*', output)
+
+            def _extract_spaces_id64_list(section_text):
+                """Extract id64 values only from the Spaces array block."""
+                spaces_match = re.search(r'Spaces\s*=\s*\(', section_text)
+                if not spaces_match:
+                    return []
+                # Find the matching closing paren
+                text = section_text[spaces_match.start():]
+                depth = 0
+                end = 0
+                for i, c in enumerate(text):
+                    if c == '(':
+                        depth += 1
+                    elif c == ')':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end == 0:
+                    return []
+                spaces_block = text[:end]
+                return [int(x) for x in re.findall(r'id64 = (\d+)', spaces_block)]
+
+            # Find the display whose Spaces list contains current_id64
+            active_display_id = None
+            active_id64_list = None
+
+            for section in sections[1:]:  # skip text before first identifier
+                display_id = section.split(';')[0].strip().strip('"')
+                id64_list = _extract_spaces_id64_list(section)
+                if current_id64 in id64_list:
+                    active_display_id = display_id
+                    active_id64_list = id64_list
+                    break
+
+            # Fallback: use Main display
+            if active_id64_list is None:
+                for section in sections[1:]:
+                    display_id = section.split(';')[0].strip().strip('"')
+                    if display_id == 'Main':
+                        active_display_id = 'Main'
+                        active_id64_list = _extract_spaces_id64_list(section)
+                        break
+
+            if not active_id64_list:
+                print("[Engine] No desktops found for active monitor")
+                return 4, 1
+
+            desktop_count = len(active_id64_list)
+
+            # Find current position (1-indexed)
+            if current_id64 in active_id64_list:
+                current_position = active_id64_list.index(current_id64) + 1
+            else:
+                current_position = 1
+
+            print(f"[Engine] macOS desktop info: display={active_display_id}, count={desktop_count}, "
+                  f"position={current_position}, id64={current_id64}, list={active_id64_list}")
+            return desktop_count, current_position
+
+        except Exception as e:
+            print(f"[Engine] Error getting macOS desktop info: {e}")
+            return 4, 1
+
+    def _cycle_desktops(self):
+        """Ping-pong cycle through desktops (macOS only).
+
+        Switches right until the last desktop, then left until the first,
+        then right again, etc.  Uses CGSGetActiveSpace and com.apple.spaces
+        to detect desktop count and current position.
+        """
+        if sys.platform != "darwin":
+            print("[Engine] cycle_desktops only supported on macOS")
+            return
+
+        # Get desktop info (cached for 5 seconds to avoid subprocess per press)
+        now = time.time()
+        if self._desktop_info_cache is None or (now - self._desktop_info_ts) > 5.0:
+            self._desktop_info_cache = self._get_macos_desktop_info()
+            self._desktop_info_ts = now
+        desktop_count, current = self._desktop_info_cache
+
+        # Only one desktop — nothing to cycle
+        if desktop_count <= 1:
+            print(f"[Engine] cycle_desktops: only {desktop_count} desktop, skipping")
+            return
+
+        direction = self._desktop_direction
+
+        # Calculate next position
+        if direction == "right":
+            if current >= desktop_count:
+                direction = "left"
+                next_pos = current - 1
+            else:
+                next_pos = current + 1
+        else:  # left
+            if current <= 1:
+                direction = "right"
+                next_pos = current + 1
+            else:
+                next_pos = current - 1
+
+        # Execute switch
+        print(f"[Engine] cycle_desktops: {current} -> {next_pos} (direction={direction})")
+        if next_pos > current:
+            execute_action("space_right")
+        else:
+            execute_action("space_left")
+
+        self._desktop_direction = direction
+        self._desktop_info_cache = (desktop_count, next_pos)
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
@@ -472,19 +868,20 @@ class Engine:
 
     def _hscroll_threshold(self):
         return max(
-            0.1,
+            0.01,
             float(self.cfg.get("settings", {}).get("hscroll_threshold", 1)),
         )
 
     # ------------------------------------------------------------------
     # Per-app auto-switching
     # ------------------------------------------------------------------
-    def _on_app_change(self, exe_name: str):
+    def _on_app_change(self, app_identity: tuple[str, ...]):
         """Called by AppDetector when foreground window changes."""
-        target = get_profile_for_app(self.cfg, exe_name)
+        target = get_profile_for_app_identity(self.cfg, app_identity)
         if target == self._current_profile:
             return
-        print(f"[Engine] App changed to {exe_name} -> profile '{target}'")
+        app_label = app_identity[0] if app_identity else ""
+        print(f"[Engine] App changed to {app_label} -> profile '{target}'")
         self._switch_profile(target)
 
     def _switch_profile(self, profile_name: str):
@@ -503,6 +900,116 @@ class Engine:
                 self._profile_change_cb(profile_name)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Actions Ring
+    # ------------------------------------------------------------------
+
+    def set_ring_show_callback(self, cb):
+        """Register ``cb(slots)`` invoked when the ring overlay should appear."""
+        self._ring_show_cb = cb
+
+    def set_ring_hide_callback(self, cb):
+        """Register ``cb()`` invoked when the ring overlay should disappear."""
+        self._ring_hide_cb = cb
+
+    def set_ring_sector_callback(self, cb):
+        """Register ``cb() -> int`` that returns the overlay's current sector."""
+        self._ring_sector_cb = cb
+
+    def set_ring_move_callback(self, cb):
+        """Register ``cb(dx, dy)`` invoked for rawXY deltas during held ring."""
+        self._ring_move_cb = cb
+
+    def _on_ring_move(self, dx, dy):
+        """Called by the ring controller to forward rawXY deltas to the UI."""
+        if self._ring_move_cb:
+            try:
+                self._ring_move_cb(dx, dy)
+            except Exception as exc:
+                print(f"[Engine] ring move callback error: {exc}")
+
+    def _on_gesture_rawxy(self, dx, dy):
+        """Hook callback — forward rawXY deltas to the ring controller."""
+        ring = self._ring
+        if ring:
+            ring.on_move(dx, dy)
+
+    def _on_ring_show(self, slots, interactive=False):
+        """Called by the controller when the ring should appear."""
+        if self._ring_show_cb:
+            try:
+                self._ring_show_cb(slots, interactive)
+            except Exception as exc:
+                print(f"[Engine] ring show callback error: {exc}")
+
+    def _on_ring_hide(self):
+        """Called by the controller when the ring should disappear."""
+        if self._ring_hide_cb:
+            try:
+                self._ring_hide_cb()
+            except Exception as exc:
+                print(f"[Engine] ring hide callback error: {exc}")
+
+    def _on_ring_button_up(self, ring=None):
+        """Handle actions_ring_up — pass current sector from overlay to controller."""
+        ring = ring or self._ring
+        if not ring:
+            return
+        sector = None
+        if self._ring_sector_cb:
+            try:
+                sector = self._ring_sector_cb()
+            except Exception:
+                pass
+        ring.on_button_up(sector_override=sector)
+
+    def ring_toggle_select(self, sector):
+        """Called from the UI when user clicks a sector in toggle mode."""
+        if self._ring:
+            self._ring.on_toggle_select(sector)
+
+    def ring_toggle_dismiss(self):
+        """Called from the UI when user clicks center X or outside in toggle mode."""
+        if self._ring:
+            self._ring.on_toggle_dismiss()
+
+    def ring_hover(self, sector):
+        """Called from the UI when the hovered ring slot changes.
+
+        Fires one haptic pulse per newly entered slot using the default
+        waveform, so it plays at the user's globally configured haptic level.
+        Gated on the dedicated Actions Ring hover setting; the global haptic
+        toggle and dedup are enforced inside _play_haptic_async."""
+        if sector is None or sector < 0:
+            return
+        if not self.cfg.get("settings", {}).get("actions_ring_hover_haptic", True):
+            return
+        self._play_haptic_async(immediate=True)
+
+    def _dispatch_action(self, action_id, source_key=""):
+        """Route an action to the appropriate engine handler or system executor."""
+        if action_id == "activate_actions_ring":
+            return
+        elif action_id == "toggle_smart_shift":
+            self._toggle_smart_shift(source_key)
+        elif action_id == "switch_scroll_mode":
+            self._switch_scroll_mode(source_key)
+        elif action_id == "cycle_dpi":
+            self._cycle_dpi(source_key)
+        elif action_id == "toggle_crown_smooth":
+            self._toggle_crown_smooth()
+        elif action_id == "cycle_desktops":
+            self._cycle_desktops()
+        else:
+            execute_action(action_id)
+
+    def _execute_ring_action(self, action_id):
+        """Execute an action from the ring."""
+        if not self._enabled or action_id == "none":
+            return
+        self._emit_debug(f"Ring action -> {action_id} ({self._action_label(action_id)})")
+        self._dispatch_action(action_id, "actions_ring")
 
     def set_profile_change_callback(self, cb):
         """Register a callback ``cb(profile_name)`` invoked on auto-switch."""
@@ -681,6 +1188,15 @@ class Engine:
                     except Exception:
                         pass
 
+        saved_haptic = self.cfg.get("settings", {}).get("haptic_level")
+        if saved_haptic is not None and getattr(hg, "haptic_supported", False):
+            if hasattr(hg, "set_haptic_level"):
+                hg.set_haptic_level(saved_haptic)
+
+        saved_force = self.cfg.get("settings", {}).get("force_sensitivity")
+        if saved_force is not None and getattr(hg, "force_sensing_supported", False):
+            hg.set_force_sensing(saved_force)
+
         return replay_ok
 
     def _replay_saved_settings_worker(self):
@@ -723,6 +1239,25 @@ class Engine:
         hid_features_changed = hid_features_ready != self._last_hid_features_ready
         if connection_changed:
             self._last_connection_state = connected
+            if connected:
+                # Re-wire hooks now that the device (and its
+                # gesture_via_sense_panel / supported_buttons) is known, so the
+                # per-device gesture recognizers and rawXY hand-off are applied.
+                with self._lock:
+                    self.hook.reset_bindings()
+                    self._setup_hooks(defer_wheel_invert=True)
+                # This callback runs ON the HID listener thread. The native
+                # wheel-invert write blocks until that same thread services the
+                # queued request from its main loop, so applying it here would
+                # deadlock until the request times out. Defer it to a worker so
+                # the listener can return to its loop and complete the write.
+                hg = getattr(self.hook, "_hid_gesture", None)
+                if hg is not None and hasattr(hg, "request_wheel_native_invert"):
+                    threading.Thread(
+                        target=self._apply_wheel_invert_setting,
+                        daemon=True,
+                        name="WheelInvertApply",
+                    ).start()
             self._battery_poll_stop.set()
             if self._battery_poll_thread is not None:
                 self._battery_poll_thread.join(timeout=5)
@@ -816,7 +1351,11 @@ class Engine:
     def connected_devices(self):
         """All bound HID++ devices (multiplexer); falls back to the single one."""
         hg = self.hook._hid_gesture
-        devices = list(getattr(hg, "connected_devices", []) or []) if hg else []
+        devices = getattr(hg, "connected_devices", None) if hg else None
+        try:
+            devices = list(devices) if devices else []
+        except TypeError:
+            devices = []  # non-iterable stub (e.g. a Mock) → single-device path
         if devices:
             return devices
         one = self.connected_device
@@ -923,6 +1462,80 @@ class Engine:
             return hg.backlight_supported
         return bool(getattr(hg, "_backlight_idx", None)) if hg else False
 
+    @property
+    def haptic_supported(self):
+        hg = self.hook._hid_gesture
+        return hg.haptic_supported if hg else False
+
+    def set_haptic_level(self, level):
+        """Send haptic level to the mouse and persist to config."""
+        level = max(0, min(3, int(level)))
+        settings = self.cfg.setdefault("settings", {})
+        settings["haptic_level"] = level
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.set_haptic_level(level)
+        print("[Engine] No HID++ connection -- haptic level not applied")
+        return False
+
+    @property
+    def force_sensing_supported(self):
+        hg = self.hook._hid_gesture
+        return getattr(hg, "force_sensing_supported", False) if hg else False
+
+    @property
+    def force_sensing_range(self):
+        hg = self.hook._hid_gesture
+        return getattr(hg, "force_sensing_range", None) if hg else None
+
+    def set_force_sensitivity(self, value):
+        """Send force sensitivity to the mouse and persist to config."""
+        value = int(value)
+        settings = self.cfg.setdefault("settings", {})
+        settings["force_sensitivity"] = value
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.set_force_sensing(value)
+        print("[Engine] No HID++ connection -- force sensitivity not applied")
+        return False
+
+    def play_haptic_waveform(self, waveform_id=0):
+        """Trigger a haptic waveform on the mouse."""
+        hg = self.hook._hid_gesture
+        if hg:
+            return hg.play_haptic_waveform(waveform_id)
+        return False
+
+    def _play_haptic_async(self, waveform_id=0, immediate=False):
+        """Queue a haptic pulse with minimal latency.
+
+        Calls queue_haptic_waveform() which sets _pending_haptic directly on
+        the HidGestureListener.  Because HID++ event callbacks are dispatched
+        synchronously on the listener thread, this flag is set before _on_report
+        returns, so the listener loop picks it up at the very next iteration
+        (before the next _rx() call) rather than waiting for an incoming event.
+
+        When ``immediate`` is True the pulse is written straight to the device
+        instead of queued.  Use it for pulses triggered off the listener
+        thread (e.g. an Actions Ring hover from the UI thread), where the
+        listener would otherwise be parked in its blocking read for up to a
+        second before draining the queue."""
+        if not self.cfg.get("settings", {}).get("haptic_enabled", True):
+            return
+        if self.cfg.get("settings", {}).get("haptic_dedup", True):
+            now = time.monotonic()
+            if now - self._last_haptic_time < 0.1:
+                return
+            self._last_haptic_time = now
+        hg = self.hook._hid_gesture
+        if hg and hg.haptic_supported:
+            if immediate:
+                hg.play_haptic_immediate(waveform_id)
+            else:
+                hg.queue_haptic_waveform(waveform_id)
+
     def reload_mappings(self):
         """
         Called by the UI when the user changes a mapping.
@@ -973,6 +1586,9 @@ class Engine:
         self._smart_shift_read_cb = cb
 
     def stop(self):
+        if self._ring:
+            self._ring.shutdown()
+            self._ring = None
         self._battery_poll_stop.set()
         if self._battery_poll_thread is not None:
             self._battery_poll_thread.join(timeout=5)

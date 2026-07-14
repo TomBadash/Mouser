@@ -13,6 +13,9 @@ import "Theme.js" as Theme
 Item {
     id: devicePage
     readonly property var theme: Theme.palette(uiState.darkMode)
+    readonly property bool hasBlockingDialog: addAppDialog.visible
+                                             || deleteDialog.visible
+                                             || keyCaptureDialog.visible
     property string pendingDeleteProfile: ""
 
     // Which device class this page instance shows ("mouse" or "keyboard").
@@ -355,28 +358,34 @@ Item {
     readonly property string hscrollRightActionLabel: selectedProfileMappingState.hscroll_right
                                                  ? selectedProfileMappingState.hscroll_right.actionLabel
                                                  : (s["device.do_nothing"] || "Do Nothing")
-    readonly property string gestureTapActionId: selectedProfileMappingState.gesture
-                                            ? selectedProfileMappingState.gesture.actionId
-                                            : "none"
-    readonly property string gestureTapActionLabel: selectedProfileMappingState.gesture
-                                               ? selectedProfileMappingState.gesture.actionLabel
-                                               : (s["device.do_nothing"] || "Do Nothing")
-    readonly property string gestureLeftActionId: selectedProfileMappingState.gesture_left
-                                             ? selectedProfileMappingState.gesture_left.actionId
-                                             : "none"
-    readonly property string gestureRightActionId: selectedProfileMappingState.gesture_right
-                                              ? selectedProfileMappingState.gesture_right.actionId
-                                              : "none"
-    readonly property string gestureUpActionId: selectedProfileMappingState.gesture_up
-                                           ? selectedProfileMappingState.gesture_up.actionId
-                                           : "none"
-    readonly property string gestureDownActionId: selectedProfileMappingState.gesture_down
-                                             ? selectedProfileMappingState.gesture_down.actionId
-                                             : "none"
-    readonly property bool hasGestureSwipeAction: gestureLeftActionId !== "none"
-                                             || gestureRightActionId !== "none"
-                                             || gestureUpActionId !== "none"
-                                             || gestureDownActionId !== "none"
+    // Both the Gesture button ("gesture") and the MX Master 4 Sense Panel
+    // ("actions_ring") are gesture-capable: a tap action plus their own swipe
+    // set. The config-editor panel is driven off whichever is selected; swipe
+    // keys are "<button>_left/right/up/down".
+    readonly property bool isSwipeButton: selectedButton === "gesture"
+                                          || selectedButton === "actions_ring"
+    readonly property var _swipeTapMap: isSwipeButton
+        ? selectedProfileMappingState[selectedButton] : null
+    readonly property string swipeTapActionId: _swipeTapMap
+        ? _swipeTapMap.actionId : "none"
+    readonly property string swipeTapActionLabel: _swipeTapMap
+        ? _swipeTapMap.actionLabel : (s["device.do_nothing"] || "Do Nothing")
+    readonly property var _swipeLeftMap: isSwipeButton
+        ? selectedProfileMappingState[selectedButton + "_left"] : null
+    readonly property string swipeLeftActionId: _swipeLeftMap
+        ? _swipeLeftMap.actionId : "none"
+    readonly property var _swipeRightMap: isSwipeButton
+        ? selectedProfileMappingState[selectedButton + "_right"] : null
+    readonly property string swipeRightActionId: _swipeRightMap
+        ? _swipeRightMap.actionId : "none"
+    readonly property var _swipeUpMap: isSwipeButton
+        ? selectedProfileMappingState[selectedButton + "_up"] : null
+    readonly property string swipeUpActionId: _swipeUpMap
+        ? _swipeUpMap.actionId : "none"
+    readonly property var _swipeDownMap: isSwipeButton
+        ? selectedProfileMappingState[selectedButton + "_down"] : null
+    readonly property string swipeDownActionId: _swipeDownMap
+        ? _swipeDownMap.actionId : "none"
 
     function selectButton(key) {
         if (selectedButton === key) {
@@ -464,19 +473,26 @@ Item {
         return actionId.startsWith("open_app:")
     }
 
-    function gestureSummary() {
+    function gestureSummary(key) {
+        // Per-button summary: tap action, or "Swipes configured" when the tap
+        // is Do Nothing but at least one swipe direction is mapped.
         if (!backend.supportsGestureDirections)
-            return actionFor("gesture")
-        if (!hasGestureSwipeAction)
-            return (s["device.tap"] || "Tap: ") + lm.trAction(gestureTapActionLabel)
-        return (s["device.tap"] || "Tap: ") + lm.trAction(gestureTapActionLabel) + " | " + (s["device.swipes_configured"] || "Swipes configured")
+            return actionFor(key)
+        var tapId = actionFor_id(key)
+        var hasSwipe = actionFor_id(key + "_left") !== "none"
+                    || actionFor_id(key + "_right") !== "none"
+                    || actionFor_id(key + "_up") !== "none"
+                    || actionFor_id(key + "_down") !== "none"
+        if (tapId === "none" && hasSwipe)
+            return s["device.swipes_configured"] || "Swipes configured"
+        return actionFor(key)
     }
 
     function hotspotSublabel(hotspot) {
         if (!hotspot)
             return ""
         if (hotspot.summaryType === "gesture")
-            return gestureSummary()
+            return gestureSummary(hotspot.buttonKey)
         if (hotspot.summaryType === "hscroll")
             return "L: " + lm.trAction(hscrollLeftActionLabel) + " | R: " + lm.trAction(hscrollRightActionLabel)
         return actionFor(hotspot.buttonKey)
@@ -1447,18 +1463,20 @@ Item {
                             }
                             spacing: 16
 
-                            Row {
+                            RowLayout {
+                                width: parent.width
                                 spacing: 12
 
                                 Rectangle {
                                     width: 6; height: pickerTitleCol.height
                                     radius: 3; color: theme.accent
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.alignment: Qt.AlignVCenter
                                 }
 
                                 Column {
                                     id: pickerTitleCol
                                     spacing: 2
+                                    Layout.fillWidth: true
 
                                     Text {
                                         text: selectedButtonName
@@ -1470,7 +1488,7 @@ Item {
                                     Text {
                                         text: selectedButton === "hscroll_left"
                                               ? s["device.configure_scroll_actions"]
-                                              : selectedButton === "gesture"
+                                              : isSwipeButton
                                                 && backend.supportsGestureDirections
                                                 ? s["device.configure_gesture"]
                                               : s["device.select_button_action"]
@@ -1479,6 +1497,7 @@ Item {
                                         visible: selectedButton !== ""
                                     }
                                 }
+
                             }
 
                             // Horizontal scroll: left + right rows
@@ -1499,6 +1518,7 @@ Item {
                                     Repeater {
                                         model: backend.allActions
                                         delegate: ActionChip {
+                                            visible: modelData.id !== "activate_actions_ring"
                                             actionId: modelData.id
                                             actionLabel: modelData.id === "__custom__" && isCustomAction(hscrollLeftActionId)
                                                          ? customLabel(hscrollLeftActionId)
@@ -1532,6 +1552,7 @@ Item {
                                     Repeater {
                                         model: backend.allActions
                                         delegate: ActionChip {
+                                            visible: modelData.id !== "activate_actions_ring"
                                             actionId: modelData.id
                                             actionLabel: modelData.id === "__custom__" && isCustomAction(hscrollRightActionId)
                                                          ? customLabel(hscrollRightActionId)
@@ -1555,7 +1576,7 @@ Item {
                             Column {
                                 width: parent.width
                                 spacing: 14
-                                visible: selectedButton === "gesture"
+                                visible: isSwipeButton
                                          && backend.supportsGestureDirections
 
                                 Text {
@@ -1572,32 +1593,34 @@ Item {
                                     delegate: actionComboDelegate
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 11 }
-                                    currentIndex: actionIndexForId(gestureTapActionId)
-                                    displayText: (isCustomAction(gestureTapActionId) || isOpenAppAction(gestureTapActionId))
-                                                 ? customLabel(gestureTapActionId)
+                                    currentIndex: actionIndexForId(swipeTapActionId)
+                                    displayText: (isCustomAction(swipeTapActionId) || isOpenAppAction(swipeTapActionId))
+                                                 ? customLabel(swipeTapActionId)
                                                  : (lm.strings, lm.trAction(currentText))
                                     onActivated: function(index) {
                                         var aid = backend.allActions[index].id
                                         if (aid === "__custom__") {
-                                            keyCaptureDialog.open(selectedProfile, "gesture")
+                                            keyCaptureDialog.open(selectedProfile, selectedButton)
                                             return
                                         }
                                         if (aid === "__open_app__") {
-                                            backend.pickAppForMapping(selectedProfile, "gesture")
+                                            backend.pickAppForMapping(selectedProfile, selectedButton)
                                             return
                                         }
-                                        backend.setProfileMapping(selectedProfile, "gesture", aid)
+                                        backend.setProfileMapping(selectedProfile, selectedButton, aid)
                                         selectedActionId = aid
                                     }
                                 }
 
                                 Rectangle {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     height: 1
                                     color: theme.border
                                 }
 
                                 Row {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1620,6 +1643,7 @@ Item {
 
                                 WheelSafeSlider {
                                     id: gestureThresholdSlider
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     from: 20
                                     to: 400
@@ -1647,6 +1671,7 @@ Item {
                                 }
 
                                 Text {
+                                    visible: swipeTapActionId === "none"
                                     text: s["device.swipe_actions"]
                                     font { family: uiState.fontFamily; pixelSize: 11;
                                            capitalization: Font.AllUppercase; letterSpacing: 1 }
@@ -1654,6 +1679,7 @@ Item {
                                 }
 
                                 RowLayout {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1671,27 +1697,28 @@ Item {
                                         delegate: actionComboDelegate
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureLeftActionId)
-                                        displayText: (isCustomAction(gestureLeftActionId) || isOpenAppAction(gestureLeftActionId))
-                                                     ? customLabel(gestureLeftActionId)
+                                        currentIndex: actionIndexForId(swipeLeftActionId)
+                                        displayText: (isCustomAction(swipeLeftActionId) || isOpenAppAction(swipeLeftActionId))
+                                                     ? customLabel(swipeLeftActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_left")
+                                                keyCaptureDialog.open(selectedProfile, selectedButton + "_left")
                                                 return
                                             }
                                             if (aid === "__open_app__") {
-                                                backend.pickAppForMapping(selectedProfile, "gesture_left")
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_left")
                                                 return
                                             }
                                             backend.setProfileMapping(
-                                                selectedProfile, "gesture_left", aid)
+                                                selectedProfile, selectedButton + "_left", aid)
                                         }
                                     }
                                 }
 
                                 RowLayout {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1709,27 +1736,28 @@ Item {
                                         delegate: actionComboDelegate
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureRightActionId)
-                                        displayText: (isCustomAction(gestureRightActionId) || isOpenAppAction(gestureRightActionId))
-                                                     ? customLabel(gestureRightActionId)
+                                        currentIndex: actionIndexForId(swipeRightActionId)
+                                        displayText: (isCustomAction(swipeRightActionId) || isOpenAppAction(swipeRightActionId))
+                                                     ? customLabel(swipeRightActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_right")
+                                                keyCaptureDialog.open(selectedProfile, selectedButton + "_right")
                                                 return
                                             }
                                             if (aid === "__open_app__") {
-                                                backend.pickAppForMapping(selectedProfile, "gesture_right")
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_right")
                                                 return
                                             }
                                             backend.setProfileMapping(
-                                                selectedProfile, "gesture_right", aid)
+                                                selectedProfile, selectedButton + "_right", aid)
                                         }
                                     }
                                 }
 
                                 RowLayout {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1747,27 +1775,28 @@ Item {
                                         delegate: actionComboDelegate
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureUpActionId)
-                                        displayText: (isCustomAction(gestureUpActionId) || isOpenAppAction(gestureUpActionId))
-                                                     ? customLabel(gestureUpActionId)
+                                        currentIndex: actionIndexForId(swipeUpActionId)
+                                        displayText: (isCustomAction(swipeUpActionId) || isOpenAppAction(swipeUpActionId))
+                                                     ? customLabel(swipeUpActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_up")
+                                                keyCaptureDialog.open(selectedProfile, selectedButton + "_up")
                                                 return
                                             }
                                             if (aid === "__open_app__") {
-                                                backend.pickAppForMapping(selectedProfile, "gesture_up")
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_up")
                                                 return
                                             }
                                             backend.setProfileMapping(
-                                                selectedProfile, "gesture_up", aid)
+                                                selectedProfile, selectedButton + "_up", aid)
                                         }
                                     }
                                 }
 
                                 RowLayout {
+                                    visible: swipeTapActionId === "none"
                                     width: parent.width
                                     spacing: 12
 
@@ -1785,22 +1814,22 @@ Item {
                                         delegate: actionComboDelegate
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(gestureDownActionId)
-                                        displayText: (isCustomAction(gestureDownActionId) || isOpenAppAction(gestureDownActionId))
-                                                     ? customLabel(gestureDownActionId)
+                                        currentIndex: actionIndexForId(swipeDownActionId)
+                                        displayText: (isCustomAction(swipeDownActionId) || isOpenAppAction(swipeDownActionId))
+                                                     ? customLabel(swipeDownActionId)
                                                      : (lm.strings, lm.trAction(currentText))
                                         onActivated: function(index) {
                                             var aid = backend.allActions[index].id
                                             if (aid === "__custom__") {
-                                                keyCaptureDialog.open(selectedProfile, "gesture_down")
+                                                keyCaptureDialog.open(selectedProfile, selectedButton + "_down")
                                                 return
                                             }
                                             if (aid === "__open_app__") {
-                                                backend.pickAppForMapping(selectedProfile, "gesture_down")
+                                                backend.pickAppForMapping(selectedProfile, selectedButton + "_down")
                                                 return
                                             }
                                             backend.setProfileMapping(
-                                                selectedProfile, "gesture_down", aid)
+                                                selectedProfile, selectedButton + "_down", aid)
                                         }
                                     }
                                 }
@@ -1812,7 +1841,7 @@ Item {
                                 spacing: 14
                                 visible: selectedButton !== ""
                                          && selectedButton !== "hscroll_left"
-                                         && !(selectedButton === "gesture"
+                                         && !(isSwipeButton
                                               && backend.supportsGestureDirections)
 
                                 Repeater {

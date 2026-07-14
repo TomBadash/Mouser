@@ -15,6 +15,13 @@ class DeviceLayoutTests(unittest.TestCase):
 
                 # The key must match so a cataloged device never silently falls
                 # back to the generic layout.
+                # Layouts with hotspot art must be interactive; placeholder
+                # layouts (device cataloged before artwork is contributed,
+                # per CONTRIBUTING_DEVICES.md step 3b) must not be.
+                if layout["hotspots"]:
+                    self.assertTrue(layout["interactive"])
+                else:
+                    self.assertFalse(layout["interactive"])
                 self.assertEqual(layout["key"], device.ui_layout)
                 self.assertTrue((image_root / layout["image_asset"]).is_file())
 
@@ -94,6 +101,14 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn({"key": "mx_anywhere", "label": "MX Anywhere family"}, choices)
         self.assertIn({"key": "mx_vertical", "label": "MX Vertical family"}, choices)
 
+    def test_manual_choices_include_gaming_family_layouts(self):
+        # G502 has no MX-style family fallback, so its layout must be
+        # manually selectable for owners whose device connects with an
+        # unrecognized PID/name.
+        choices = get_manual_layout_choices()
+
+        self.assertIn({"key": "g502", "label": "G502 family"}, choices)
+
     def test_manual_choices_do_not_duplicate_layout_keys(self):
         keys = [choice["key"] for choice in get_manual_layout_choices() if choice["key"]]
 
@@ -155,6 +170,26 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertTrue(layout["interactive"])
         self.assertEqual(layout["image_asset"], "mx_vertical.png")
         self.assertGreater(len(layout["hotspots"]), 0)
+
+    # ── MX Master 4 layout tests ──────────────────────────────
+
+    def test_mx_master_4_has_actions_ring_hotspot(self):
+        layout = get_device_layout("mx_master_4")
+        hotspot_keys = [h["buttonKey"] for h in layout["hotspots"]]
+
+        self.assertIn("actions_ring", hotspot_keys)
+
+    def test_mx_master_4_no_longer_falls_back(self):
+        layout = get_device_layout("mx_master_4")
+
+        self.assertNotEqual(layout["key"], "mx_master",
+                            "mx_master_4 should have its own layout, not fall back")
+
+    def test_mx_master_4_in_manual_choices(self):
+        choices = get_manual_layout_choices()
+        keys = [c["key"] for c in choices]
+
+        self.assertIn("mx_master_4", keys)
 
     def test_exact_mx_master_3s_layout_uses_catalog_asset(self):
         layout = get_device_layout("mx_master_3s")

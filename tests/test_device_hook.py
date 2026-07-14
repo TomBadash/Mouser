@@ -12,7 +12,8 @@ from core.device_hook_types import HidRuntimeState
 
 
 class _FakeEvdevDevice:
-    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11):
+    def __init__(self, *, name, path, vendor, capabilities, product=0, fd=11,
+                 active_keys=()):
         self.name = name
         self.path = path
         self.fd = fd
@@ -23,6 +24,7 @@ class _FakeEvdevDevice:
             bustype=0x03,
         )
         self._capabilities = capabilities
+        self._active_keys = list(active_keys)
         self.grab = Mock()
         self.ungrab = Mock()
         self.close = Mock()
@@ -31,11 +33,18 @@ class _FakeEvdevDevice:
     def capabilities(self, absinfo=False):
         return self._capabilities
 
+    def active_keys(self, verbose=False):
+        return list(self._active_keys)
+
+    def set_active_keys(self, keys):
+        self._active_keys = list(keys)
+
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
                  on_connect=None, on_disconnect=None, extra_diverts=None,
-                 on_crown=None):
+                 on_thumb_button_down=None, on_thumb_button_up=None,
+                 on_thumb_button_move=None, on_crown=None, **_kwargs):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
@@ -43,9 +52,16 @@ class _CapturingListener:
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
         self.on_crown = on_crown
+        self.on_thumb_button_down = on_thumb_button_down
+        self.on_thumb_button_up = on_thumb_button_up
+        self.on_thumb_button_move = on_thumb_button_move
         self.connected_device = None
         self.started = False
         self.stopped = False
+        self.thumb_rawxy_enabled = False
+
+    def set_thumb_rawxy_enabled(self, enabled):
+        self.thumb_rawxy_enabled = bool(enabled)
 
     def start(self):
         self.started = True
@@ -63,11 +79,15 @@ class _FakeLinuxEcodes:
     REL_Y = 0x01
     REL_WHEEL = 0x08
     REL_HWHEEL = 0x06
+    REL_WHEEL_HI_RES = 0x0B
+    REL_HWHEEL_HI_RES = 0x0C
     BTN_LEFT = 0x110
     BTN_RIGHT = 0x111
     BTN_MIDDLE = 0x112
     BTN_SIDE = 0x113
     BTN_EXTRA = 0x114
+    KEY_LEFTSHIFT = 42
+    KEY_RIGHTSHIFT = 54
 
 
 class _FakeLinuxUInput:
@@ -107,6 +127,34 @@ class BaseDeviceHookRuntimeStateTests(unittest.TestCase):
 
         self.assertEqual(messages, ["Linux evdev remapping restored."])
 
+    def test_should_intercept_events_defaults_to_false(self):
+        """Fresh hook, no Logitech bound -- platform taps must stand
+        down so non-Logitech mice are not silently remapped."""
+        hook = BaseDeviceHook()
+
+        self.assertFalse(hook._should_intercept_events())
+
+    def test_should_intercept_events_flips_on_hid_connect(self):
+        hook = BaseDeviceHook()
+        device = SimpleNamespace(name="MX Master 3S")
+        hook._hid_gesture = SimpleNamespace(connected_device=device)
+
+        hook._on_hid_connect()
+
+        self.assertTrue(hook._should_intercept_events())
+
+    def test_should_intercept_events_flips_off_on_hid_disconnect(self):
+        """KVM switch / sleep wake: the moment HID++ drops the device,
+        the next OS event must pass through untouched."""
+        hook = BaseDeviceHook()
+        device = SimpleNamespace(name="MX Master 3S")
+        hook._hid_gesture = SimpleNamespace(connected_device=device)
+        hook._on_hid_connect()
+        self.assertTrue(hook._should_intercept_events())
+
+        hook._on_hid_disconnect()
+
+        self.assertFalse(hook._should_intercept_events())
 
 
 class BaseDeviceHookDispatchQueueTests(unittest.TestCase):
@@ -635,7 +683,6 @@ class LinuxDeviceHookReconnectTests(unittest.TestCase):
             patch.object(hook, "_setup_evdev", side_effect=fake_setup),
             patch.object(hook, "_listen_loop", side_effect=fake_listen),
             patch.object(hook, "_cleanup_evdev", side_effect=fake_cleanup),
-            patch.object(module.time, "sleep", return_value=None),
         ):
             hook._evdev_loop()
 
@@ -890,7 +937,6 @@ class MacOSEventTapDisabledTests(unittest.TestCase):
 class MacOSTrackpadScrollFilterTests(unittest.TestCase):
     """Verify CGEventTap callback passes through trackpad events untouched."""
 
-    _kCGScrollWheelEventIsContinuous = 88
     _kCGEventScrollWheel = 22  # Quartz.kCGEventScrollWheel
 
     def setUp(self):
@@ -910,14 +956,19 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook.invert_vscroll = True
         hook.block(device_hook.DeviceEvent.HSCROLL_LEFT)
         hook.block(device_hook.DeviceEvent.HSCROLL_RIGHT)
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_3s",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
         return hook
 
-    def _mock_get_field(self, is_continuous, source_user_data=0):
-        """side_effect: returns is_continuous for field 88, source_user_data
-        for kCGEventSourceUserData, and 0 for everything else."""
+    def _mock_get_field(self, scroll_phase, source_user_data=0):
+        """side_effect: returns scroll_phase for kCGScrollWheelEventScrollPhase,
+        source_user_data for kCGEventSourceUserData, and 0 for everything else."""
         def _get(event, field):
-            if field == self._kCGScrollWheelEventIsContinuous:
-                return is_continuous
+            if field == self.mock_quartz.kCGScrollWheelEventScrollPhase:
+                return scroll_phase
             if field == self.mock_quartz.kCGEventSourceUserData:
                 return source_user_data
             return 0
@@ -928,7 +979,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook = self._make_hook()
         cg_event = MagicMock(name="cg_event")
         self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
-            self._mock_get_field(is_continuous=1)
+            self._mock_get_field(scroll_phase=1)
 
         result = hook._event_tap_callback(
             None, self._kCGEventScrollWheel, cg_event, None)
@@ -943,7 +994,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         cg_event = MagicMock(name="cg_event")
 
         def _get(event, field):
-            if field == self._kCGScrollWheelEventIsContinuous:
+            if field == self.mock_quartz.kCGScrollWheelEventScrollPhase:
                 return 1  # trackpad
             if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
                 return 5 * 65536  # non-zero horizontal delta
@@ -965,7 +1016,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         cg_event = MagicMock(name="cg_event")
 
         def _get(event, field):
-            if field == self._kCGScrollWheelEventIsContinuous:
+            if field == self.mock_quartz.kCGScrollWheelEventScrollPhase:
                 return 1  # trackpad / Magic Mouse
             if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
                 return 3 * 65536  # positive = HSCROLL_RIGHT
@@ -988,8 +1039,8 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         cg_event = MagicMock(name="cg_event")
 
         def _get(event, field):
-            if field == self._kCGScrollWheelEventIsContinuous:
-                return 0  # mouse wheel
+            if field == self.mock_quartz.kCGScrollWheelEventScrollPhase:
+                return 0  # mouse wheel (no phase)
             if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
                 return 3 * 65536  # positive = HSCROLL_RIGHT
             if field == self.mock_quartz.kCGEventSourceUserData:
@@ -1004,6 +1055,495 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         self.assertFalse(hook._dispatch_queue.empty())
         event = hook._dispatch_queue.get_nowait()
         self.assertEqual(event.event_type, device_hook.DeviceEvent.HSCROLL_RIGHT)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSPassthroughWhenNoDeviceTests(unittest.TestCase):
+    """End-to-end pin of the KVM pass-through contract on the macOS event
+    tap. The CGEventTap is global -- it sees events from every input
+    device the OS knows about -- so any failure here is a user-visible
+    regression: trackpad swipes get inverted, generic-mouse xbuttons
+    get swallowed, and so on."""
+
+    _kCGEventScrollWheel = 22
+    _kCGEventOtherMouseDown = 25
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        device_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(device_hook, "Quartz") and isinstance(
+                device_hook.Quartz, MagicMock):
+            del device_hook.Quartz
+
+    def _bare_hook(self):
+        hook = device_hook.DeviceHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook.invert_vscroll = True
+        hook.invert_hscroll = True
+        hook.block(device_hook.DeviceEvent.XBUTTON1_DOWN)
+        hook.block(device_hook.DeviceEvent.HSCROLL_RIGHT)
+        return hook
+
+    def test_scroll_passes_through_when_no_logitech_connected(self):
+        hook = self._bare_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = 0
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_xbutton_passes_through_when_no_logitech_connected(self):
+        hook = self._bare_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = 0
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventOtherMouseDown, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+
+class LinuxShiftWheelHScrollTests(unittest.TestCase):
+    """Verify Linux REL_WHEEL is translated to REL_HWHEEL when Shift is held."""
+
+    def _reload_for_linux(self):
+        fake_evdev = SimpleNamespace(
+            ecodes=_FakeLinuxEcodes,
+            UInput=_FakeLinuxUInput,
+            InputDevice=Mock(name="InputDevice"),
+        )
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.dict(sys.modules, {"evdev": fake_evdev}),
+        ):
+            sys.modules.pop("core.device_hook_linux", None)
+            if hasattr(core, "device_hook_linux"):
+                delattr(core, "device_hook_linux")
+            importlib.import_module("core.device_hook_linux")
+            importlib.reload(device_hook)
+
+        def cleanup():
+            sys.modules.pop("core.device_hook_linux", None)
+            if hasattr(core, "device_hook_linux"):
+                delattr(core, "device_hook_linux")
+            importlib.reload(device_hook)
+
+        self.addCleanup(cleanup)
+        return device_hook
+
+    def _make_keyboard(self, *, path="/dev/input/event5", active_keys=()):
+        ecodes = _FakeLinuxEcodes
+        return _FakeEvdevDevice(
+            name="Fake Keyboard",
+            path=path,
+            vendor=0x1234,
+            capabilities={
+                ecodes.EV_KEY: [
+                    ecodes.KEY_LEFTSHIFT,
+                    ecodes.KEY_RIGHTSHIFT,
+                ],
+            },
+            active_keys=active_keys,
+        )
+
+    def _install_hook(self, module, *, keyboards, mouse_hi_res=False):
+        ecodes = module._ecodes
+        rel_caps = [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL]
+        if mouse_hi_res:
+            rel_caps.extend([ecodes.REL_WHEEL_HI_RES, ecodes.REL_HWHEEL_HI_RES])
+        mouse = _FakeEvdevDevice(
+            name="MX Master 3S",
+            path="/dev/input/event1",
+            vendor=module._LOGI_VENDOR,
+            capabilities={
+                ecodes.EV_REL: rel_caps,
+                ecodes.EV_KEY: [
+                    ecodes.BTN_LEFT,
+                    ecodes.BTN_RIGHT,
+                    ecodes.BTN_MIDDLE,
+                ],
+            },
+        )
+        devices_by_path = {kb.path: kb for kb in keyboards}
+        devices_by_path[mouse.path] = mouse
+        fake_evdev_mod = SimpleNamespace(
+            list_devices=lambda: list(devices_by_path)
+        )
+
+        def fake_input_device(path):
+            return devices_by_path[path]
+
+        hook = module.DeviceHook()
+        hook._evdev_device = mouse
+        hook._uinput = _FakeLinuxUInput()
+        hook._set_evdev_remap_ready(True)
+        patches = (
+            patch.object(module, "_evdev_mod", fake_evdev_mod),
+            patch.object(module, "_InputDevice", side_effect=fake_input_device),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return hook, mouse
+
+    def _make_rel_event(self, code, value):
+        return SimpleNamespace(type=_FakeLinuxEcodes.EV_REL, code=code, value=value)
+
+    def test_keyboard_devices_with_shift_are_opened(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard()
+        non_keyboard = _FakeEvdevDevice(
+            name="Random Sensor",
+            path="/dev/input/event9",
+            vendor=0x0000,
+            capabilities={ecodes.EV_KEY: [ecodes.BTN_LEFT]},
+        )
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        # Add the non-keyboard candidate alongside the keyboard.
+        fake_paths = {
+            "/dev/input/event5": keyboard,
+            "/dev/input/event9": non_keyboard,
+            "/dev/input/event1": hook._evdev_device,
+        }
+        with (
+            patch.object(
+                module, "_evdev_mod",
+                SimpleNamespace(list_devices=lambda: list(fake_paths)),
+            ),
+            patch.object(
+                module, "_InputDevice", side_effect=lambda p: fake_paths[p],
+            ),
+        ):
+            hook._ensure_keyboard_devices()
+
+        self.assertIn(keyboard, hook._keyboard_devices)
+        self.assertNotIn(non_keyboard, hook._keyboard_devices)
+        self.assertTrue(non_keyboard.close.called)
+
+    def test_shift_held_reflects_active_keys(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        self.assertTrue(hook._shift_held())
+
+        keyboard.set_active_keys([])
+        self.assertFalse(hook._shift_held())
+
+        keyboard.set_active_keys([ecodes.KEY_RIGHTSHIFT])
+        self.assertTrue(hook._shift_held())
+
+    def test_rel_wheel_with_shift_translates_to_hwheel(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 1)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_called_once_with(
+            ecodes.EV_REL, ecodes.REL_HWHEEL, 1
+        )
+        hook._uinput.write_event.assert_not_called()
+
+    def test_rel_wheel_without_shift_passes_through(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 1)
+        hook._handle_rel(event)
+
+        hook._uinput.write_event.assert_called_once_with(event)
+        hook._uinput.write.assert_not_called()
+
+    def test_invert_hscroll_flips_translated_direction(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard])
+        hook.invert_hscroll = True
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL, 2)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_called_once_with(
+            ecodes.EV_REL, ecodes.REL_HWHEEL, -2
+        )
+
+    def test_rel_wheel_hi_res_with_shift_is_suppressed(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        keyboard = self._make_keyboard(active_keys=[ecodes.KEY_LEFTSHIFT])
+        hook, _ = self._install_hook(module, keyboards=[keyboard], mouse_hi_res=True)
+        hook._ensure_keyboard_devices()
+
+        event = self._make_rel_event(ecodes.REL_WHEEL_HI_RES, 60)
+        hook._handle_rel(event)
+
+        hook._uinput.write.assert_not_called()
+        hook._uinput.write_event.assert_not_called()
+
+    def test_filtered_uinput_events_always_adds_rel_hwheel(self):
+        module = self._reload_for_linux()
+        ecodes = module._ecodes
+        hook = module.DeviceHook()
+        dev_no_tilt = _FakeEvdevDevice(
+            name="Basic Mouse",
+            path="/dev/input/event2",
+            vendor=module._LOGI_VENDOR,
+            capabilities={
+                ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL],
+                ecodes.EV_KEY: [ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE],
+            },
+        )
+
+        events = hook._filtered_uinput_events(dev_no_tilt)
+
+        self.assertIn(ecodes.REL_HWHEEL, events[ecodes.EV_REL])
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSShiftWheelHScrollTests(unittest.TestCase):
+    """Verify Shift+wheel translates into a horizontal scroll event."""
+
+    _kCGScrollWheelEventIsContinuous = 88
+    _kCGEventScrollWheel = 22
+    _kCGEventFlagMaskShift = 0x00020000
+    _kCGScrollEventUnitLine = 0
+    _kCGScrollEventUnitPixel = 1
+    _AXIS1_DELTA = "kCGScrollWheelEventDeltaAxis1"
+    _AXIS1_FIXED = "kCGScrollWheelEventFixedPtDeltaAxis1"
+    _AXIS1_POINT = "kCGScrollWheelEventPointDeltaAxis1"
+    _AXIS2_DELTA = "kCGScrollWheelEventDeltaAxis2"
+    _AXIS2_FIXED = "kCGScrollWheelEventFixedPtDeltaAxis2"
+    _AXIS2_POINT = "kCGScrollWheelEventPointDeltaAxis2"
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGEventFlagMaskShift = self._kCGEventFlagMaskShift
+        self.mock_quartz.kCGScrollEventUnitLine = self._kCGScrollEventUnitLine
+        self.mock_quartz.kCGScrollEventUnitPixel = self._kCGScrollEventUnitPixel
+        for axis_attr in (
+            self._AXIS1_DELTA, self._AXIS1_FIXED, self._AXIS1_POINT,
+            self._AXIS2_DELTA, self._AXIS2_FIXED, self._AXIS2_POINT,
+        ):
+            setattr(self.mock_quartz, axis_attr, axis_attr)
+        device_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(device_hook, "Quartz") and isinstance(
+                device_hook.Quartz, MagicMock):
+            del device_hook.Quartz
+
+    def _make_hook(self, *, block_hscroll=True):
+        hook = device_hook.DeviceHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        hook._connected_device = SimpleNamespace(
+            key="mx_master_3s",
+            thumb_button_via_hid=False,
+            gesture_via_sense_panel=False,
+        )
+        if block_hscroll:
+            hook.block(device_hook.DeviceEvent.HSCROLL_LEFT)
+            hook.block(device_hook.DeviceEvent.HSCROLL_RIGHT)
+        return hook
+
+    def _field_getter(self, *, shift=False, h_fixed=0, v_line=0, v_fixed=0,
+                      v_point=0, is_continuous=0, source_user_data=0):
+        def _get(event, field):
+            if field == self._kCGScrollWheelEventIsContinuous:
+                return is_continuous
+            if field == self.mock_quartz.kCGEventSourceUserData:
+                return source_user_data
+            if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
+                return h_fixed
+            if field == self._AXIS1_DELTA:
+                return v_line
+            if field == self._AXIS1_FIXED:
+                return v_fixed
+            if field == self._AXIS1_POINT:
+                return v_point
+            return 0
+        return _get
+
+    def test_shift_wheel_up_translates_to_horizontal_scroll(self):
+        """Shift held + vertical wheel scroll posts a horizontal-scroll event."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(result, "original vertical scroll must be blocked")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_called_once()
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        # (source, unit, wheelCount, delta1, delta2)
+        self.assertEqual(create_args.args[2], 2,
+                         "must create a two-axis scroll event")
+        self.assertEqual(create_args.args[3], 0,
+                         "vertical delta on translated event must be 0")
+        self.assertNotEqual(create_args.args[4], 0,
+                            "horizontal delta on translated event must be set")
+        self.mock_quartz.CGEventPost.assert_called_once()
+
+    def test_shift_wheel_strips_shift_modifier_from_translated_event(self):
+        """Translated event must clear Shift so apps don't double-translate."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift | 0x00010000)  # Shift + something else
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        # Find the CGEventSetFlags call on the translated event
+        set_flags_calls = [
+            c for c in self.mock_quartz.CGEventSetFlags.call_args_list
+            if c.args[0] is new_event
+        ]
+        self.assertEqual(len(set_flags_calls), 1)
+        applied_flags = set_flags_calls[0].args[1]
+        self.assertEqual(applied_flags & self._kCGEventFlagMaskShift, 0,
+                         "Shift mask must be stripped from translated event")
+        self.assertEqual(applied_flags & 0x00010000, 0x00010000,
+                         "other modifier flags must be preserved")
+
+    def test_translated_event_passes_through_tap_on_reentry(self):
+        """The marker on the translated event makes the tap pass it through."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="re_entered_event")
+        # Source user data set to the shift-wheel marker
+        marker = mouse_hook._SHIFT_WHEEL_HSCROLL_MARKER
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(source_user_data=marker)
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event)
+        # No new event should be created for a re-entered marker event
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_no_shift_means_no_translation(self):
+        """A plain vertical scroll without Shift must not be translated."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = 0  # no modifiers
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIs(result, cg_event, "event must pass through unchanged")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_shift_with_zero_vertical_delta_is_noop(self):
+        """Shift held but no vertical delta (e.g. axis-2 only) does not translate."""
+        hook = self._make_hook()
+        cg_event = MagicMock(name="cg_event")
+        # h_fixed != 0 means the existing hscroll path takes over, not our shift path.
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(h_fixed=3 * 65536)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        # Existing hscroll path: blocked + dispatched, but NOT translated.
+        self.mock_quartz.CGEventCreateScrollWheelEvent.assert_not_called()
+
+    def test_invert_hscroll_flips_translated_direction(self):
+        """`invert_hscroll` must flip the sign of the translated horizontal delta."""
+        hook = self._make_hook()
+        hook.invert_hscroll = True
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        result = hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        self.assertIsNone(result)
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        # delta2 passed to CGEventCreateScrollWheelEvent should be negated (-1 line)
+        self.assertEqual(create_args.args[4], -1)
+        # And the explicit axis-2 set calls should also use negated values.
+        axis2_fixed_calls = [
+            c for c in self.mock_quartz.CGEventSetIntegerValueField.call_args_list
+            if c.args[0] is new_event
+            and c.args[1] == self._AXIS2_FIXED
+        ]
+        self.assertEqual(len(axis2_fixed_calls), 1)
+        self.assertEqual(axis2_fixed_calls[0].args[2], -65536)
+
+    def test_invert_hscroll_off_preserves_translated_direction(self):
+        """Default (invert_hscroll=False) keeps the original sign on translation."""
+        hook = self._make_hook()
+        hook.invert_hscroll = False
+        cg_event = MagicMock(name="cg_event")
+        self.mock_quartz.CGEventGetIntegerValueField.side_effect = \
+            self._field_getter(v_line=1, v_fixed=65536, v_point=10)
+        self.mock_quartz.CGEventGetFlags.return_value = (
+            self._kCGEventFlagMaskShift)
+        new_event = MagicMock(name="translated_event")
+        self.mock_quartz.CGEventCreateScrollWheelEvent.return_value = new_event
+
+        hook._event_tap_callback(
+            None, self._kCGEventScrollWheel, cg_event, None)
+
+        create_args = self.mock_quartz.CGEventCreateScrollWheelEvent.call_args
+        self.assertEqual(create_args.args[4], 1)
+
+
+class GestureEventFamilyTests(unittest.TestCase):
+    def test_gesture_button_event_constants_exist(self):
+        # The Gesture button (thumb) uses the gesture_* family on every device.
+        self.assertEqual(device_hook.DeviceEvent.GESTURE_CLICK, "gesture_click")
+        self.assertEqual(device_hook.DeviceEvent.GESTURE_BUTTON_DOWN, "gesture_button_down")
+        self.assertEqual(device_hook.DeviceEvent.GESTURE_BUTTON_UP, "gesture_button_up")
+
+    def test_sense_panel_event_constants_exist(self):
+        # The MX Master 4 Sense Panel ("Actions Ring") uses the sense_* family.
+        self.assertEqual(device_hook.DeviceEvent.SENSE_CLICK, "sense_click")
+        self.assertEqual(device_hook.DeviceEvent.SENSE_BUTTON_DOWN, "sense_button_down")
+        self.assertEqual(device_hook.DeviceEvent.SENSE_BUTTON_UP, "sense_button_up")
+        self.assertEqual(device_hook.DeviceEvent.SENSE_SWIPE_LEFT, "sense_swipe_left")
 
 
 if __name__ == "__main__":
