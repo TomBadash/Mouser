@@ -385,6 +385,9 @@ _MACOS_DOCK_ICON_NSIMAGE = None
 _MACOS_ACTIVATION_POLICY_REGULAR: "bool | None" = None
 _MACOS_NATIVE_STATUS_ITEM = None
 _MACOS_NATIVE_STATUS_TARGET = None
+# (qmenu, on_left_click) captured at first install, so the status item can be
+# re-created after an activation-policy flip detaches it (see below).
+_MACOS_STATUS_ITEM_PARAMS = None
 _MACOS_QUIT_FILTER = None
 _MACOS_SYSTEM_QUIT_REASONS = {
     "quia",  # kAEQuitAll
@@ -645,6 +648,27 @@ def _schedule_macos_dock_icon_refresh() -> None:
         _install_macos_dock_icon()
 
 
+def _schedule_macos_status_item_reinstall() -> None:
+    """An .accessory -> .regular activation-policy flip detaches our custom
+    NSStatusItem from the menu bar (the object survives, its menu-bar slot does
+    not), so the icon vanishes when the window opens. Re-create it after the
+    flip. Mirrors _schedule_macos_dock_icon_refresh's 0ms + 250ms double-fire
+    so it works whether AppKit detaches synchronously or a tick later. No-op
+    until the item has first been installed."""
+    if sys.platform != "darwin" or _MACOS_STATUS_ITEM_PARAMS is None:
+        return
+
+    def _reinstall():
+        if _MACOS_STATUS_ITEM_PARAMS is not None:
+            _install_native_macos_status_item(*_MACOS_STATUS_ITEM_PARAMS)
+
+    try:
+        QTimer.singleShot(0, _reinstall)
+        QTimer.singleShot(250, _reinstall)
+    except Exception:
+        _reinstall()
+
+
 def _set_macos_activation_policy(regular: bool) -> None:
     """Toggle between the Regular (foreground, Dock + Cmd+Tab) and
     Accessory (menu-bar only) policies. On a Regular promotion AppKit
@@ -677,6 +701,7 @@ def _set_macos_activation_policy(regular: bool) -> None:
     if regular:
         _install_macos_dock_icon()
         _schedule_macos_dock_icon_refresh()
+        _schedule_macos_status_item_reinstall()
 
 
 def _activate_macos_window():
@@ -706,11 +731,24 @@ def _install_native_macos_status_item(qmenu, on_left_click):
     any failure -- callers should fall back to ``QSystemTrayIcon``.
     """
     global _MACOS_NATIVE_STATUS_ITEM, _MACOS_NATIVE_STATUS_TARGET
+    global _MACOS_STATUS_ITEM_PARAMS
     if sys.platform != "darwin":
         return None
+    _MACOS_STATUS_ITEM_PARAMS = (qmenu, on_left_click)
     appkit = _macos_appkit()
     if appkit is None:
         return None
+    # A prior item may still exist (re-install after an activation-policy flip
+    # detached the old one); drop it first so we never leave a duplicate.
+    if _MACOS_NATIVE_STATUS_ITEM is not None:
+        try:
+            appkit.NSStatusBar.systemStatusBar().removeStatusItem_(
+                _MACOS_NATIVE_STATUS_ITEM
+            )
+        except Exception:
+            pass
+        _MACOS_NATIVE_STATUS_ITEM = None
+        _MACOS_NATIVE_STATUS_TARGET = None
     if _MacOSStatusItemTarget is None:
         print("[Mouser] Foundation.NSObject unavailable; using Qt tray icon")
         return None
