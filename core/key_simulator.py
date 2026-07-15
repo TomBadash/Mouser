@@ -710,6 +710,7 @@ if sys.platform == "win32":
 elif sys.platform == "darwin":
     _INJECTED_EVENT_MARKER = 0x4D4F5554
     import ctypes
+    import functools
 
     try:
         import Quartz
@@ -723,6 +724,33 @@ elif sys.platform == "darwin":
     except ImportError:
         _AppKit = None
         _APPKIT_OK = False
+
+    try:
+        import objc as _objc
+    except ImportError:
+        _objc = None
+
+    def _autoreleased(fn):
+        """Run ``fn`` inside an NSAutoreleasePool.
+
+        Key/mouse injection creates Quartz CGEvent and AppKit NSEvent objects.
+        These executors are called from several threads that have no pool of
+        their own -- the mouse-hook dispatch worker, the HID gesture thread,
+        the Actions Ring, and the safety-release timers. Without a pool the
+        autoreleased Foundation temporaries those calls produce never drain
+        and accumulate for the process lifetime (issue #233: memory grows with
+        every click). Wrapping each entry point guarantees a pool regardless of
+        which thread invokes it.
+        """
+        if _objc is None:
+            return fn
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with _objc.autorelease_pool():
+                return fn(*args, **kwargs)
+
+        return wrapper
 
     # CGKeyCode values used on macOS
     kVK_Command = 0x37
@@ -785,6 +813,7 @@ elif sys.platform == "darwin":
     MOUSEEVENTF_WHEEL  = 0x0800
     MOUSEEVENTF_HWHEEL = 0x01000
 
+    @_autoreleased
     def inject_scroll(flags, delta):
         """Inject a scroll event on macOS using CGEvent."""
         if not _QUARTZ_OK:
@@ -858,9 +887,11 @@ elif sys.platform == "darwin":
                 pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
+    @_autoreleased
     def inject_mouse_down(action_id):
         _inject_mac_mouse(action_id, True)
 
+    @_autoreleased
     def inject_mouse_up(action_id):
         _inject_mac_mouse(action_id, False)
 
@@ -875,6 +906,7 @@ elif sys.platform == "darwin":
         kVK_Control: Quartz.kCGEventFlagMaskControl if _QUARTZ_OK else 0,
     }
 
+    @_autoreleased
     def send_key_combo(keys, hold_ms=50):
         """Press and release a combination of CGKeyCodes."""
         if not _QUARTZ_OK:
@@ -1324,6 +1356,7 @@ elif sys.platform == "darwin":
         "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
     })
 
+    @_autoreleased
     def execute_action(action_id):
         if action_id.startswith("custom:"):
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
