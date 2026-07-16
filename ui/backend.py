@@ -1592,6 +1592,8 @@ class Backend(QObject):
                 self._pending_update_plan_path,
                 helper_dir=self._pending_update_helper_dir,
             )
+            if self._engine and hasattr(self._engine, "shutdown_daemon"):
+                self._engine.shutdown_daemon()
         except Exception as exc:
             if engine_stopped and self._engine:
                 try:
