@@ -162,11 +162,9 @@ class NativeInvertApplyTests(unittest.TestCase):
 
         return _route
 
-    def test_apply_invert_on_writes_low_res_invert(self):
-        # Mouser drives wheel mode to native low-res with invert ON
-        # regardless of the device's current state. Hi-res mode causes
-        # jumpy scroll on apps without trackpad-class smoothing, so we
-        # always clear bit 1.
+    def test_apply_invert_on_writes_invert_keeping_low_res(self):
+        # Device is already low-res, so preserving bit 1 leaves it low-res.
+        # Mouser only adds the invert bit.
         listener = self._setup_capable_listener()
         get_mode = _resp([0x00])
         with patch.object(
@@ -178,13 +176,15 @@ class NativeInvertApplyTests(unittest.TestCase):
             listener._apply_pending_native_wheel_invert()
             self.assertTrue(listener._wheel_divert_state)
             req.assert_any_call(0x07, 1, [])               # read current mode
-            req.assert_any_call(0x07, 2, [0x04])           # native low-res + invert
+            req.assert_any_call(0x07, 2, [0x04])           # low-res kept + invert
             req.assert_any_call(0x08, 2, [0x00, 0x01])
 
-    def test_apply_invert_on_clears_existing_hires_bit(self):
-        # If the device is currently in hi-res mode (e.g. left over from
-        # Logitech Options+ or a previous Mouser build), Mouser must
-        # forcibly downgrade it to low-res to fix the jumpy feel.
+    def test_apply_invert_on_preserves_existing_hires_bit(self):
+        # The resolution bit is not ours. On Linux the kernel's
+        # hid-logitech-hidpp enables hi-res at probe and then divides wheel
+        # deltas by a latched multiplier; clearing it here made the device
+        # emit 1 unit/detent while the kernel still divided, so scrolling
+        # crawled and survived process exit (issue #244).
         listener = self._setup_capable_listener()
         get_mode = _resp([0x02])  # hi-res, native, no invert
         with patch.object(
@@ -194,10 +194,10 @@ class NativeInvertApplyTests(unittest.TestCase):
             with listener._wheel_divert_lock:
                 listener._pending_wheel_divert = (True, False)
             listener._apply_pending_native_wheel_invert()
-            req.assert_any_call(0x07, 2, [0x04])           # hi-res CLEARED, invert set
+            req.assert_any_call(0x07, 2, [0x06])           # hi-res KEPT, invert set
             req.assert_any_call(0x08, 2, [0x00, 0x00])
 
-    def test_apply_invert_off_writes_low_res_no_invert(self):
+    def test_apply_invert_off_preserves_hires_bit(self):
         listener = self._setup_capable_listener()
         listener._wheel_divert_state = True
         get_mode = _resp([0x06])  # hi-res + invert active
@@ -209,12 +209,13 @@ class NativeInvertApplyTests(unittest.TestCase):
                 listener._pending_wheel_divert = (False, False)
             listener._apply_pending_native_wheel_invert()
             self.assertTrue(listener._wheel_divert_state)
-            req.assert_any_call(0x07, 2, [0x00])           # firmware default
+            req.assert_any_call(0x07, 2, [0x02])           # invert dropped, hi-res kept
             req.assert_any_call(0x08, 2, [0x00, 0x00])
 
-    def test_apply_invert_clears_divert_bit(self):
+    def test_apply_invert_clears_divert_bit_but_keeps_hires(self):
         # Pathological case: device left in divert state from a crashed
-        # Mouser session. We must clear bit 0 (target) AND bit 1 (hi-res).
+        # Mouser session. We must still clear bit 0 (target) to recover it,
+        # but bit 1 (hi-res) is not ours to clear -- see #244.
         listener = self._setup_capable_listener()
         get_mode = _resp([0x07])  # target + hi-res + invert
         with patch.object(
@@ -224,7 +225,48 @@ class NativeInvertApplyTests(unittest.TestCase):
             with listener._wheel_divert_lock:
                 listener._pending_wheel_divert = (True, False)
             listener._apply_pending_native_wheel_invert()
-            req.assert_any_call(0x07, 2, [0x04])           # only invert kept
+            req.assert_any_call(0x07, 2, [0x06])           # divert cleared, hi-res kept
+
+    def test_kernel_hires_survives_connect_with_invert_off(self):
+        # Regression for #244. The reported case: a Linux user with hi-res
+        # enabled by the kernel who never turned on scroll inversion. The
+        # engine still calls request_wheel_native_invert(False, False) for
+        # any hi-res-capable device, which used to blind-write 0x00 and
+        # clobber the kernel's hi-res, leaving scroll ~8-15x too slow until
+        # the mouse was physically power-cycled. Nothing needs changing
+        # here, so the correct behaviour is to issue no write at all.
+        listener = self._setup_capable_listener()
+        get_mode = _resp([0x02])  # kernel enabled hi-res at probe
+        with patch.object(
+            listener, "_request",
+            side_effect=self._request_router(get_mode),
+        ) as req:
+            with listener._wheel_divert_lock:
+                listener._pending_wheel_divert = (False, False)
+            listener._apply_pending_native_wheel_invert()
+            self.assertEqual(
+                [c for c in req.call_args_list if c.args[:2] == (0x07, 2)],
+                [],
+                "Connect with invert off must not touch the wheel mode (#244)",
+            )
+
+    def test_stop_restores_wheel_mode_captured_at_connect(self):
+        # stop() used to "revert" by writing 0x00, the same value that broke
+        # #244, so even a graceful exit left the device degraded. It must
+        # restore the byte we actually found at connect.
+        listener = self._setup_capable_listener()
+        listener._dev = MagicMock()
+        listener._wheel_divert_state = True
+        listener._hires_wheel_mode_initial = 0x02  # hi-res as found
+        with patch.object(
+            listener, "_request", side_effect=self._request_router(_resp([0x06])),
+        ) as req:
+            listener.stop()
+        self.assertIn(
+            ((0x07, 2, [0x02]), {}),
+            [(c.args, c.kwargs) for c in req.call_args_list],
+            "stop() must restore the wheel mode captured at connect (#244)",
+        )
 
     def test_apply_invert_skips_redundant_write(self):
         # Device already exactly in target state → no setWheelMode call.

@@ -222,6 +222,21 @@ def _register_atexit_listener(listener):
             _ATEXIT_REGISTERED = True
 
 
+def _wheel_mode_display(mode):
+    """Render a 0x2121 wheel-mode byte for logs, so a future #244-style
+    report can be diagnosed from the log alone."""
+    if mode is None:
+        return "unknown"
+    flags = []
+    if mode & 0x01:
+        flags.append("divert")
+    if mode & 0x02:
+        flags.append("hi-res")
+    if mode & 0x04:
+        flags.append("invert")
+    return f"0x{mode:02X}({'+'.join(flags) or 'none'})"
+
+
 def _log_once(key, message):
     if key in _LOG_ONCE_KEYS:
         return
@@ -1000,6 +1015,14 @@ class HidGestureListener:
         # pending/result slot. The event signals listener-loop completion.
         self._hires_wheel_idx = None
         self._hires_wheel_multiplier = None
+        # 0x2121 wheel mode as found at connect, before Mouser touches it.
+        # The resolution bit is owned by whoever set it up (on Linux the
+        # in-kernel hid-logitech-hidpp driver enables hi-res at probe and
+        # then divides wheel deltas by a latched multiplier), so we restore
+        # this exact byte on stop rather than assuming a default. None means
+        # "never read it", which is the only state in which we refuse to
+        # write bit2 at all.
+        self._hires_wheel_mode_initial = None
         self._thumbwheel_idx = None
         self._thumbwheel_multiplier = None
         self._wheel_divert_target = (False, False)
@@ -1048,15 +1071,20 @@ class HidGestureListener:
         return True
 
     def stop(self):
-        # Best-effort revert to native non-inverted before tearing down, so a
-        # graceful exit leaves the device in firmware default state. We log
+        # Best-effort revert before tearing down, so a graceful exit leaves the
+        # device exactly as we found it. We restore the wheel-mode byte captured
+        # at connect rather than writing a composed default: the resolution bit
+        # is not ours to choose, and guessing it is what broke #244. We log
         # failures rather than swallow them: a failed revert means the next
         # session will see an unexpected divert state and the user needs the
         # breadcrumb to debug it. We do not propagate -- ``stop`` must always
         # complete the rest of teardown (close device, join thread).
         if self._dev is not None and self._wheel_divert_state:
             try:
-                self._set_native_wheel_invert_vertical(False)
+                if self._hires_wheel_mode_initial is not None:
+                    self._write_wheel_mode(self._hires_wheel_mode_initial)
+                else:
+                    self._set_native_wheel_invert_vertical(False)
             except Exception as exc:  # noqa: BLE001 - teardown must complete
                 print(f"[HidGesture] stop: vertical invert revert failed: {exc}")
             try:
@@ -2008,37 +2036,86 @@ class HidGestureListener:
             self._finish_pending_smart_shift(None)
 
     # 0x2121 setWheelMode (fn 2) bitfield: bit0=target (0=HID, 1=divert),
-    # bit1=resolution (0=low, 1=hi-res), bit2=invert. Mouser keeps target
-    # and resolution at 0 and only drives bit2 -- hi-res emits fractional
-    # events per detent which renders as jumpy scroll on apps without
-    # trackpad-class smoothing.
+    # bit1=resolution (0=low, 1=hi-res), bit2=invert. Mouser drives *only*
+    # bit2 and preserves bits 0-1 as found: the resolution bit belongs to
+    # whoever configured the device (on Linux the kernel's
+    # hid-logitech-hidpp enables hi-res at probe and divides deltas by a
+    # latched multiplier). Composing an absolute byte here clobbers that and
+    # leaves scroll crawling until the mouse is power-cycled -- see #244.
     _WHEEL_MODE_BIT_TARGET     = 0x01
     _WHEEL_MODE_BIT_RESOLUTION = 0x02
     _WHEEL_MODE_BIT_INVERT     = 0x04
     # 0x2150 setThumbwheelReporting (fn 2): [reportingMode, invertDirection].
     _THUMBWHEEL_SET_REPORTING_FN = 2
 
+    def _read_wheel_mode(self):
+        """Return the current 0x2121 wheel mode byte, or None if it cannot
+        be read. Listener-thread only."""
+        if self._hires_wheel_idx is None or self._dev is None:
+            return None
+        resp = self._request(self._hires_wheel_idx, 1, [])
+        if resp is None:
+            return None
+        _, _, _, _, params = resp
+        if not params:
+            return None
+        return int(params[0]) & 0xFF
+
+    def _write_wheel_mode(self, mode: int) -> bool:
+        """Write an absolute 0x2121 wheel mode byte. Listener-thread only.
+        Callers must have composed `mode` from a freshly read value; see
+        ``_set_native_wheel_invert_vertical``."""
+        if self._hires_wheel_idx is None or self._dev is None:
+            return False
+        resp = self._request(self._hires_wheel_idx, 2, [mode & 0xFF])
+        return resp is not None
+
     def _set_native_wheel_invert_vertical(self, invert: bool) -> bool:
-        """Read-modify-write the 0x2121 wheel mode to native low-res with
-        the invert bit reflecting `invert`. Listener-thread only. Returns
-        True when the device acknowledges the write, or when the feature
-        is absent AND no inversion was requested -- claiming success for
-        an invert the firmware cannot perform would make the engine
+        """Flip only the invert bit (bit2) of the 0x2121 wheel mode, leaving
+        the target (bit0) and resolution (bit1) bits exactly as found.
+
+        This is a genuine read-modify-write: the previous implementation
+        composed an absolute byte (0x00 / 0x04) and so silently cleared the
+        resolution bit, forcing the wheel out of hi-res. On Linux the kernel
+        enables hi-res at probe and keeps dividing deltas by a latched
+        multiplier, so clearing it left scrolling ~8-15x too slow, and the
+        mode lives in device RAM, so it survived process exit and only
+        cleared on a power cycle (issue #244).
+
+        Listener-thread only. Returns True when the device acknowledges the
+        write, when the mode already matches (no write needed), or when the
+        feature is absent AND no inversion was requested. Claiming success
+        for an invert the firmware cannot perform would make the engine
         suppress the OS-layer fallback and lose the inversion entirely."""
         if self._hires_wheel_idx is None:
             return not invert
         if self._dev is None:
             return False
-        target_mode = self._WHEEL_MODE_BIT_INVERT if invert else 0x00
-        if invert:
-            current_resp = self._request(self._hires_wheel_idx, 1, [])
-            if current_resp is not None:
-                _, _, _, _, params = current_resp
-                current_mode = int(params[0]) & 0xFF if params else None
-                if current_mode == target_mode:
-                    return True
-        resp = self._request(self._hires_wheel_idx, 2, [target_mode])
-        return resp is not None
+        current_mode = self._read_wheel_mode()
+        if current_mode is None:
+            # Fall back to the byte captured at connect, so a transient read
+            # failure does not cost us the preserved resolution bit.
+            current_mode = self._hires_wheel_mode_initial
+        if current_mode is None:
+            # Never managed to read the mode. Writing a composed byte here
+            # would be the very guess that broke #244, so refuse: report
+            # success only when there is nothing to do, otherwise let the
+            # engine fall back to OS-layer inversion.
+            return not invert
+        # bit0 (target): always cleared. Mouser wants native HID reporting,
+        # and clearing it also recovers a device left diverted by a crashed
+        # session.
+        # bit2 (invert): the only bit we actually drive.
+        # Everything else -- bit1 (resolution) and any reserved bits -- is
+        # carried through untouched. Masking down to known bits is how #244
+        # happened, so clear exactly what we mean to clear and no more.
+        target_mode = (
+            current_mode
+            & ~(self._WHEEL_MODE_BIT_TARGET | self._WHEEL_MODE_BIT_INVERT)
+        ) | (self._WHEEL_MODE_BIT_INVERT if invert else 0x00)
+        if current_mode == target_mode:
+            return True
+        return self._write_wheel_mode(target_mode)
 
     def _set_native_wheel_invert_horizontal(self, invert: bool) -> bool:
         """Set firmware invert on the thumbwheel (0x2150 fn 2) without
@@ -2733,6 +2810,7 @@ class HidGestureListener:
             self._rawxy_enabled = False
             self._hires_wheel_idx = None
             self._hires_wheel_multiplier = None
+            self._hires_wheel_mode_initial = None
             self._thumbwheel_idx = None
             self._thumbwheel_multiplier = None
             self._wheel_divert_state = False
@@ -2971,9 +3049,11 @@ class HidGestureListener:
                             self._hires_wheel_multiplier = (
                                 int(mul) if mul not in (None, 0) else None
                             )
+                        self._hires_wheel_mode_initial = self._read_wheel_mode()
                         print(
                             f"[HidGesture] HIRES_WHEEL_ENHANCED @0x{hw_fi:02X} "
-                            f"mul={self._hires_wheel_multiplier}"
+                            f"mul={self._hires_wheel_multiplier} "
+                            f"mode={_wheel_mode_display(self._hires_wheel_mode_initial)}"
                         )
                     tw_fi = self._wheel_feature_indexes.get(FEAT_THUMB_WHEEL)
                     if tw_fi:
