@@ -288,6 +288,34 @@ class EngineHorizontalScrollTests(unittest.TestCase):
         self.assertTrue(engine._app_detector.start_called)
 
 
+class EngineDesktopCycleTests(unittest.TestCase):
+    def _make_engine(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_cycle_desktops_refreshes_display_after_cursor_moves(self):
+        engine = self._make_engine()
+        desktop_info = Mock(side_effect=[(1, 1), (2, 1)])
+
+        with (
+            patch("core.engine.sys.platform", "darwin"),
+            patch.object(engine, "_get_macos_desktop_info", desktop_info),
+            patch("core.engine.execute_action") as execute_action_mock,
+        ):
+            engine._cycle_desktops()  # Secondary display: one desktop, skip.
+            engine._cycle_desktops()  # Main display: refresh and switch.
+
+        self.assertEqual(desktop_info.call_count, 2)
+        execute_action_mock.assert_called_once_with("space_right")
+
+
 class EngineReplayPhaseOneTests(unittest.TestCase):
     def _make_engine(self):
         from core.engine import Engine
