@@ -153,6 +153,14 @@ confound.
 6. **Wrap the gesture-thread report-consumption loop and the auxiliary
    threads** (§2.2) with the same helper: reconnect loop, battery poll,
    smart-shift poll. One shared decorator, applied at thread entry points.
+   > **Status:** steps 5–6 are implemented on this branch — `core/hid_gesture.py`
+   > now binds `NSAutoreleasePool` via `libobjc` (ctypes, no PyObjC dependency,
+   > graceful no-op fallback) and drains a pool around each
+   > `CFRunLoopRunInMode` pump iteration in `read()` plus the
+   > `enumerate_infos`/`open`/`write`/`close` entry points, covering every
+   > thread that crosses into IOKit/Foundation at the choke point. Awaiting
+   > on-device validation (step 7).
+
 7. **Validate** with the reporters' existing protocols (they have offered):
    bdhwrsh's scroll-only vs. click-only A/B plus 10 h footprint sampling;
    maxhis' `heap -s`/`leaks --groupByType` before/after — expected result:
