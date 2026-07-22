@@ -130,6 +130,54 @@ _BUTTON_GESTURE_LABELS = {
     **{f"{b}_tap": f"{_SWIPE_BUTTON_LABELS[b]} tap" for b in SWIPE_CAPABLE_BUTTONS},
 }
 
+# ── Pan ───────────────────────────────────────────────────────────────────────
+# Pan is the other hold-and-move mode: instead of resolving the slide into one
+# of four discrete swipes, it streams the motion out as scroll for as long as
+# the button is held, turning it into a hand tool (Logitech Options+ calls this
+# "Pan"). It reuses Gesture Swipe's arm/sample/release plumbing at the hook, so
+# it is offered on exactly the buttons that can already own a slide, and the two
+# are mutually exclusive per button -- both are a mode the button is *in*, not
+# an action it fires, which is why (like GESTURE_SWIPE_ACTION) this is a
+# sentinel rather than an entry in the ACTIONS tables.
+PAN_ACTION = "pan"
+# Only the OS-motion owners for now. The native HID controls (thumb Gesture
+# button, Sense Panel) would need the pan scroller to lock to a single motion
+# source the way GestureRecognizer does -- while they are held, rawXY *and* OS
+# pointer motion both describe the same movement, so feeding both would scroll
+# at double speed. Deliberately left out rather than shipped double-counting.
+PAN_CAPABLE_BUTTONS = OS_MOTION_GESTURE_OWNERS
+
+# Pointer-delta -> scroll multiplier presets, slowest to fastest.
+PAN_SPEED_PRESETS = (0.5, 0.75, 1.0, 1.5, 2.0)
+PAN_DEFAULT_SPEED_INDEX = 2
+PAN_DEFAULT_SPEED = PAN_SPEED_PRESETS[PAN_DEFAULT_SPEED_INDEX]
+
+
+def pan_speed_index_for(speed):
+    """Return the speed preset index nearest to a stored multiplier."""
+    return min(
+        range(len(PAN_SPEED_PRESETS)),
+        key=lambda i: abs(PAN_SPEED_PRESETS[i] - float(speed)),
+    )
+
+
+# Momentum ("throw" the content and let it glide after release). Off by
+# default so plain Pan keeps its exact feel. Glide is the decay time constant
+# in seconds, continuously adjustable from a quick stop to a long coast.
+PAN_GLIDE_MIN = 0.15
+PAN_GLIDE_MAX = 0.6
+PAN_DEFAULT_GLIDE = 0.4
+
+
+def clamp_pan_glide(glide_tau):
+    """Clamp a stored glide time constant to the supported range."""
+    try:
+        value = float(glide_tau)
+    except (TypeError, ValueError):
+        return PAN_DEFAULT_GLIDE
+    return min(PAN_GLIDE_MAX, max(PAN_GLIDE_MIN, value))
+
+
 GESTURE_SENSITIVITY_PX = (18, 25, 33, 44, 56)
 GESTURE_DEFAULT_SENSITIVITY_INDEX = 1
 
@@ -225,7 +273,7 @@ def _default_actions_ring_slots(platform=None):
 
 
 DEFAULT_CONFIG = {
-    "version": 11,
+    "version": 12,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -278,6 +326,12 @@ DEFAULT_CONFIG = {
         "gesture_commit_window_ms": 400,
         "gesture_settle_ms": 90,
         "gesture_cross_ratio": 0.5,
+        "pan_speed": PAN_DEFAULT_SPEED,  # pointer-delta -> scroll multiplier
+        "pan_natural": True,             # True = content follows the mouse
+        "pan_momentum": False,           # glide after a flick-release ("throw")
+        "pan_glide_across_windows": True,  # glide follows the pointer between windows
+        "pan_glide": PAN_DEFAULT_GLIDE,  # glide decay time constant (seconds)
+
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
@@ -414,6 +468,45 @@ def button_gesture_owners(cfg, device_buttons=None):
     if device_buttons is not None:
         owners &= set(device_buttons)
     return owners
+
+
+def pan_owners(cfg, device_buttons=None):
+    """OS-motion pan owners: buttons whose active-profile action is PAN_ACTION.
+
+    Mirrors ``button_gesture_owners`` -- same OS-motion owner set, same
+    device-capability gate. The native HID controls (thumb Gesture button /
+    Sense Panel) pan through their rawXY passthrough instead; see
+    ``native_pan_active``.
+    """
+    mappings = get_active_mappings(cfg)
+    owners = {
+        owner for owner in OS_MOTION_GESTURE_OWNERS
+        if mappings.get(owner, "none") == PAN_ACTION
+    }
+    if device_buttons is not None:
+        owners &= set(device_buttons)
+    return owners
+
+
+def native_pan_active(cfg, button):
+    """True when a native HID++ control (thumb Gesture button / Sense Panel) is
+    in Pan mode (its action is the sentinel)."""
+    return get_active_mappings(cfg).get(button, "none") == PAN_ACTION
+
+
+def pan_settings(cfg):
+    """Return ``(speed, natural, momentum, glide_tau, across_windows)`` for
+    the pan scroller."""
+    settings = cfg.get("settings", {})
+    return (
+        settings.get("pan_speed", PAN_DEFAULT_SPEED),
+        settings.get("pan_natural", True),
+        settings.get("pan_momentum", False),
+        # Clamped so a stored value from an older build (or a hand edit)
+        # outside today's range lands on the nearest bound.
+        clamp_pan_glide(settings.get("pan_glide", PAN_DEFAULT_GLIDE)),
+        settings.get("pan_glide_across_windows", True),
+    )
 
 
 def native_gesture_swipe_active(cfg, button):
@@ -729,6 +822,18 @@ def _migrate(cfg):
         settings = cfg.setdefault("settings", {})
         settings.setdefault("scroll_force", 50)
         cfg["version"] = 11
+
+    if version < 12:
+        # v11 -> v12: Pan (hold a button and slide to scroll) plus its
+        # momentum glide. Momentum is off by default so a plain Pan mapping
+        # keeps its exact feel.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("pan_speed", PAN_DEFAULT_SPEED)
+        settings.setdefault("pan_natural", True)
+        settings.setdefault("pan_momentum", False)
+        settings.setdefault("pan_glide", PAN_DEFAULT_GLIDE)
+        settings.setdefault("pan_glide_across_windows", True)
+        cfg["version"] = 12
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

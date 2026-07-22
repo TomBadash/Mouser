@@ -23,6 +23,9 @@ from core.config import (
     get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
     set_button_haptic,
     GESTURE_SWIPE_ACTION, SWIPE_CAPABLE_BUTTONS, GESTURE_SWIPE_DIRECTIONS,
+    PAN_ACTION, PAN_CAPABLE_BUTTONS, PAN_SPEED_PRESETS, PAN_DEFAULT_SPEED,
+    PAN_GLIDE_MIN, PAN_GLIDE_MAX, PAN_DEFAULT_GLIDE, pan_speed_index_for,
+    clamp_pan_glide,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -81,6 +84,8 @@ def _action_label(action_id):
         return custom_action_label(action_id)
     if action_id == GESTURE_SWIPE_ACTION:
         return "Gesture Swipe"
+    if action_id == PAN_ACTION:
+        return "Pan"
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
 
 
@@ -926,6 +931,111 @@ class Backend(QObject):
         if btns is None:
             return []
         return [b for b in SWIPE_CAPABLE_BUTTONS if b in btns]
+
+    @Property(bool, constant=True)
+    def supportsPan(self):
+        """Whether this platform can inject the scroll a pan hold produces.
+
+        Gated on the hook implementing _emit_pan_scroll, which today is macOS
+        only. Windows/Linux keep the chip hidden rather than offering a button
+        mode that would silently do nothing.
+        """
+        return sys.platform == "darwin"
+
+    @Property(list, notify=deviceLayoutChanged)
+    def panButtons(self):
+        """Buttons the connected device advertises that can be put into Pan mode
+        (mode shift, back, forward, middle). Empty when the platform/device
+        doesn't support it. Drives the per-button "Pan" chip in the UI."""
+        if not self.supportsPan:
+            return []
+        btns = self._effective_supported_buttons
+        if btns is None:
+            return []
+        return [b for b in PAN_CAPABLE_BUTTONS if b in btns]
+
+    @Property(int, notify=settingsChanged)
+    def panSpeedIndex(self):
+        """Index into PAN_SPEED_PRESETS for the stored pan speed multiplier."""
+        return pan_speed_index_for(
+            self._cfg.get("settings", {}).get("pan_speed", PAN_DEFAULT_SPEED)
+        )
+
+    @Slot(int)
+    def setPanSpeedIndex(self, index):
+        if not 0 <= int(index) < len(PAN_SPEED_PRESETS):
+            return
+        self._cfg.setdefault("settings", {})["pan_speed"] = PAN_SPEED_PRESETS[int(index)]
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Property(bool, notify=settingsChanged)
+    def panNatural(self):
+        """True = content follows the mouse (hand-tool); False = scrollbar-style."""
+        return bool(self._cfg.get("settings", {}).get("pan_natural", True))
+
+    @Slot(bool)
+    def setPanNatural(self, value):
+        self._cfg.setdefault("settings", {})["pan_natural"] = bool(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Property(bool, notify=settingsChanged)
+    def panMomentum(self):
+        """True = a flick-release keeps gliding with decaying momentum."""
+        return bool(self._cfg.get("settings", {}).get("pan_momentum", False))
+
+    @Slot(bool)
+    def setPanMomentum(self, value):
+        self._cfg.setdefault("settings", {})["pan_momentum"] = bool(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Property(bool, notify=settingsChanged)
+    def panGlideAcrossWindows(self):
+        """True = a glide follows the pointer between windows; False = it is
+        pinned to the window the throw happened over."""
+        return bool(self._cfg.get("settings", {})
+                    .get("pan_glide_across_windows", True))
+
+    @Slot(bool)
+    def setPanGlideAcrossWindows(self, value):
+        self._cfg.setdefault("settings", {})["pan_glide_across_windows"] = (
+            bool(value)
+        )
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Property(float, notify=settingsChanged)
+    def panGlide(self):
+        """Glide decay time constant in seconds (continuous)."""
+        return clamp_pan_glide(
+            self._cfg.get("settings", {}).get("pan_glide", PAN_DEFAULT_GLIDE)
+        )
+
+    @Property(float, constant=True)
+    def panGlideMin(self):
+        return PAN_GLIDE_MIN
+
+    @Property(float, constant=True)
+    def panGlideMax(self):
+        return PAN_GLIDE_MAX
+
+    @Slot(float)
+    def setPanGlide(self, value):
+        self._cfg.setdefault("settings", {})["pan_glide"] = clamp_pan_glide(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
 
     @Property(bool, constant=True)
     def isMacOS(self):

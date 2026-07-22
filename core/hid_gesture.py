@@ -811,6 +811,8 @@ HIDPP_ERROR_NAMES = {
 }
 
 KNOWN_CID_NAMES = {
+    0x0053: "Back Button",
+    0x0056: "Forward Button",
     0x00C3: "Mouse Gesture Button",
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
@@ -955,6 +957,11 @@ class HidGestureListener:
         # reads off this set so callers never suppress the OS-level BTN_TASK
         # fallback while the device is still emitting it.
         self._extra_divert_acks: set[int] = set()
+        # Pending replacement for the static extra-divert set, queued by
+        # ``update_extra_diverts`` (any thread) and applied inside the listener
+        # loop like the other ``_pending_*`` commands so setCidReporting is
+        # only ever issued from the read thread.
+        self._pending_extra_diverts: dict | None = None
         self._dev       = None          # hid.device()
         self._thread    = None
         self._running   = False
@@ -1705,6 +1712,57 @@ class HidGestureListener:
             if cid == self._thumb_button_cid:
                 self._thumb_button_cid = None
             self._extra_diverts.pop(cid, None)
+
+    def update_extra_diverts(self, diverts) -> None:
+        """Queue a replacement static extra-divert set (thread-safe).
+
+        The hook calls this when a remap changes which CIDs need diverting
+        (e.g. a side button gains or loses a hold mode) so the change lands
+        without waiting for a reconnect. Applied inside the listener loop,
+        like every other ``_pending_*`` command, so setCidReporting never
+        races the read thread.
+        """
+        self._pending_extra_diverts = dict(diverts or {})
+
+    def _apply_pending_extra_diverts(self):
+        pending, self._pending_extra_diverts = self._pending_extra_diverts, None
+        if pending is None:
+            return
+        # Drop statics that are no longer requested. Never touches the thumb
+        # extra -- that entry is per-connect dynamic, not a static.
+        for cid in [c for c in self._static_extra_diverts if c not in pending]:
+            del self._static_extra_diverts[cid]
+            if cid == self._thumb_button_cid:
+                continue
+            self._extra_diverts.pop(cid, None)
+            self._extra_divert_acks.discard(cid)
+            if self._feat_idx is not None:
+                hi = (cid >> 8) & 0xFF
+                lo = cid & 0xFF
+                try:
+                    self._tx(LONG_ID, self._feat_idx, 3,
+                             [hi, lo, _UNDIVERT_BUTTON, 0x00, 0x00])
+                    print(f"[HidGesture] Extra divert {_format_cid(cid)} removed")
+                except Exception as exc:  # noqa: BLE001 - keep loop alive
+                    print(f"[HidGesture] Extra undivert {_format_cid(cid)} "
+                          f"failed: {exc}")
+        # Install / retry the requested set. Already-acked CIDs only get their
+        # callbacks refreshed (no HID traffic), which makes the common
+        # profile-switch case free; unacked ones (new, or popped by an earlier
+        # setCidReporting failure) are (re)diverted.
+        for cid, info in pending.items():
+            self._static_extra_diverts[cid] = info
+            if cid in self._extra_divert_acks:
+                held = self._extra_diverts.get(cid, {}).get("held", False)
+                self._extra_diverts[cid] = {**info, "held": held}
+                continue
+            resp = self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY)
+            ok = resp is not None
+            print(f"[HidGesture] Extra divert {_format_cid(cid)} (runtime): "
+                  f"{'OK' if ok else 'FAILED'}")
+            if ok:
+                self._extra_diverts[cid] = {**info, "held": False}
+                self._extra_divert_acks.add(cid)
 
     def _undivert(self):
         """Restore default button behaviour (best-effort).
@@ -3161,6 +3219,8 @@ class HidGestureListener:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
+                    if self._pending_extra_diverts is not None:
+                        self._apply_pending_extra_diverts()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
