@@ -1,7 +1,9 @@
+import contextlib
 import importlib
 import os
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -1202,6 +1204,124 @@ class MxMaster4ConstantTests(unittest.TestCase):
 
     def test_force_sensing_constant(self):
         self.assertEqual(hid_gesture.FEAT_FORCE_SENSING, 0x19C0)
+
+
+class HidReconnectStormTests(unittest.TestCase):
+    """Regression coverage for issue #238: the reconnect/probe throttle.
+
+    These exercise the platform-independent connect logic (via the hidapi
+    fake). The IOKit manager/port leak fix itself is macOS-only and must be
+    validated on-device with `leaks`/`heap`; see the issue for that harness."""
+
+    @staticmethod
+    def _printed_messages(print_mock):
+        return [
+            " ".join(str(arg) for arg in call.args)
+            for call in print_mock.call_args_list
+        ]
+
+    @staticmethod
+    def _info(pid, product, path):
+        return {
+            "product_id": pid,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "Bluetooth Low Energy",
+            "source": "hidapi-enumerate",
+            "product_string": product,
+            "path": path,
+        }
+
+    @contextlib.contextmanager
+    def _connecting(self, listener, infos, fake_dev, *, reprog_found=True):
+        def fake_find_feature(feature_id, *, timeout_ms=None):
+            if reprog_found and feature_id == hid_gesture.FEAT_REPROG_V4:
+                return 0x10
+            return None
+
+        cms = (
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch.object(hid_gesture, "_load_last_device_cache", return_value=None),
+            patch.object(hid_gesture, "_save_last_device_cache"),
+            patch.object(listener, "_vendor_hid_infos", return_value=infos),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_discover_reprog_controls", return_value=[]),
+            patch.object(listener, "_divert", return_value=True),
+            patch.object(listener, "_divert_extras"),
+        )
+        with contextlib.ExitStack() as stack:
+            for cm in cms:
+                stack.enter_context(cm)
+            yield
+
+    def test_candidate_cooldown_key_is_hashable_and_distinct(self):
+        a = self._info(0xB034, "Iface A", b"/dev/hidraw-a")
+        b = self._info(0xB023, "Iface B", b"/dev/hidraw-b")
+        key_a = hid_gesture._candidate_cooldown_key(a)
+        self.assertEqual(key_a, hid_gesture._candidate_cooldown_key(a))
+        self.assertNotEqual(key_a, hid_gesture._candidate_cooldown_key(b))
+        self.assertIsInstance(hash(key_a), int)
+
+    def test_missing_reprog_records_cooldown(self):
+        listener = hid_gesture.HidGestureListener()
+        info = self._info(0xB034, "MX Master 3S", b"/dev/hidraw-x")
+        fake_dev = _FakeHidDevice()
+        with self._connecting(listener, [info], fake_dev, reprog_found=False):
+            self.assertFalse(listener._try_connect())
+        self.assertIn(
+            hid_gesture._candidate_cooldown_key(info),
+            listener._reprog_absent_until,
+        )
+
+    def test_cooled_interface_is_skipped_when_another_candidate_exists(self):
+        listener = hid_gesture.HidGestureListener()
+        # Name sorts the cooled interface first so the skip branch runs before
+        # the good interface connects.
+        cooled = self._info(0xB025, "AAA Cooled Iface", b"/dev/hidraw-cooled")
+        good = self._info(0xB034, "MX Master 3S", b"/dev/hidraw-good")
+        listener._reprog_absent_until[
+            hid_gesture._candidate_cooldown_key(cooled)
+        ] = time.monotonic() + 999
+        fake_dev = _FakeHidDevice()
+        with self._connecting(listener, [cooled, good], fake_dev):
+            with patch("builtins.print") as print_mock:
+                self.assertTrue(listener._try_connect())
+        # Only the non-cooled interface was opened.
+        fake_dev.open_path.assert_called_once_with(b"/dev/hidraw-good")
+        self.assertTrue(
+            any(
+                "Skipping recently-incompatible interface" in message
+                for message in self._printed_messages(print_mock)
+            )
+        )
+
+    def test_sole_cooled_interface_is_still_probed(self):
+        listener = hid_gesture.HidGestureListener()
+        only = self._info(0xB034, "MX Master 3S", b"/dev/hidraw-only")
+        listener._reprog_absent_until[
+            hid_gesture._candidate_cooldown_key(only)
+        ] = time.monotonic() + 999
+        fake_dev = _FakeHidDevice()
+        with self._connecting(listener, [only], fake_dev):
+            # A lone candidate is never skipped, even while cooling down, so a
+            # just-woken device reconnects without waiting out the cooldown.
+            self.assertTrue(listener._try_connect())
+        fake_dev.open_path.assert_called_once_with(b"/dev/hidraw-only")
+
+    def test_interruptible_sleep_returns_immediately_when_stopped(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._running = False
+        start = time.monotonic()
+        listener._interruptible_sleep(5)
+        self.assertLess(time.monotonic() - start, 0.5)
 
 
 if __name__ == "__main__":
