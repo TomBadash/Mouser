@@ -218,9 +218,18 @@ class MouseHook(BaseMouseHook):
         while self._running:
             try:
                 event = self._dispatch_queue.get(timeout=0.05)
-                self._dispatch(event)
             except queue.Empty:
                 continue
+            # Action execution downstream of _dispatch creates Quartz
+            # CGEvent / NSEvent objects (key_simulator). This worker runs on
+            # its own thread, which has no NSAutoreleasePool, so without an
+            # explicit pool every autoreleased Foundation temporary produced
+            # while injecting a keystroke or mouse click leaks for the process
+            # lifetime -- the memory-growth-per-click reported in #233. The
+            # CGEventTap callback is already wrapped (@_autoreleased); this
+            # covers the second thread that touches Foundation objects.
+            with objc.autorelease_pool():
+                self._dispatch(event)
 
     @_autoreleased
     def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
