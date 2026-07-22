@@ -273,7 +273,7 @@ def _default_actions_ring_slots(platform=None):
 
 
 DEFAULT_CONFIG = {
-    "version": 12,
+    "version": 13,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -330,6 +330,7 @@ DEFAULT_CONFIG = {
         "pan_natural": True,             # True = content follows the mouse
         "pan_momentum": False,           # glide after a flick-release ("throw")
         "pan_glide_across_windows": True,  # glide follows the pointer between windows
+        "hide_tray_icon": False,         # no menu-bar icon; run fully in background
         "pan_glide": PAN_DEFAULT_GLIDE,  # glide decay time constant (seconds)
 
         "appearance_mode": "system",
@@ -834,6 +835,14 @@ def _migrate(cfg):
         settings.setdefault("pan_glide", PAN_DEFAULT_GLIDE)
         settings.setdefault("pan_glide_across_windows", True)
         cfg["version"] = 12
+
+    if version < 13:
+        # v12 -> v13: fully-background mode. Off by default so the menu-bar
+        # icon stays; on, Mouser keeps running with no tray icon and is
+        # reopened from Spotlight / Applications to change settings.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("hide_tray_icon", False)
+        cfg["version"] = 13
 
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")

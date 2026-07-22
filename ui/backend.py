@@ -656,6 +656,18 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
 
+    @Property(bool, notify=settingsChanged)
+    def hideTrayIcon(self):
+        """True = no menu-bar/tray icon; Mouser runs fully in the background.
+        Relaunching the app (Spotlight, Applications) shows this window."""
+        return bool(self._cfg.get("settings", {}).get("hide_tray_icon", False))
+
+    @Slot(bool)
+    def setHideTrayIcon(self, value):
+        self._cfg.setdefault("settings", {})["hide_tray_icon"] = bool(value)
+        save_config(self._cfg)
+        self.settingsChanged.emit()
+
     @Property(bool, notify=mappingsChanged)
     def actionsRingUseGlobal(self):
         """True when one shared ring is used for every app (default)."""
