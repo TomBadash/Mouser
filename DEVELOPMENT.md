@@ -145,6 +145,17 @@ Logitech gesture / thumb buttons do not always appear as standard mouse events. 
 2. **Raw Input (Windows fallback)** — registers for raw mouse input and detects extra button bits beyond the standard 5.
 3. **Gesture tap / swipe dispatch** — a clean press/release emits `gesture_click`; once movement crosses the configured threshold, Mouser emits directional swipe actions instead.
 
+### Pan
+
+Pan ([`core/pan_scroller.py`](core/pan_scroller.py)) is the second *mode* of the per-button slide machinery in [`core/mouse_hook_base.py`](core/mouse_hook_base.py), not a parallel system: a pan owner is a button-gesture owner whose held motion streams out as scroll instead of resolving into a discrete swipe. Because the mode is decided inside `arm_button_gesture` / `sample_button_gesture` / `release_button_gesture`, each platform hook's existing button dispatch arms and feeds pan unchanged.
+
+- **`PanScroller`** owns only the delta math and is deliberately separate from `GestureRecognizer`. That recognizer is a *discrete* swipe machine — refractory period, minimum sample count, axis locking, commit-window rejection of slow drift — whose job is to reject exactly the sustained slow motion panning is made of. It also carries sub-unit motion in an accumulator so a slow drag scrolls smoothly instead of being truncated to zero.
+- **Platform seam** — `BaseMouseHook._emit_pan_scroll(dv, dh)` is inert by default; a platform pans once it overrides it. macOS ([`core/mouse_hook_macos.py`](core/mouse_hook_macos.py)) injects a pixel-unit `CGEventCreateScrollWheelEvent` inline from the event tap (like the scroll-inversion path) so the content tracks the hand without a queue hop, tagged `_PAN_SCROLL_MARKER` so the invert pass leaves it alone.
+- **Platform gating** — `config.PAN_CAPABLE_BUTTONS` and `Backend.supportsPan` keep the chip out of the UI where `_emit_pan_scroll` is not implemented. Windows and Linux are wired for it but not yet implemented; adding a platform means overriding that one method.
+- **Timeouts** — a pan uses its own generous timeout (30s) rather than the 3s swipe timeout, which would cut a real drag short. It is only the wedge guard against a missed button-up freezing the pointer.
+- **Not yet offered on the native HID controls** (thumb Gesture button, Sense Panel): while those are held, rawXY *and* OS pointer motion both describe the same movement, so the scroller would need to lock to one source the way `GestureRecognizer._accept_source` does.
+- **Device caveat — not every button reports a hold.** Both hold modes need the button to report a sustained press through the OS. Measured on an MX Anywhere 3S over Bluetooth with a listen-only `CGEventTap` and Mouser stopped: the middle button reports a real hold (`OtherMouseDown` → 2580 ms → `OtherMouseUp`), but the side buttons emit only a ~20 ms down/up burst on tap and emit *nothing* while held. So `xbutton1` / `xbutton2` cannot arm a hold mode on that device — this affects the existing Gesture Swipe identically and is not specific to Pan. The buttons stay in the capable sets because the limitation is per-device, not per-platform. Diagnosing this class of bug means probing with Mouser **stopped** — its event tap swallows the very presses you are trying to observe, which makes a healthy button look dead.
+
 The same module owns the SmartShift integration. It prefers the enhanced feature `0x2111` (`FEAT_SMART_SHIFT_ENHANCED`) when available and falls back to `0x2110`, exposing both an enable flag and a sensitivity threshold; pending settings are re-applied on every reconnect (including wake-from-sleep).
 
 ### App detector
@@ -171,11 +182,11 @@ Mouser handles mouse power-off / on cycles automatically:
 
 All settings live in `config.json` under the platform config dir (`%APPDATA%\Mouser`, `~/Library/Application Support/Mouser`, `~/.config/Mouser`). The schema supports:
 
-- Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions
+- Multiple named profiles with per-profile button mappings, including gesture tap + swipe actions and the Pan hold mode
 - Per-profile app associations (list of `.exe` / bundle / process names)
 - Global settings: DPI, scroll inversion, macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift mode + sensitivity, language, and startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
-- Automatic migration from older config versions (current version `10`)
+- Automatic migration from older config versions (current version `12`)
 
 Logs are written via [`core/log_setup.py`](core/log_setup.py) to a 5 × 5 MB rotating file in `~/Library/Logs/Mouser`, `%APPDATA%\Mouser\logs`, or `$XDG_STATE_HOME/Mouser/logs`. The setup is idempotent and safe to call multiple times — `main_qml.py` invokes it before any Qt or core import so startup output is captured from the very first line.
 
@@ -236,6 +247,7 @@ mouser/
 │   ├── mouse_hook_macos.py      # CGEventTap + Quartz
 │   ├── mouse_hook_linux.py      # evdev + uinput
 │   ├── mouse_hook_stub.py       # Inert hook (unsupported platforms / tests)
+│   ├── pan_scroller.py          # Pointer-delta -> scroll translation for Pan
 │   ├── startup.py               # Login startup (Windows registry + macOS LaunchAgent)
 │   └── version.py               # APP_VERSION / commit / build mode
 │

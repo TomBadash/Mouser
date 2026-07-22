@@ -19,6 +19,7 @@ from core.config import (
     WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
     GESTURE_SWIPE_ACTION, BUTTON_GESTURE_OWNERS, BUTTON_GESTURE_DIRECTIONS,
     button_gesture_owners, button_gesture_bindings_for, button_gesture_tap_action,
+    PAN_ACTION, pan_owners, pan_settings,
 )
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
@@ -256,11 +257,23 @@ class Engine:
             set() if device_buttons is None
             else button_gesture_owners(self.cfg, device_buttons)
         )
+        # Pan owners ride the same arm/sample/release path and the same
+        # device-capability gate; only the held motion is interpreted differently.
+        active_pan_owners = (
+            set() if device_buttons is None
+            else pan_owners(self.cfg, device_buttons)
+        )
+        (pan_speed, pan_natural, pan_momentum, pan_glide,
+         pan_across_windows) = pan_settings(self.cfg)
         if hasattr(self.hook, "configure_button_gestures"):
             self.hook.configure_button_gestures(
                 owners=active_button_gesture_owners,
                 threshold=g_threshold, commit_window_ms=g_commit,
                 settle_ms=g_settle, cross_ratio=g_cross,
+                pan_owners=active_pan_owners,
+                pan_speed=pan_speed, pan_natural=pan_natural,
+                pan_momentum=pan_momentum, pan_glide=pan_glide,
+                pan_glide_across_windows=pan_across_windows,
             )
 
         has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
@@ -281,6 +294,26 @@ class Engine:
                 for pdata in self.cfg.get("profiles", {}).values()
             )
         )
+
+        # Divert the side-button CIDs (0x0053 back / 0x0056 forward) only when
+        # a hold mode needs them. Hold modes require a sustained press, and
+        # some devices never report a side-button hold through the OS (MX
+        # Anywhere 3S over Bluetooth: ~20ms click on tap, nothing while held),
+        # so the hold arms from the HID press instead -- the same hybrid mode
+        # shift uses. Plain actions keep the OS path: diverting has the
+        # mode-shift side effect that profiles mapping the button to "none"
+        # lose its pass-through, so it is not done unconditionally.
+        hold_mode_actions = (GESTURE_SWIPE_ACTION, PAN_ACTION)
+        for owner in ("xbutton1", "xbutton2"):
+            has_button = device_buttons is None or owner in device_buttons
+            setattr(self.hook, f"divert_{owner}", has_button and any(
+                pdata.get("mappings", {}).get(owner) in hold_mode_actions
+                for pdata in self.cfg.get("profiles", {}).values()
+            ))
+        # Apply divert-flag changes to an already-running listener; without
+        # this a remap would not take effect until the next reconnect.
+        if hasattr(self.hook, "refresh_extra_diverts"):
+            self.hook.refresh_extra_diverts()
 
         # Actions Ring controller — create/recreate on every hook setup so
         # profile switches pick up the new slot list automatically.
@@ -327,6 +360,11 @@ class Engine:
             # button_tap / button_swipe handlers registered below. Never wire a
             # normal handler for the "gesture_swipe" sentinel itself.
             if action_id == GESTURE_SWIPE_ACTION:
+                continue
+            # Pan pad: same deal -- the hook owns the button's press, motion and
+            # release, streaming the slide out as scroll. There is no discrete
+            # action to fire, so no normal handler is wired.
+            if action_id == PAN_ACTION:
                 continue
             # Actions Ring — route through controller when mapped to the ring action.
             if action_id == "activate_actions_ring" and self._ring is not None:
