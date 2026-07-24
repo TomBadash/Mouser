@@ -12,6 +12,7 @@ Falls back gracefully if the package or device are unavailable.
 """
 
 import atexit
+import functools
 import os
 import stat
 import sys
@@ -401,6 +402,51 @@ if sys.platform == "darwin":
         _K_IOHID_REPORT_TYPE_OUTPUT = 1
         _K_CF_RUN_LOOP_DEFAULT_MODE = c_void_p.in_dll(_cf, "kCFRunLoopDefaultMode")
 
+        # NSAutoreleasePool via libobjc: the IOHID paths below run on plain
+        # Python threads (HID listener, reconnect loop, battery/smart-shift
+        # pollers) that never drain an autorelease pool, so autoreleased
+        # Foundation/IOKit temporaries — most visibly the HIDEvent objects
+        # produced while CFRunLoopRunInMode delivers input reports — would
+        # otherwise accumulate for the process lifetime (#233, #238).
+        try:
+            _objc_rt = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+            _objc_rt.objc_getClass.argtypes = [c_char_p]
+            _objc_rt.objc_getClass.restype = c_void_p
+            _objc_rt.sel_registerName.argtypes = [c_char_p]
+            _objc_rt.sel_registerName.restype = c_void_p
+            _objc_rt.objc_msgSend.argtypes = [c_void_p, c_void_p]
+            _objc_rt.objc_msgSend.restype = c_void_p
+            _NS_POOL_CLASS = _objc_rt.objc_getClass(b"NSAutoreleasePool")
+            _SEL_NEW = _objc_rt.sel_registerName(b"new")
+            _SEL_DRAIN = _objc_rt.sel_registerName(b"drain")
+            _OBJC_POOL_OK = bool(_NS_POOL_CLASS and _SEL_NEW and _SEL_DRAIN)
+        except Exception as _pool_exc:
+            print(f"[HidGesture] NSAutoreleasePool unavailable: {_pool_exc}")
+            _OBJC_POOL_OK = False
+
+        class _AutoreleasePool:
+            __slots__ = ("_pool",)
+
+            def __enter__(self):
+                self._pool = (
+                    _objc_rt.objc_msgSend(_NS_POOL_CLASS, _SEL_NEW)
+                    if _OBJC_POOL_OK else None
+                )
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                pool, self._pool = self._pool, None
+                if pool:
+                    _objc_rt.objc_msgSend(pool, _SEL_DRAIN)
+                return False
+
+        def _pooled(fn):
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                with _AutoreleasePool():
+                    return fn(*args, **kwargs)
+            return wrapper
+
         _MAC_NATIVE_OK = True
     except Exception as exc:
         print(f"[HidGesture] macOS native HID unavailable: {exc}")
@@ -506,6 +552,7 @@ if _MAC_NATIVE_OK:
             _cf.CFRelease(manager)
 
         @classmethod
+        @_pooled
         def enumerate_infos(cls):
             infos = []
             manager = None
@@ -572,6 +619,7 @@ if _MAC_NATIVE_OK:
                     _cf.CFRelease(item)
             return infos
 
+        @_pooled
         def open(self):
             """Exception-safe open. On any partial failure, release every
             CoreFoundation object allocated so far so a failed open cannot
@@ -659,6 +707,7 @@ if _MAC_NATIVE_OK:
                 parts.append(f'transport "{self._transport}"')
             return "No IOHIDDevice for " + " ".join(parts)
 
+        @_pooled
         def close(self):
             if self._device and self._run_loop:
                 try:
@@ -694,6 +743,7 @@ if _MAC_NATIVE_OK:
         def set_nonblocking(self, _enabled):
             return None
 
+        @_pooled
         def write(self, buf):
             arr = (c_uint8 * len(buf))(*buf)
             res = _iokit.IOHIDDeviceSetReport(
@@ -737,11 +787,15 @@ if _MAC_NATIVE_OK:
                 else:
                     slice_seconds = 0.05
 
-                _cf.CFRunLoopRunInMode(
-                    _K_CF_RUN_LOOP_DEFAULT_MODE,
-                    slice_seconds,
-                    True,
-                )
+                # Pool per pump iteration: input-report callbacks fire inside
+                # this call, and their per-report temporaries must not outlive
+                # the slice.
+                with _AutoreleasePool():
+                    _cf.CFRunLoopRunInMode(
+                        _K_CF_RUN_LOOP_DEFAULT_MODE,
+                        slice_seconds,
+                        True,
+                    )
                 try:
                     return self._report_queue.get_nowait()
                 except queue.Empty:
