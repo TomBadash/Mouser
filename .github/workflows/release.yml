@@ -4,13 +4,21 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Tag to create and publish a release for (e.g. v3.7.1). The tag is
+          created at the built commit by the release job. Leave empty for a
+          build-only dry run.
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  MOUSER_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+  MOUSER_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag || '' }}
   MOUSER_GIT_COMMIT: ${{ github.sha }}
   MOUSER_GIT_DIRTY: "false"
 
@@ -220,9 +228,11 @@ jobs:
           path: Mouser-Linux.zip
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -241,38 +251,48 @@ jobs:
           cp Mouser-Linux/Mouser-Linux.zip update-assets/
           python tools/generate_update_manifest.py \
             --repo "${{ github.repository }}" \
-            --tag "${{ github.ref_name }}" \
+            --tag "${{ env.RELEASE_TAG }}" \
             --commit "${{ github.sha }}" \
             --asset-dir update-assets \
-            --output "mouser-${{ github.ref_name }}-update.json"
+            --output "mouser-${{ env.RELEASE_TAG }}-update.json"
 
       - uses: actions/upload-artifact@v7
         with:
           name: Mouser-Update-Metadata
-          path: mouser-${{ github.ref_name }}-update.json
+          path: mouser-${{ env.RELEASE_TAG }}-update.json
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+          if gh release view "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             # Release already exists — just upload the assets
-            gh release upload "${{ github.ref_name }}" \
+            gh release upload "${{ env.RELEASE_TAG }}" \
               --repo "${{ github.repository }}" \
               --clobber \
               Mouser-Windows/Mouser-Windows.zip \
               Mouser-macOS/Mouser-macOS.zip \
               Mouser-macOS-intel/Mouser-macOS-intel.zip \
               Mouser-Linux/Mouser-Linux.zip \
-              mouser-${{ github.ref_name }}-update.json
+              mouser-${{ env.RELEASE_TAG }}-update.json
           else
-            gh release create "${{ github.ref_name }}" \
+            # Checked-in notes win over auto-generated ones; a workflow_dispatch
+            # run also creates the tag here (--target), since tag pushes are
+            # not possible from every contributor environment.
+            notes_file=".github/release-notes/${{ env.RELEASE_TAG }}.md"
+            if [ -f "$notes_file" ]; then
+              notes_args=(--notes-file "$notes_file")
+            else
+              notes_args=(--generate-notes)
+            fi
+            gh release create "${{ env.RELEASE_TAG }}" \
               --repo "${{ github.repository }}" \
-              --title "Mouser ${{ github.ref_name }}" \
-              --generate-notes \
+              --target "${{ github.sha }}" \
+              --title "Mouser ${{ env.RELEASE_TAG }}" \
+              "${notes_args[@]}" \
               Mouser-Windows/Mouser-Windows.zip \
               Mouser-macOS/Mouser-macOS.zip \
               Mouser-macOS-intel/Mouser-macOS-intel.zip \
               Mouser-Linux/Mouser-Linux.zip \
-              mouser-${{ github.ref_name }}-update.json
+              mouser-${{ env.RELEASE_TAG }}-update.json
           fi
