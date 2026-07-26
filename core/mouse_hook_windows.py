@@ -376,12 +376,15 @@ class MouseHook(BaseMouseHook):
 
             elif wParam == WM_MOUSEHWHEEL:
                 delta = hiword(mouse_data)
+                # WM_MOUSEHWHEEL: a positive delta means the wheel was tilted
+                # to the right, negative to the left (per Win32 docs). Match the
+                # macOS/Linux hooks, which also map positive -> HSCROLL_RIGHT.
                 if delta > 0:
-                    event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
-                    should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
-                elif delta < 0:
                     event = MouseEvent(MouseEvent.HSCROLL_RIGHT, abs(delta))
                     should_block = MouseEvent.HSCROLL_RIGHT in self._blocked_events
+                elif delta < 0:
+                    event = MouseEvent(MouseEvent.HSCROLL_LEFT, abs(delta))
+                    should_block = MouseEvent.HSCROLL_LEFT in self._blocked_events
 
                 if self.invert_hscroll and not self.wheel_native_invert_active:
                     if delta != 0 and self._ri_hwnd and not should_block:
