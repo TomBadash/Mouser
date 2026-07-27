@@ -20,13 +20,22 @@ from ctypes import (
     c_void_p,
     create_string_buffer,
     sizeof,
-    windll,
 )
 
 from core.key_simulator import MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL
 from core.key_simulator import inject_scroll as _inject_scroll_impl
 from core.mouse_hook_base import BaseMouseHook, HidGestureListener
 from core.mouse_hook_types import MouseEvent, hscroll_event_type
+from core.win_ctypes import load_private_dll
+
+# Private handles, never `ctypes.windll`: that cache hands every module the
+# same function object per name, so the `argtypes` set below would also apply
+# to anyone else who binds the same call.  The shortcut recorder's keyboard
+# guard binds `CallNextHookEx` too, with a `KBDLLHOOKSTRUCT` pointer; while the
+# object was shared, opening the Custom Shortcut dialog made every mouse event
+# here raise `ctypes.ArgumentError` and froze the cursor.
+_user32 = load_private_dll("user32")
+_kernel32 = load_private_dll("kernel32")
 
 WH_MOUSE_LL = 14
 WM_MOUSEMOVE = 0x0200
@@ -64,11 +73,11 @@ HOOKPROC = CFUNCTYPE(
     ctypes.POINTER(MSLLHOOKSTRUCT),
 )
 
-SetWindowsHookExW = windll.user32.SetWindowsHookExW
+SetWindowsHookExW = _user32.SetWindowsHookExW
 SetWindowsHookExW.restype = wintypes.HHOOK
 SetWindowsHookExW.argtypes = [c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
 
-CallNextHookEx = windll.user32.CallNextHookEx
+CallNextHookEx = _user32.CallNextHookEx
 CallNextHookEx.restype = ctypes.c_long
 CallNextHookEx.argtypes = [
     wintypes.HHOOK,
@@ -77,18 +86,18 @@ CallNextHookEx.argtypes = [
     ctypes.POINTER(MSLLHOOKSTRUCT),
 ]
 
-UnhookWindowsHookEx = windll.user32.UnhookWindowsHookEx
+UnhookWindowsHookEx = _user32.UnhookWindowsHookEx
 UnhookWindowsHookEx.restype = wintypes.BOOL
 UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
 
-GetModuleHandleW = windll.kernel32.GetModuleHandleW
+GetModuleHandleW = _kernel32.GetModuleHandleW
 GetModuleHandleW.restype = wintypes.HMODULE
 GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 
-GetMessageW = windll.user32.GetMessageW
-PostThreadMessageW = windll.user32.PostThreadMessageW
+GetMessageW = _user32.GetMessageW
+PostThreadMessageW = _user32.PostThreadMessageW
 
-GetAsyncKeyState = windll.user32.GetAsyncKeyState
+GetAsyncKeyState = _user32.GetAsyncKeyState
 GetAsyncKeyState.argtypes = [c_int]
 GetAsyncKeyState.restype = ctypes.c_short
 
@@ -171,14 +180,14 @@ class WNDCLASSEXW(Structure):
     ]
 
 
-RegisterRawInputDevices = windll.user32.RegisterRawInputDevices
-GetRawInputData = windll.user32.GetRawInputData
+RegisterRawInputDevices = _user32.RegisterRawInputDevices
+GetRawInputData = _user32.GetRawInputData
 GetRawInputData.argtypes = [c_void_p, c_uint, c_void_p, POINTER(c_uint), c_uint]
 GetRawInputData.restype = c_uint
-GetRawInputDeviceInfoW = windll.user32.GetRawInputDeviceInfoW
-RegisterClassExW = windll.user32.RegisterClassExW
+GetRawInputDeviceInfoW = _user32.GetRawInputDeviceInfoW
+RegisterClassExW = _user32.RegisterClassExW
 
-CreateWindowExW = windll.user32.CreateWindowExW
+CreateWindowExW = _user32.CreateWindowExW
 CreateWindowExW.restype = wintypes.HWND
 CreateWindowExW.argtypes = [
     wintypes.DWORD,
@@ -195,8 +204,8 @@ CreateWindowExW.argtypes = [
     wintypes.LPVOID,
 ]
 
-ShowWindow = windll.user32.ShowWindow
-DefWindowProcW = windll.user32.DefWindowProcW
+ShowWindow = _user32.ShowWindow
+DefWindowProcW = _user32.DefWindowProcW
 DefWindowProcW.restype = ctypes.c_longlong
 DefWindowProcW.argtypes = [
     wintypes.HWND,
@@ -205,9 +214,9 @@ DefWindowProcW.argtypes = [
     wintypes.LPARAM,
 ]
 
-TranslateMessage = windll.user32.TranslateMessage
-DispatchMessageW = windll.user32.DispatchMessageW
-DestroyWindow = windll.user32.DestroyWindow
+TranslateMessage = _user32.TranslateMessage
+DispatchMessageW = _user32.DispatchMessageW
+DestroyWindow = _user32.DestroyWindow
 
 
 def hiword(dword):
@@ -225,7 +234,7 @@ WM_APP_INJECT_SHIFT_HSCROLL = WM_APP + 3
 WM_DEVICECHANGE = 0x0219
 DBT_DEVNODES_CHANGED = 0x0007
 
-PostMessageW = windll.user32.PostMessageW
+PostMessageW = _user32.PostMessageW
 PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
 PostMessageW.restype = wintypes.BOOL
 
@@ -309,7 +318,15 @@ class MouseHook(BaseMouseHook):
                 traceback.print_exc()
             except Exception:
                 pass
-            return CallNextHookEx(self._hook, nCode, wParam, lParam)
+            try:
+                return CallNextHookEx(self._hook, nCode, wParam, lParam)
+            except Exception:
+                # The recovery path must never raise out of a ctypes callback:
+                # Windows gets no return value, ctypes prints a traceback for
+                # every event, and the hook then blows past the low-level hook
+                # timeout -- which is what freezes the cursor.  0 means "pass
+                # the event on", so input keeps flowing.
+                return 0
 
     def _low_level_handler_inner(self, nCode, wParam, lParam):
         if nCode == HC_ACTION:
@@ -661,7 +678,7 @@ class MouseHook(BaseMouseHook):
                 print(f"[MouseHook] dispatch worker error: {exc}")
 
     def _run_hook(self):
-        self._thread_id = windll.kernel32.GetCurrentThreadId()
+        self._thread_id = _kernel32.GetCurrentThreadId()
         self._hook_proc = HOOKPROC(self._low_level_handler)
         self._hook = SetWindowsHookExW(
             WH_MOUSE_LL,

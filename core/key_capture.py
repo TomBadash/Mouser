@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 import threading
 
+from core.win_ctypes import load_private_dll
+
 
 WH_KEYBOARD_LL = 13
 HC_ACTION = 0
@@ -183,6 +185,7 @@ class WindowsSuperKeyGuard(SuperKeyGuard):
         import ctypes.wintypes as wintypes
 
         user32 = _user32()
+        kernel32 = _kernel32()
 
         class KBDLLHOOKSTRUCT(ctypes.Structure):
             _fields_ = [
@@ -218,8 +221,9 @@ class WindowsSuperKeyGuard(SuperKeyGuard):
             return user32.CallNextHookEx(None, n_code, w_param, l_param)
 
         # Explicit prototypes: the defaults would truncate the 64-bit hook
-        # handle to an int and the unhook call would silently fail.
-        kernel32 = ctypes.windll.kernel32
+        # handle to an int and the unhook call would silently fail.  They are
+        # set on this module's own handles -- on the shared `ctypes.windll`
+        # objects they would overwrite the mouse hook's prototypes instead.
         user32.SetWindowsHookExW.restype = wintypes.HHOOK
         user32.SetWindowsHookExW.argtypes = [
             ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD,
@@ -273,10 +277,33 @@ class WindowsSuperKeyGuard(SuperKeyGuard):
                 self._thread_id = 0
 
 
-def _user32():
-    import ctypes
+_DLL_LOCK = threading.Lock()
+_USER32 = None
+_KERNEL32 = None
 
-    return ctypes.windll.user32
+
+def _user32():
+    """This module's private `user32` handle.
+
+    Never the shared `ctypes.windll` cache: the prototypes set in `_run` would
+    land on the function objects the mouse hook calls through too, and
+    mismatched `argtypes` inside a low-level hook procedure freeze the cursor.
+    See `core/win_ctypes.py`.
+    """
+    global _USER32
+    with _DLL_LOCK:
+        if _USER32 is None:
+            _USER32 = load_private_dll("user32")
+        return _USER32
+
+
+def _kernel32():
+    """This module's private `kernel32` handle (see `_user32`)."""
+    global _KERNEL32
+    with _DLL_LOCK:
+        if _KERNEL32 is None:
+            _KERNEL32 = load_private_dll("kernel32")
+        return _KERNEL32
 
 
 def create_super_key_guard(platform_name: str | None = None) -> SuperKeyGuard:

@@ -32,6 +32,48 @@ class ExtraInfoIsAValueNotAPointerTests(unittest.TestCase):
                 self.assertNotIn("dwExtraInfo.contents", source)
 
 
+class HookLibraryHandlesArePrivateTests(unittest.TestCase):
+    """`ctypes.windll` handed both hooks the same `CallNextHookEx` object.
+
+    The loader caches one WinDLL per library and one function object per name,
+    so the mouse hook's ``argtypes`` (a ``MSLLHOOKSTRUCT`` pointer) and the
+    recorder's (a ``KBDLLHOOKSTRUCT`` pointer) landed on the same object.
+    Arming the recorder therefore broke the mouse hook: every event raised
+    ``ctypes.ArgumentError``, the hook procedure blew past Windows' low-level
+    hook timeout, and the cursor froze while the Custom Shortcut dialog was
+    open -- keyboard still live, mouse dead, app only killable from outside.
+    """
+
+    def test_neither_hook_binds_calls_through_the_shared_windll_cache(self):
+        for name, source in (
+            ("mouse_hook_windows", WINDOWS_HOOK),
+            ("key_capture", KEY_CAPTURE),
+        ):
+            with self.subTest(module=name):
+                # The trailing dot is the binding itself, so prose naming the
+                # cache to explain the hazard does not trip this.
+                for call in ("windll.user32.", "windll.kernel32."):
+                    self.assertNotIn(call, source)
+
+    def test_both_hooks_load_their_own_handles(self):
+        for name, source in (
+            ("mouse_hook_windows", WINDOWS_HOOK),
+            ("key_capture", KEY_CAPTURE),
+        ):
+            with self.subTest(module=name):
+                self.assertIn("load_private_dll", source)
+
+    def test_hook_procedure_recovery_cannot_raise_out_of_the_callback(self):
+        # An exception escaping a ctypes callback costs a printed traceback per
+        # event -- the freeze mechanism itself, whatever first went wrong.
+        self.assertIn(
+            "            try:\n"
+            "                return CallNextHookEx(self._hook, nCode, wParam, lParam)\n"
+            "            except Exception:\n",
+            WINDOWS_HOOK,
+        )
+
+
 class DebugLoggingIsRateLimitedTests(unittest.TestCase):
     def test_wheel_bursts_are_coalesced(self):
         # A hi-res wheel emits ~15 messages per detent; one debug line each
