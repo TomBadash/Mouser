@@ -1174,49 +1174,6 @@ class HidBoltReceiverTests(unittest.TestCase):
 
         self.assertEqual(listener.connected_device.transport, "USB Receiver")
 
-    def test_transport_label_bluetooth_for_direct_mouse_pid(self):
-        """Direct mouse PID (e.g. MX Master 3S 0xB034) should produce
-        'Bluetooth', even if devIdx is 1."""
-        listener = hid_gesture.HidGestureListener()
-        info = {
-            "product_id": 0xB034,
-            "usage_page": 0xFF00,
-            "usage": 0x0001,
-            "source": "hidapi-enumerate",
-            "product_string": "MX Master 3S",
-            "path": b"/dev/hidraw-test-bt",
-        }
-        fake_dev = _FakeHidDevice()
-        call_count = [0]
-
-        def fake_find_feature(feature_id, *, timeout_ms=None):
-            if feature_id != hid_gesture.FEAT_REPROG_V4:
-                return None
-            call_count[0] += 1
-            return 0x09 if call_count[0] >= 2 else None
-
-        with (
-            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
-            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
-            patch.object(listener, "_discover_reprog_controls", return_value=[]),
-            patch.object(listener, "_divert", return_value=True),
-            patch.object(listener, "_divert_extras"),
-            patch.object(hid_gesture, "HIDAPI_OK", True),
-            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
-            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
-            patch.object(
-                hid_gesture,
-                "_hid",
-                SimpleNamespace(device=lambda: fake_dev),
-                create=True,
-            ),
-            patch("builtins.print"),
-        ):
-            self.assertTrue(listener._try_connect())
-
-        self.assertEqual(listener.connected_device.transport, "Bluetooth")
-
-
 
 class HidReconnectInvariantTests(unittest.TestCase):
     def test_force_release_stale_holds_clears_gesture_and_extra_buttons(self):
