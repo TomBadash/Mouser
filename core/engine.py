@@ -116,8 +116,6 @@ class Engine:
         self._last_native_invert_target = (False, False)
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
-        self._desktop_info_cache = None
-        self._desktop_info_ts = 0.0
         self._desktop_direction = "right"
         self._replay_inflight = False
         self._replay_pending_rerun = False
@@ -862,12 +860,11 @@ class Engine:
             print("[Engine] cycle_desktops only supported on macOS")
             return
 
-        # Get desktop info (cached for 5 seconds to avoid subprocess per press)
-        now = time.time()
-        if self._desktop_info_cache is None or (now - self._desktop_info_ts) > 5.0:
-            self._desktop_info_cache = self._get_macos_desktop_info()
-            self._desktop_info_ts = now
-        desktop_count, current = self._desktop_info_cache
+        # Resolve the active display and space on every press.  The cursor can
+        # move between displays without changing the foreground application;
+        # caching this tuple would reuse the previous display for a few
+        # seconds and incorrectly skip a valid switch on the new display.
+        desktop_count, current = self._get_macos_desktop_info()
 
         # Only one desktop — nothing to cycle
         if desktop_count <= 1:
@@ -898,7 +895,6 @@ class Engine:
             execute_action("space_left")
 
         self._desktop_direction = direction
-        self._desktop_info_cache = (desktop_count, next_pos)
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
