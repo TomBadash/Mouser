@@ -221,13 +221,78 @@ WM_APP = 0x8000
 WM_APP_INJECT_VSCROLL = WM_APP + 1
 WM_APP_INJECT_HSCROLL = WM_APP + 2
 WM_APP_INJECT_SHIFT_HSCROLL = WM_APP + 3
+# Re-arm the OS-level capture (reinstall the low-level hook, re-register raw
+# input). Always posted rather than called: SetWindowsHookExW binds the hook
+# to the calling thread, and only the hook thread pumps messages, so a rehook
+# from any other thread would install a hook nothing ever delivers to.
+WM_APP_REARM = WM_APP + 4
 
 WM_DEVICECHANGE = 0x0219
 DBT_DEVNODES_CHANGED = 0x0007
 
+# ── Power / session notifications ────────────────────────────────────
+# Windows never reports that it dropped a low-level hook, and a resumed
+# machine can hand the mouse a fresh device stack while our HID handle stays
+# open against the old one. Both are silent, so the resume itself is the only
+# reliable cue to rebuild them (issue #263).
+WM_POWERBROADCAST = 0x0218
+PBT_APMSUSPEND = 0x0004
+PBT_APMRESUMESUSPEND = 0x0007
+PBT_APMRESUMEAUTOMATIC = 0x0012
+PBT_POWERSETTINGCHANGE = 0x8013
+DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000
+# Modern Standby (S0 low-power idle) does not reliably raise the APM resume
+# messages, so we also watch the console display state — display-on is the
+# moment the user is back and the device stack has been rebuilt.
+GUID_CONSOLE_DISPLAY_STATE = (
+    0x6FE69556, 0x704A, 0x47A0, (0x8F, 0x24, 0xC2, 0x8D, 0x93, 0x6F, 0xDA, 0x47)
+)
+DISPLAY_STATE_ON = 0x1
+
+WM_WTSSESSION_CHANGE = 0x02B1
+NOTIFY_FOR_THIS_SESSION = 0x0000
+WTS_SESSION_LOGON = 0x5
+WTS_SESSION_UNLOCK = 0x8
+
+
+class GUID(Structure):
+    _fields_ = [
+        ("Data1", c_ulong),
+        ("Data2", c_ushort),
+        ("Data3", c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+    @classmethod
+    def from_parts(cls, d1, d2, d3, d4):
+        return cls(d1, d2, d3, (ctypes.c_ubyte * 8)(*d4))
+
+
+class POWERBROADCAST_SETTING(Structure):
+    _fields_ = [
+        ("PowerSetting", GUID),
+        ("DataLength", wintypes.DWORD),
+        ("Data", ctypes.c_ubyte * 1),
+    ]
+
+
 PostMessageW = windll.user32.PostMessageW
 PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
 PostMessageW.restype = wintypes.BOOL
+
+RegisterPowerSettingNotification = windll.user32.RegisterPowerSettingNotification
+RegisterPowerSettingNotification.restype = wintypes.HANDLE
+RegisterPowerSettingNotification.argtypes = [
+    wintypes.HANDLE,
+    POINTER(GUID),
+    wintypes.DWORD,
+]
+
+UnregisterPowerSettingNotification = windll.user32.UnregisterPowerSettingNotification
+UnregisterPowerSettingNotification.restype = wintypes.BOOL
+UnregisterPowerSettingNotification.argtypes = [wintypes.HANDLE]
+
+_CONSOLE_DISPLAY_STATE_BYTES = bytes(GUID.from_parts(*GUID_CONSOLE_DISPLAY_STATE))
 
 
 class MouseHook(BaseMouseHook):
@@ -256,6 +321,12 @@ class MouseHook(BaseMouseHook):
         self._startup_ok = False
         self._prev_raw_buttons = {}
         self._last_rehook_time = 0
+        # Watchdog / resume-recovery state (see _platform_liveness_check).
+        self._last_hook_event_at = 0.0
+        self._last_raw_input_at = 0.0
+        self._last_resume_at = 0.0
+        self._power_notify_handle = None
+        self._session_notify_registered = False
         # Per-button slide gesture: last cursor position while an owner button
         # is held, to derive per-move deltas from the LL hook's absolute point.
         self._btn_gesture_last_x = 0
@@ -313,6 +384,10 @@ class MouseHook(BaseMouseHook):
 
     def _low_level_handler_inner(self, nCode, wParam, lParam):
         if nCode == HC_ACTION:
+            # Proof-of-life for the hook watchdog. Stamped before every early
+            # return below (injected events, the KVM guard) so a hook that is
+            # merely passing traffic through still counts as alive.
+            self._last_hook_event_at = time.monotonic()
             data = lParam.contents
             mouse_data = data.mouseData
             flags = data.flags
@@ -533,12 +608,43 @@ class MouseHook(BaseMouseHook):
                 _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
             return 0
 
+        if msg == WM_APP_REARM:
+            self._rearm_os_capture()
+            return 0
+
         if msg == WM_DEVICECHANGE:
             if wParam == DBT_DEVNODES_CHANGED:
                 self._on_device_change()
             return 0
 
+        if msg == WM_POWERBROADCAST:
+            if wParam in (PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND):
+                self._on_system_resume("power resume")
+            elif wParam == PBT_APMSUSPEND:
+                print("[MouseHook] System suspending")
+            elif wParam == PBT_POWERSETTINGCHANGE:
+                if self._is_display_on_notification(lParam):
+                    self._on_system_resume("display on")
+            return 1
+
+        if msg == WM_WTSSESSION_CHANGE:
+            if wParam in (WTS_SESSION_UNLOCK, WTS_SESSION_LOGON):
+                self._on_system_resume("session unlock")
+            return 0
+
         return DefWindowProcW(hwnd, msg, wParam, lParam)
+
+    @staticmethod
+    def _is_display_on_notification(lParam):
+        """True when a PBT_POWERSETTINGCHANGE payload says the console
+        display just turned on."""
+        try:
+            setting = POWERBROADCAST_SETTING.from_address(lParam)
+            if bytes(setting.PowerSetting) != _CONSOLE_DISPLAY_STATE_BYTES:
+                return False
+            return setting.DataLength >= 1 and setting.Data[0] == DISPLAY_STATE_ON
+        except Exception:
+            return False
 
     def _process_raw_input(self, lParam):
         size = c_uint(0)
@@ -556,9 +662,20 @@ class MouseHook(BaseMouseHook):
         if ret == 0xFFFFFFFF:
             return
         header = RAWINPUTHEADER.from_buffer_copy(buffer)
+        if header.dwType == RIM_TYPEMOUSE:
+            # Raw input and the low-level hook are independent deliveries of
+            # the same events, which is what makes them a usable cross-check:
+            # raw input keeps arriving after Windows drops the hook. Only
+            # mouse-type reports count -- the vendor (0xFF43) and consumer
+            # collections we also register for never reach a WH_MOUSE_LL hook,
+            # so counting them would read a healthy hook as dead.
+            self._last_raw_input_at = time.monotonic()
         if not self._is_logitech(header.hDevice):
             return
         if header.dwType == RIM_TYPEMOUSE:
+            # Proof the Logitech itself is awake and in use, for the HID
+            # liveness watchdog.
+            self._note_os_mouse_activity()
             self._check_raw_mouse_gesture(header.hDevice, buffer)
 
     def _check_raw_mouse_gesture(self, hDevice, buffer):
@@ -618,6 +735,12 @@ class MouseHook(BaseMouseHook):
             return False
 
         ShowWindow(self._ri_hwnd, SW_HIDE)
+        self._register_power_notifications()
+        return self._register_raw_input_devices()
+
+    def _register_raw_input_devices(self, log=True):
+        if not self._ri_hwnd:
+            return False
 
         devices = (RAWINPUTDEVICE * 4)()
         devices[0].usUsagePage = 0x01
@@ -637,17 +760,60 @@ class MouseHook(BaseMouseHook):
         devices[3].dwFlags = RIDEV_INPUTSINK
         devices[3].hwndTarget = self._ri_hwnd
 
-        if RegisterRawInputDevices(devices, 4, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice + Logitech HID + consumer")
-            return True
-        if RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice + Logitech HID short")
-            return True
-        if RegisterRawInputDevices(devices, 1, sizeof(RAWINPUTDEVICE)):
-            print("[MouseHook] Raw Input: mice only")
-            return True
+        for count, label in (
+            (4, "mice + Logitech HID + consumer"),
+            (2, "mice + Logitech HID short"),
+            (1, "mice only"),
+        ):
+            if RegisterRawInputDevices(devices, count, sizeof(RAWINPUTDEVICE)):
+                if log:
+                    print(f"[MouseHook] Raw Input: {label}")
+                return True
         print("[MouseHook] Raw Input registration failed")
         return False
+
+    def _register_power_notifications(self):
+        """Subscribe the message window to resume and unlock notifications.
+
+        Best-effort: every one of these is a recovery *cue*, not a
+        requirement, and the watchdog still covers us if a subscription
+        fails, so a failure here must never take the hook down with it.
+        """
+        try:
+            guid = GUID.from_parts(*GUID_CONSOLE_DISPLAY_STATE)
+            self._power_notify_handle = RegisterPowerSettingNotification(
+                self._ri_hwnd, byref(guid), DEVICE_NOTIFY_WINDOW_HANDLE
+            )
+            if not self._power_notify_handle:
+                self._power_notify_handle = None
+                print("[MouseHook] Display-state notifications unavailable")
+        except Exception as exc:
+            self._power_notify_handle = None
+            print(f"[MouseHook] Display-state notifications unavailable: {exc}")
+
+        try:
+            if windll.wtsapi32.WTSRegisterSessionNotification(
+                self._ri_hwnd, NOTIFY_FOR_THIS_SESSION
+            ):
+                self._session_notify_registered = True
+            else:
+                print("[MouseHook] Session notifications unavailable")
+        except Exception as exc:
+            print(f"[MouseHook] Session notifications unavailable: {exc}")
+
+    def _unregister_power_notifications(self):
+        if self._power_notify_handle:
+            try:
+                UnregisterPowerSettingNotification(self._power_notify_handle)
+            except Exception:
+                pass
+            self._power_notify_handle = None
+        if self._session_notify_registered:
+            try:
+                windll.wtsapi32.WTSUnRegisterSessionNotification(self._ri_hwnd)
+            except Exception:
+                pass
+            self._session_notify_registered = False
 
     def _dispatch_worker(self):
         while self._running:
@@ -689,6 +855,7 @@ class MouseHook(BaseMouseHook):
             DispatchMessageW(ctypes.byref(message))
 
         if self._ri_hwnd:
+            self._unregister_power_notifications()
             DestroyWindow(self._ri_hwnd)
             self._ri_hwnd = None
         if self._hook:
@@ -701,11 +868,26 @@ class MouseHook(BaseMouseHook):
         now = time.time()
         if now - self._last_rehook_time < 2.0:
             return
-        self._last_rehook_time = now
         print("[MouseHook] Device change detected — refreshing hook")
+        self._rearm_os_capture()
+
+    def _request_rearm(self, reason):
+        """Ask the hook thread to rebuild the OS-level capture. Safe to call
+        from any thread — the work itself must happen on the hook thread."""
+        hwnd = self._ri_hwnd
+        if not hwnd or not self._running:
+            return False
+        print(f"[MouseHook] Re-arm requested ({reason})")
+        return bool(PostMessageW(hwnd, WM_APP_REARM, 0, 0))
+
+    def _rearm_os_capture(self):
+        """Rebuild everything the OS can silently take away from us.
+        Hook-thread only (see WM_APP_REARM)."""
+        self._last_rehook_time = time.time()
         self._device_name_cache.clear()
         self._prev_raw_buttons.clear()
         self._reinstall_hook()
+        self._register_raw_input_devices(log=False)
 
     def _reinstall_hook(self):
         if self._hook:
@@ -719,9 +901,96 @@ class MouseHook(BaseMouseHook):
             0,
         )
         if self._hook:
+            # Treat the fresh hook as alive, so the watchdog gives it a full
+            # silence window to prove itself instead of firing again at once.
+            self._last_hook_event_at = time.monotonic()
             print("[MouseHook] Hook reinstalled successfully")
         else:
             print("[MouseHook] Failed to reinstall hook!")
+
+    # ── Resume recovery ───────────────────────────────────────────────
+    # Rebuilding once on the resume message is not enough: the USB/Bolt stack
+    # comes back over several seconds, so an immediate reconnect can probe a
+    # receiver whose mouse has not re-paired yet and fail for reasons that
+    # have nothing to do with us (issue #81). Retry on a widening ladder and
+    # stop as soon as the device is back.
+    _RESUME_REARM_DELAYS_S = (0.5, 3.0, 10.0)
+    _RESUME_DEDUPE_S = 5.0
+
+    def _on_system_resume(self, reason):
+        """Entry point for every resume-ish cue. Windows commonly raises
+        several for one wake (APM resume, then display-on, then unlock), so
+        collapse a burst into a single recovery pass."""
+        now = time.monotonic()
+        if now - self._last_resume_at < self._RESUME_DEDUPE_S:
+            return False
+        self._last_resume_at = now
+        print(f"[MouseHook] System resume detected ({reason}) — recovering")
+        threading.Thread(
+            target=self._resume_recovery_worker,
+            args=(reason,),
+            daemon=True,
+            name="MouseHook-resume",
+        ).start()
+        return True
+
+    def _resume_recovery_worker(self, reason):
+        elapsed = 0.0
+        for index, deadline in enumerate(self._RESUME_REARM_DELAYS_S):
+            time.sleep(max(0.0, deadline - elapsed))
+            elapsed = deadline
+            if not self._running:
+                return
+            self._request_rearm(f"resume: {reason}")
+            hg = self._hid_gesture
+            if hg is None:
+                continue
+            # The first pass always drops the HID handle: after a resume it
+            # can stay open against a device stack Windows has already
+            # replaced, and from the outside that is indistinguishable from a
+            # healthy connection. Later passes only step in if the device has
+            # not come back on its own.
+            if index == 0 or not self._device_connected:
+                try:
+                    hg.force_reconnect()
+                except Exception as exc:
+                    print(f"[MouseHook] resume reconnect request failed: {exc}")
+
+    # ── Hook watchdog ─────────────────────────────────────────────────
+    # Windows removes a low-level hook whose procedure overruns
+    # LowLevelHooksTimeout (300 ms by default) and tells nobody: the HHOOK
+    # stays non-NULL and simply never fires again. Resume is the classic
+    # trigger — the process is still being scheduled back in while a burst of
+    # input arrives — but it also happens under load, which is what leaves
+    # users with a dead Mouser and no explanation (#257 / #246).
+    #
+    # There is no API to ask whether a hook is still installed, so we compare
+    # it against raw input: same events, independent delivery path, already
+    # registered. Raw input live + hook silent is the signature of a dropped
+    # hook. Both silent just means nobody is touching the mouse.
+    _HOOK_ACTIVITY_WINDOW_S = 3.0
+    _HOOK_SILENCE_LIMIT_S = 3.0
+
+    def _platform_liveness_check(self, now=None):
+        if not self._running or not self._ri_hwnd:
+            return False
+        now = time.monotonic() if now is None else now
+        if not self._last_raw_input_at or not self._last_hook_event_at:
+            return False
+        if now - self._last_raw_input_at > self._HOOK_ACTIVITY_WINDOW_S:
+            return False
+        hook_silence = now - self._last_hook_event_at
+        if hook_silence < self._HOOK_SILENCE_LIMIT_S:
+            return False
+        print(
+            f"[MouseHook] Low-level hook silent for {hook_silence:.0f}s while "
+            "raw input is live — Windows dropped it; reinstalling"
+        )
+        self._request_rearm("hook watchdog")
+        # Assume recovery until the reinstall lands, so a slow rehook does not
+        # queue a second one behind the first.
+        self._last_hook_event_at = now
+        return True
 
     def _emit_gesture_swipe(self, mouse_event):
         """Route gesture swipes through the dispatch queue so they run on
@@ -748,10 +1017,12 @@ class MouseHook(BaseMouseHook):
             name="HookDispatch",
         )
         self._dispatch_worker_thread.start()
+        self._start_liveness_watchdog()
         return True
 
     def stop(self):
         self._running = False
+        self._stop_liveness_watchdog()
         self.abort_button_gesture("stop")
         self._stop_hid_listener()
         self._connected_device = None
