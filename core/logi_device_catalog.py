@@ -274,6 +274,20 @@ LOGI_DEVICE_SPECS = (
         "supported_buttons": MX_ANYWHERE_BUTTONS,
         "dpi_max": 4000,
     },
+    {
+        "key": "mx_anywhere_2",
+        "display_name": "MX Anywhere 2",
+        "product_ids": (0xB013, 0xB018, 0xB01F),
+        "aliases": (
+            "Wireless Mobile Mouse MX Anywhere 2",
+            "MX Anywhere 2",
+            "MX Anywhere 2 for Mac",
+        ),
+        "ui_layout": "mx_anywhere_2s",
+        "image_asset": "logitech-mice/mx_anywhere_2s/mouse.png",
+        "supported_buttons": MX_ANYWHERE_BUTTONS,
+        "dpi_max": 1600,
+    },
     # -- M650 Signature family ------------------------------------------------
     # Compact wireless mouse (middle, back, forward buttons). Connects via Logi
     # Bolt receiver or Bluetooth LE. HID++ reports device name "Signature M650".
@@ -401,6 +415,7 @@ LOGI_DEVICE_SPECS = (
         "dpi_max": 12000,
     },
 )
+
 
 
 LOGI_DEVICE_LAYOUTS = {
