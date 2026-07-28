@@ -276,7 +276,12 @@ class WindowsSuperKeyGuard(SuperKeyGuard):
 def _user32():
     import ctypes
 
-    return ctypes.windll.user32
+    # Private WinDLL instance, NOT the process-global ctypes.windll.user32.
+    # argtypes live on the DLL wrapper; the mouse hook (mouse_hook_windows.py)
+    # sets CallNextHookEx/SetWindowsHookExW prototypes for MSLLHOOKSTRUCT on the
+    # shared global handle. Reusing it here would overwrite lParam's type with
+    # KBDLLHOOKSTRUCT and make every mouse event raise, freezing the pointer.
+    return ctypes.WinDLL("user32")
 
 
 def create_super_key_guard(platform_name: str | None = None) -> SuperKeyGuard:
