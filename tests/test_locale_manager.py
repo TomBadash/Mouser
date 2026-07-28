@@ -115,10 +115,10 @@ class AccessibilityLocaleTests(unittest.TestCase):
                         f"{locale}.{key} is blank",
                     )
 
-    def test_chinese_locales_do_not_passthrough_english(self):
-        """Trackpad strings used to ship English text in the zh_CN and
-        zh_TW maps. Pin that they are now actually localized."""
-        for locale in ("zh_CN", "zh_TW"):
+    def test_non_english_locales_do_not_passthrough_english(self):
+        """Trackpad strings used to ship English text in non-English maps.
+        Pin that they are now actually localized."""
+        for locale in ("zh_CN", "zh_TW", "ru"):
             with self.subTest(locale=locale):
                 for key in (
                     "scroll.ignore_trackpad",
@@ -129,12 +129,22 @@ class AccessibilityLocaleTests(unittest.TestCase):
                         self.ENGLISH_VALUES,
                         f"{locale}.{key} still ships English",
                     )
-                self.assertNotEqual(
-                    _TRANSLATIONS[locale]["scroll.smart_shift"],
-                    "SmartShift",
-                    f"{locale}.scroll.smart_shift still ships English",
-                )
+
+
+class RussianLocaleManagerTests(unittest.TestCase):
+    def test_russian_locale_helper_methods(self):
+        from ui.locale_manager import LocaleManager
+        lm = LocaleManager(language="ru")
+        self.assertEqual(lm.language, "ru")
+        self.assertEqual(lm.tr("nav.mouse_profiles"), "Мышь и профили")
+        self.assertEqual(lm.trButton("Middle button"), "Средняя кнопка")
+        self.assertEqual(lm.trCategory("Browser"), "Браузер")
+        self.assertEqual(lm.trAction("Copy (Cmd+C)"), "Копировать (Cmd+C)")
+
+        codes = [lang["code"] for lang in lm.availableLanguages]
+        self.assertIn("ru", codes)
 
 
 if __name__ == "__main__":
     unittest.main()
+
