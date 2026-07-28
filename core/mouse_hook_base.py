@@ -3,6 +3,7 @@ Shared mouse hook behavior used by platform implementations.
 """
 
 import queue
+import threading
 import time
 
 try:
@@ -97,6 +98,110 @@ class BaseMouseHook:
         )
         self._connected_device = None
         self._dispatch_queue = None
+        # ── Liveness watchdog state (see _liveness_watchdog_loop) ─────────
+        self._last_os_mouse_activity_at = 0.0
+        self._last_liveness_ping_at = 0.0
+        self._liveness_thread = None
+        self._liveness_stop = None
+
+    # ── Liveness watchdog ─────────────────────────────────────────────
+    # Both halves of Mouser can die without saying so: the OS-level hook
+    # (Windows silently drops a low-level hook whose proc overruns
+    # LowLevelHooksTimeout) and the HID++ handle (a suspend/resume cycle can
+    # leave it open against an orphaned device, where reads never fail and
+    # never return). Neither failure raises anything, so without an active
+    # check the app sits there looking connected until the user restarts it
+    # -- issue #263 after sleep, #257 / #246 at random.
+    #
+    # The check has to be cheap and false-positive-free. Silence alone proves
+    # nothing: an idle mouse is silent on every channel. So we only act when
+    # the OS event stream shows the mouse is *being used right now* while the
+    # channel under test has gone quiet -- and even then the HID side asks the
+    # device to answer rather than assuming the worst.
+    _LIVENESS_POLL_INTERVAL_S = 5.0
+    # How recently OS mouse events must have arrived for the mouse to count
+    # as "in use" -- i.e. provably awake, so silence is a real symptom.
+    _LIVENESS_OS_ACTIVITY_WINDOW_S = 10.0
+    # HID++ silence tolerated from a mouse in active use. Generous: a healthy
+    # connection is legitimately quiet while the user only moves and scrolls,
+    # since only diverted controls and battery events report.
+    _LIVENESS_HID_SILENCE_S = 90.0
+
+    def _note_os_mouse_activity(self, now=None):
+        """Record that the OS event stream just carried a mouse event.
+
+        Called from platform hot paths (raw input / event tap / evdev), so it
+        stays a single timestamp write with no lock: a torn read costs the
+        watchdog one cycle, and locking here would be on every mouse move.
+        """
+        self._last_os_mouse_activity_at = time.monotonic() if now is None else now
+
+    def _start_liveness_watchdog(self):
+        if self._liveness_thread and self._liveness_thread.is_alive():
+            return
+        self._liveness_stop = threading.Event()
+        self._liveness_thread = threading.Thread(
+            target=self._liveness_watchdog_loop,
+            args=(self._liveness_stop,),
+            daemon=True,
+            name="MouseHook-liveness",
+        )
+        self._liveness_thread.start()
+
+    def _stop_liveness_watchdog(self):
+        if self._liveness_stop:
+            self._liveness_stop.set()
+        if self._liveness_thread:
+            self._liveness_thread.join(timeout=1)
+            self._liveness_thread = None
+        self._liveness_stop = None
+
+    def _liveness_watchdog_loop(self, stop_event):
+        while not stop_event.wait(self._LIVENESS_POLL_INTERVAL_S):
+            try:
+                self._platform_liveness_check()
+            except Exception as exc:
+                print(f"[MouseHook] platform liveness check error: {exc}")
+            try:
+                self._check_hid_liveness()
+            except Exception as exc:
+                print(f"[MouseHook] HID liveness check error: {exc}")
+
+    def _platform_liveness_check(self):
+        """Hook for platforms that can verify their own OS-level event path.
+        Default is a no-op; Windows overrides it to catch a dropped hook."""
+        return None
+
+    def _check_hid_liveness(self, now=None):
+        """Ask the HID++ listener to prove itself when it has gone quiet while
+        the mouse is demonstrably in use. Returns True if a probe was asked
+        for (test seam)."""
+        hg = self._hid_gesture
+        if hg is None or not self._device_connected:
+            return False
+        ping = getattr(hg, "request_liveness_ping", None)
+        silence_of = getattr(hg, "seconds_since_last_report", None)
+        if ping is None or silence_of is None:
+            return False
+        now = time.monotonic() if now is None else now
+        if now - self._last_os_mouse_activity_at > self._LIVENESS_OS_ACTIVITY_WINDOW_S:
+            # Mouse idle. Its silence is expected, and probing a device that
+            # may have gone to sleep just costs battery to learn nothing.
+            return False
+        silence = silence_of()
+        if silence is None or silence < self._LIVENESS_HID_SILENCE_S:
+            return False
+        # One probe per silence window, so a genuinely dead handle is not
+        # hammered every poll while the reconnect is still in flight.
+        if now - self._last_liveness_ping_at < self._LIVENESS_HID_SILENCE_S:
+            return False
+        self._last_liveness_ping_at = now
+        print(
+            f"[MouseHook] HID++ silent for {silence:.0f}s while the mouse is "
+            "in use — probing the connection"
+        )
+        ping()
+        return True
 
     def _init_dispatch_queue(self, maxsize=0):
         """Initialize dispatch queue storage for subclasses with event threads."""

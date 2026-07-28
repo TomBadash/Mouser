@@ -167,6 +167,8 @@ Mouser handles mouse power-off / on cycles automatically:
 
 - **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device returns. Pending SmartShift / scroll-mode settings are replayed on reconnect.
 - **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` (Windows) and platform equivalents elsewhere, reinstalling the low-level hook when devices are added or removed.
+- **Sleep / resume (Windows)** — `WM_POWERBROADCAST`, console display-state and session-unlock notifications all funnel into `_on_system_resume`, which rebuilds the hook and drops the HID++ handle on a 0.5 s / 3 s / 10 s ladder. The retries matter: the Bolt stack returns over several seconds, so reconnecting once on the first message can probe a receiver whose mouse has not re-paired yet.
+- **Liveness watchdog** — both halves of Mouser can die without raising anything. Windows silently removes a low-level hook whose procedure overruns `LowLevelHooksTimeout`, and a resume can leave the HID++ handle open against an orphaned device where reads never fail and never return. `BaseMouseHook` polls every 5 s and acts only on evidence: the hook is judged against raw input (same events, independent delivery path), and a HID++ handle that has been quiet for 90 s while the mouse is demonstrably in use is asked to answer a root request. Silence on its own is never treated as a fault — an idle mouse is silent on every channel.
 - **UI layer** — connection state and device identity flow from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time.
 
 ### Configuration

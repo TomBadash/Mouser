@@ -1,3 +1,4 @@
+import ctypes
 import importlib
 import queue
 import sys
@@ -154,6 +155,314 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
         hook._on_hid_disconnect()
 
         self.assertFalse(hook._should_intercept_events())
+
+
+class _FakeHidListener:
+    """Stand-in exposing just the liveness surface the watchdog uses."""
+
+    def __init__(self, silence):
+        self._silence = silence
+        self.pings = 0
+        self.connected_device = SimpleNamespace(name="MX Master 4")
+
+    def seconds_since_last_report(self):
+        return self._silence
+
+    def request_liveness_ping(self):
+        self.pings += 1
+
+
+class BaseMouseHookLivenessTests(unittest.TestCase):
+    """The watchdog that stops a silently-dead HID++ handle from surviving
+    until the user restarts Mouser (issue #263, and #257 / #246 without the
+    sleep). It must probe when the mouse is provably in use and the handle
+    has gone quiet -- and must stay silent in every other case, because a
+    needless probe wakes an idle mouse to learn nothing."""
+
+    def _connected_hook(self, silence):
+        hook = BaseMouseHook()
+        listener = _FakeHidListener(silence)
+        hook._hid_gesture = listener
+        hook._on_hid_connect()
+        return hook, listener
+
+    def test_probes_when_mouse_in_use_and_hid_has_gone_quiet(self):
+        hook, listener = self._connected_hook(silence=120.0)
+        now = 1000.0
+        hook._note_os_mouse_activity(now - 1.0)
+
+        self.assertTrue(hook._check_hid_liveness(now=now))
+        self.assertEqual(listener.pings, 1)
+
+    def test_no_probe_while_the_mouse_is_idle(self):
+        """An idle mouse is silent on every channel -- that is not a symptom,
+        and probing it would only cost battery."""
+        hook, listener = self._connected_hook(silence=600.0)
+        now = 1000.0
+        hook._note_os_mouse_activity(now - 300.0)
+
+        self.assertFalse(hook._check_hid_liveness(now=now))
+        self.assertEqual(listener.pings, 0)
+
+    def test_no_probe_while_hid_is_reporting(self):
+        hook, listener = self._connected_hook(silence=5.0)
+        now = 1000.0
+        hook._note_os_mouse_activity(now)
+
+        self.assertFalse(hook._check_hid_liveness(now=now))
+        self.assertEqual(listener.pings, 0)
+
+    def test_no_probe_when_no_device_is_connected(self):
+        """The reconnect loop already owns this case; probing would race it."""
+        hook = BaseMouseHook()
+        listener = _FakeHidListener(silence=600.0)
+        hook._hid_gesture = listener
+        hook._note_os_mouse_activity(1000.0)
+
+        self.assertFalse(hook._check_hid_liveness(now=1000.0))
+        self.assertEqual(listener.pings, 0)
+
+    def test_one_probe_per_silence_window(self):
+        """A dead handle must not be hammered every poll while its reconnect
+        is still in flight."""
+        hook, listener = self._connected_hook(silence=120.0)
+        now = 1000.0
+        hook._note_os_mouse_activity(now)
+
+        self.assertTrue(hook._check_hid_liveness(now=now))
+        self.assertFalse(hook._check_hid_liveness(now=now + 5.0))
+        self.assertFalse(hook._check_hid_liveness(now=now + 30.0))
+        self.assertEqual(listener.pings, 1)
+
+    def test_probes_again_after_the_window_elapses(self):
+        hook, listener = self._connected_hook(silence=120.0)
+        now = 1000.0
+        hook._note_os_mouse_activity(now)
+        hook._check_hid_liveness(now=now)
+
+        later = now + hook._LIVENESS_HID_SILENCE_S + 1.0
+        hook._note_os_mouse_activity(later)
+
+        self.assertTrue(hook._check_hid_liveness(now=later))
+        self.assertEqual(listener.pings, 2)
+
+    def test_listener_without_liveness_surface_is_tolerated(self):
+        """Older/stub listeners must not take the watchdog thread down."""
+        hook = BaseMouseHook()
+        hook._hid_gesture = SimpleNamespace(connected_device=object())
+        hook._on_hid_connect()
+        hook._note_os_mouse_activity(1000.0)
+
+        self.assertFalse(hook._check_hid_liveness(now=1000.0))
+
+    def test_platform_liveness_check_defaults_to_noop(self):
+        self.assertIsNone(BaseMouseHook()._platform_liveness_check())
+
+
+def _load_windows_hook_module():
+    """Import the Windows hook regardless of host OS.
+
+    Its recovery logic -- when a dropped hook is worth reinstalling, when a
+    burst of resume messages is one wake -- is pure decision-making that needs
+    no real Win32 to exercise, and CI runs Linux-only, so without this the
+    code that fixes issue #263 would ship with no test behind it at all.
+    """
+    if "core.mouse_hook_windows" in sys.modules:
+        return sys.modules["core.mouse_hook_windows"]
+    if sys.platform == "win32":
+        return importlib.import_module("core.mouse_hook_windows")
+    with patch.object(ctypes, "windll", MagicMock(), create=True):
+        return importlib.import_module("core.mouse_hook_windows")
+
+
+class WindowsHookWatchdogTests(unittest.TestCase):
+    """Windows removes a low-level hook whose proc overruns
+    LowLevelHooksTimeout and never says so -- the HHOOK stays valid and simply
+    stops firing, which is how users end up with a live-looking Mouser that
+    remaps nothing (#263 after sleep, #257 / #246 at random). Raw input is the
+    independent witness that tells a dropped hook from an untouched mouse."""
+
+    def setUp(self):
+        self.module = _load_windows_hook_module()
+        self.hook = self.module.MouseHook()
+        self.hook._running = True
+        self.hook._ri_hwnd = 4242
+
+    def _active_mouse(self, now):
+        self.hook._last_raw_input_at = now - 0.1
+
+    def test_reinstalls_when_raw_input_is_live_but_the_hook_is_silent(self):
+        now = 500.0
+        self._active_mouse(now)
+        self.hook._last_hook_event_at = now - 30.0
+
+        with patch.object(self.module, "PostMessageW") as post:
+            self.assertTrue(self.hook._platform_liveness_check(now=now))
+
+        post.assert_called_once()
+        self.assertEqual(post.call_args[0][1], self.module.WM_APP_REARM)
+
+    def test_idle_mouse_is_not_a_dropped_hook(self):
+        """Both channels silent just means nobody is touching the mouse."""
+        now = 500.0
+        self.hook._last_raw_input_at = now - 600.0
+        self.hook._last_hook_event_at = now - 600.0
+
+        with patch.object(self.module, "PostMessageW") as post:
+            self.assertFalse(self.hook._platform_liveness_check(now=now))
+
+        post.assert_not_called()
+
+    def test_live_hook_is_left_alone(self):
+        now = 500.0
+        self._active_mouse(now)
+        self.hook._last_hook_event_at = now - 0.1
+
+        self.assertFalse(self.hook._platform_liveness_check(now=now))
+
+    def test_second_verdict_waits_for_the_reinstall_to_land(self):
+        """Re-arm is posted to the hook thread, so it completes after this
+        returns; a second verdict meanwhile would queue a redundant rehook."""
+        now = 500.0
+        self._active_mouse(now)
+        self.hook._last_hook_event_at = now - 30.0
+
+        with patch.object(self.module, "PostMessageW"):
+            self.assertTrue(self.hook._platform_liveness_check(now=now))
+            self._active_mouse(now + 1.0)
+            self.assertFalse(self.hook._platform_liveness_check(now=now + 1.0))
+
+    def test_stopped_hook_is_not_rearmed(self):
+        self.hook._running = False
+        now = 500.0
+        self._active_mouse(now)
+        self.hook._last_hook_event_at = now - 30.0
+
+        self.assertFalse(self.hook._platform_liveness_check(now=now))
+
+    def test_never_fires_before_either_channel_has_reported(self):
+        """At startup both clocks are zero -- that is "no data yet", not a
+        30-year-old hook event."""
+        self.assertFalse(self.hook._platform_liveness_check(now=500.0))
+
+
+class WindowsResumeRecoveryTests(unittest.TestCase):
+    """One wake raises several cues (APM resume, then display-on, then
+    unlock). They must collapse into a single recovery pass, and that pass has
+    to retry: the Bolt stack comes back over seconds, so reconnecting once on
+    the first message can probe a receiver whose mouse has not re-paired
+    (issue #81)."""
+
+    def setUp(self):
+        self.module = _load_windows_hook_module()
+        self.hook = self.module.MouseHook()
+        self.hook._running = True
+        self.hook._ri_hwnd = 4242
+
+    def test_a_burst_of_resume_cues_is_one_recovery(self):
+        with patch.object(self.module.threading, "Thread") as thread:
+            self.assertTrue(self.hook._on_system_resume("power resume"))
+            self.assertFalse(self.hook._on_system_resume("display on"))
+            self.assertFalse(self.hook._on_system_resume("session unlock"))
+
+        self.assertEqual(thread.call_count, 1)
+
+    def test_a_later_wake_recovers_again(self):
+        with patch.object(self.module.threading, "Thread") as thread:
+            self.assertTrue(self.hook._on_system_resume("power resume"))
+            self.hook._last_resume_at -= self.hook._RESUME_DEDUPE_S + 1.0
+            self.assertTrue(self.hook._on_system_resume("power resume"))
+
+        self.assertEqual(thread.call_count, 2)
+
+    def test_recovery_rearms_and_drops_the_hid_handle_on_the_first_pass(self):
+        """After a resume the handle can stay open against a device stack
+        Windows already replaced, and from outside that looks healthy -- so
+        the first pass reconnects unconditionally."""
+        listener = Mock()
+        self.hook._hid_gesture = listener
+        self.hook._device_connected = True
+
+        with (
+            patch.object(self.module.time, "sleep"),
+            patch.object(self.module, "PostMessageW") as post,
+        ):
+            self.hook._resume_recovery_worker("power resume")
+
+        self.assertEqual(listener.force_reconnect.call_count, 1)
+        self.assertEqual(post.call_count, len(self.hook._RESUME_REARM_DELAYS_S))
+
+    def test_recovery_keeps_retrying_while_the_device_stays_away(self):
+        listener = Mock()
+        self.hook._hid_gesture = listener
+        self.hook._device_connected = False
+
+        with (
+            patch.object(self.module.time, "sleep"),
+            patch.object(self.module, "PostMessageW"),
+        ):
+            self.hook._resume_recovery_worker("power resume")
+
+        self.assertEqual(
+            listener.force_reconnect.call_count,
+            len(self.hook._RESUME_REARM_DELAYS_S),
+        )
+
+    def test_recovery_stops_if_the_hook_is_torn_down_mid_ladder(self):
+        listener = Mock()
+        self.hook._hid_gesture = listener
+        self.hook._running = False
+
+        with (
+            patch.object(self.module.time, "sleep"),
+            patch.object(self.module, "PostMessageW") as post,
+        ):
+            self.hook._resume_recovery_worker("power resume")
+
+        post.assert_not_called()
+        listener.force_reconnect.assert_not_called()
+
+    def test_display_on_payload_is_recognised(self):
+        setting = self.module.POWERBROADCAST_SETTING()
+        setting.PowerSetting = self.module.GUID.from_parts(
+            *self.module.GUID_CONSOLE_DISPLAY_STATE
+        )
+        setting.DataLength = 1
+        setting.Data[0] = self.module.DISPLAY_STATE_ON
+
+        self.assertTrue(
+            self.module.MouseHook._is_display_on_notification(
+                ctypes.addressof(setting)
+            )
+        )
+
+    def test_display_off_payload_is_ignored(self):
+        setting = self.module.POWERBROADCAST_SETTING()
+        setting.PowerSetting = self.module.GUID.from_parts(
+            *self.module.GUID_CONSOLE_DISPLAY_STATE
+        )
+        setting.DataLength = 1
+        setting.Data[0] = 0
+
+        self.assertFalse(
+            self.module.MouseHook._is_display_on_notification(
+                ctypes.addressof(setting)
+            )
+        )
+
+    def test_unrelated_power_setting_is_ignored(self):
+        setting = self.module.POWERBROADCAST_SETTING()
+        setting.PowerSetting = self.module.GUID.from_parts(
+            0xDEADBEEF, 0x1234, 0x5678, (0,) * 8
+        )
+        setting.DataLength = 1
+        setting.Data[0] = self.module.DISPLAY_STATE_ON
+
+        self.assertFalse(
+            self.module.MouseHook._is_display_on_notification(
+                ctypes.addressof(setting)
+            )
+        )
 
 
 class BaseMouseHookDispatchQueueTests(unittest.TestCase):

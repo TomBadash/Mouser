@@ -709,6 +709,10 @@ class MouseHook(BaseMouseHook):
             readable, _, _ = _select_mod.select([fd], [], [], 0.5)
             if not readable:
                 continue
+            # Proof the mouse is in use, for the HID liveness watchdog. The
+            # evdev device we read from is the Logitech itself, so this is a
+            # direct statement that the device is awake.
+            self._note_os_mouse_activity()
             for event in self._evdev_device.read():
                 if not self._running:
                     return
@@ -872,10 +876,12 @@ class MouseHook(BaseMouseHook):
         else:
             print("[MouseHook] evdev not available — button remapping disabled")
 
+        self._start_liveness_watchdog()
         return True
 
     def stop(self):
         self._running = False
+        self._stop_liveness_watchdog()
         self.abort_button_gesture("stop")
         self._stop_hid_listener()
         self._hid_ready = False

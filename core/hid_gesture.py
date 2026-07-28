@@ -1120,6 +1120,11 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        # Monotonic timestamp of the last report read off the live handle,
+        # and the flag the platform hook sets to have the listener prove the
+        # handle is still alive. See `_run_liveness_ping` (issue #263).
+        self._last_report_at = 0.0
+        self._pending_liveness_ping = False
         # 0x2121 Hi-Res Wheel + 0x2150 Thumbwheel native-invert state.
         # Lock ordering: outer `_wheel_divert_call_lock` serializes
         # cross-thread callers, inner `_wheel_divert_lock` protects the
@@ -2079,6 +2084,51 @@ class HidGestureListener:
         """
         self._reconnect_requested = True
 
+    def seconds_since_last_report(self):
+        """Seconds since the live handle last delivered a report, or None
+        when there is no connection to judge."""
+        if not self._connected or self._dev is None:
+            return None
+        if not self._last_report_at:
+            return None
+        return max(0.0, time.monotonic() - self._last_report_at)
+
+    def request_liveness_ping(self):
+        """Ask the listener thread to prove the handle is still alive.
+
+        Thread-safe: sets a flag serviced by the inner event loop. Callers
+        must only raise this when they have independent evidence that the
+        mouse is awake (see ``BaseMouseHook._check_hid_liveness``) -- pinging
+        a device that is merely idle wakes it for nothing.
+        """
+        self._pending_liveness_ping = True
+
+    def _run_liveness_ping(self):
+        """Probe the open handle with a cheap HID++ root request.
+
+        Listener-thread only. After a suspend/resume cycle Windows can hand
+        the device a new stack entry while our handle stays open against the
+        orphaned one: reads never fail, they simply never return anything
+        again, so the listener sits "connected" forever against a dead pipe
+        (issue #263, and the un-slept variants #257 / #246). A read timeout
+        alone cannot tell that apart from an idle mouse, so the caller
+        establishes that the mouse is in use and this asks the device to
+        answer. Raises IOError on failure, which drops the main loop into its
+        existing cleanup + reconnect path.
+        """
+        for attempt in (1, 2):
+            resp = self._request(
+                0x00, 0,
+                [(FEAT_IROOT >> 8) & 0xFF, FEAT_IROOT & 0xFF, 0x00],
+                timeout_ms=600,
+            )
+            if resp is not None:
+                self._last_report_at = time.monotonic()
+                self._consecutive_request_timeouts = 0
+                return
+            print(f"[HidGesture] Liveness ping unanswered ({attempt}/2)")
+        raise IOError("liveness ping unanswered — handle is stale")
+
     def read_smart_shift(self):
         """Queue a Smart Shift read.
         Returns dict {'mode': str, 'enabled': bool, 'threshold': int} or None."""
@@ -2728,6 +2778,10 @@ class HidGestureListener:
 
     def _on_report(self, raw):
         """Inspect an incoming HID++ report for diverted button / raw XY events."""
+        # Stamp before parsing: any report at all -- even one we ignore --
+        # proves the handle is still carrying traffic, which is what the
+        # liveness watchdog asks about.
+        self._last_report_at = time.monotonic()
         msg = _parse(raw)
         if msg is None:
             return
@@ -3325,6 +3379,8 @@ class HidGestureListener:
             connect_backoff_s = _CONNECT_BACKOFF_BASE_S
 
             self._connected = True
+            self._last_report_at = time.monotonic()
+            self._pending_liveness_ping = False
             if self._on_connect:
                 try:
                     self._on_connect()
@@ -3400,6 +3456,9 @@ class HidGestureListener:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
+                    if self._pending_liveness_ping:
+                        self._pending_liveness_ping = False
+                        self._run_liveness_ping()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
@@ -3436,6 +3495,8 @@ class HidGestureListener:
             self._last_logged_battery = None
             self._last_battery_event = None
             self._consecutive_request_timeouts = 0
+            self._last_report_at = 0.0
+            self._pending_liveness_ping = False
             self._haptic_idx = None
             self._force_sensing_idx = None
             self._force_sensing_range = None

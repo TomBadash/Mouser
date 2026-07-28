@@ -249,6 +249,9 @@ class MouseHook(BaseMouseHook):
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 
+            # Proof the mouse is in use, for the HID liveness watchdog.
+            self._note_os_mouse_activity()
+
             if not self._first_event_logged:
                 self._first_event_logged = True
                 print("[MouseHook] CGEventTap: first event received", flush=True)
@@ -575,10 +578,12 @@ class MouseHook(BaseMouseHook):
 
         self._start_hid_listener()
         self._register_wake_observer()
+        self._start_liveness_watchdog()
         return True
 
     def stop(self):
         self._unregister_wake_observer()
+        self._stop_liveness_watchdog()
         self._running = False
         self.abort_button_gesture("stop")
         self._stop_hid_listener()
