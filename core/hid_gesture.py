@@ -882,6 +882,7 @@ BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
 # Known Logi Bolt receiver PID.
 # Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
 BOLT_RECEIVER_PID = 0xC548
+UNIFYING_RECEIVER_PID = 0xC52B
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
@@ -3211,12 +3212,30 @@ class HidGestureListener:
                         # firmware does not advertise.
                         self._install_thumb_button_extra(device_spec, controls)
                         self._divert_extras()
-                        if idx == BT_DEV_IDX:
+                        is_receiver_pid = bool(
+                            pid is not None
+                            and (
+                                (int(pid) & 0xFF00) == 0xC500
+                                or int(pid) in (BOLT_RECEIVER_PID, UNIFYING_RECEIVER_PID)
+                            )
+                        )
+                        is_bluetooth = bool(
+                            idx == BT_DEV_IDX
+                            or "bluetooth" in (opened_transport or "").lower()
+                            or "bluetooth" in (candidate_transport or "").lower()
+                            or "ble" in (opened_transport or "").lower()
+                            or "ble" in (candidate_transport or "").lower()
+                            or not is_receiver_pid
+                        )
+
+                        if is_bluetooth:
                             actual_transport = "Bluetooth"
                         elif pid == BOLT_RECEIVER_PID:
                             actual_transport = "Logi Bolt"
-                        else:
+                        elif is_receiver_pid:
                             actual_transport = "USB Receiver"
+                        else:
+                            actual_transport = "Bluetooth"
                         self._connected_device_info = build_connected_device_info(
                             product_id=pid,
                             product_name=hidpp_name or product,
