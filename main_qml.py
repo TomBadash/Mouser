@@ -14,6 +14,7 @@ import os
 import signal
 import hashlib
 import getpass
+import subprocess
 import time
 from urllib.parse import parse_qs, unquote
 
@@ -49,10 +50,22 @@ _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap, QWindow
 from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent, QTimer
-from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket, QAbstractSocket
+
+_SETTINGS_PROCESS = "--settings-process" in sys.argv
+if _SETTINGS_PROCESS:
+    from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtQuick import QQuickImageProvider
+else:
+    QQmlApplicationEngine = None
+
+    class QQuickImageProvider:
+        class ImageType:
+            Pixmap = 0
+
+        def __init__(self, *_args, **_kwargs):
+            pass
 _t2 = _time.perf_counter()
 
 # Ensure PySide6 QML plugins are found
@@ -64,6 +77,7 @@ os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 _t3 = _time.perf_counter()
 from core.config import load_config, save_config
 from core.engine import Engine
+from core.process_bridge import DaemonBridgeServer, RemoteEngine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
 from core.startup import linux_runtime_icon_path, sync_linux_icon_theme
@@ -109,6 +123,9 @@ def _parse_cli_args(argv):
             force_show = True
             i += 1
             continue
+        if arg == "--settings-process":
+            i += 1
+            continue
         qt_argv.append(arg)
         i += 1
     return qt_argv, hid_backend, start_hidden, force_show
@@ -123,15 +140,23 @@ def _single_instance_server_name() -> str:
     return f"mouser_instance_{digest}"
 
 
-def _try_activate_existing_instance(server_name: str, timeout_ms: int = 500) -> bool:
+def _send_local_instance_message(
+    server_name: str,
+    message: bytes = _SINGLE_INSTANCE_ACTIVATE_MSG,
+    timeout_ms: int = 500,
+) -> bool:
     sock = QLocalSocket()
     sock.connectToServer(server_name)
     if not sock.waitForConnected(timeout_ms):
         return False
-    sock.write(_SINGLE_INSTANCE_ACTIVATE_MSG)
+    sock.write(message)
     sock.waitForBytesWritten(timeout_ms)
     sock.disconnectFromServer()
     return True
+
+
+def _try_activate_existing_instance(server_name: str, timeout_ms: int = 500) -> bool:
+    return _send_local_instance_message(server_name, timeout_ms=timeout_ms)
 
 
 def _drain_local_activate_socket(sock: QLocalSocket | None) -> None:
@@ -140,6 +165,15 @@ def _drain_local_activate_socket(sock: QLocalSocket | None) -> None:
     sock.waitForReadyRead(300)
     sock.readAll()
     sock.deleteLater()
+
+
+def _read_local_instance_message(sock: QLocalSocket | None) -> bytes:
+    if not sock:
+        return b""
+    sock.waitForReadyRead(300)
+    message = bytes(sock.readAll())
+    sock.deleteLater()
+    return message
 
 
 def _single_instance_acquire(app: QApplication, server_name: str):
@@ -1000,40 +1034,7 @@ def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
     QTimer.singleShot(400, _tray_minimized_notice)
 
 
-def main():
-    # Re-exec through a `Mouser`-named symlink BEFORE anything Qt or
-    # AppKit related runs. Necessary because macOS reads the Dock label /
-    # Cmd+Tab caption from the executable basename at process creation;
-    # there is no in-process API to rename a Mach-O image after the fact.
-    # No-op when already relaunched, on non-macOS platforms, or when the
-    # symlink can't be created.
-    _maybe_relaunch_with_mouser_process_name()
-
-    _print_startup_times()
-    _t5 = _time.perf_counter()
-    if len(sys.argv) >= 3 and sys.argv[1] == "--mouser-apply-update":
-        from core.update_installer import apply_windows_update_from_state
-
-        raise SystemExit(apply_windows_update_from_state(sys.argv[2]))
-    argv, hid_backend, start_hidden, force_show = _parse_cli_args(sys.argv)
-    cfg = load_config()
-    cfg_settings = cfg.get("settings", {})
-    launch_hidden = (
-        not force_show
-        and (start_hidden or bool(cfg_settings.get("start_minimized", False)))
-    )
-    if hid_backend:
-        try:
-            set_hid_backend_preference(hid_backend)
-        except ValueError as exc:
-            raise SystemExit(f"Invalid --hid-backend setting: {exc}") from exc
-
-    # Also: also mutate the bundle's display name keys so
-    # surfaces that read from `[NSBundle mainBundle]` (application menu
-    # first item, Force Quit, notification banners) say "Mouser" too.
-    _rename_macos_bundle_for_dock()
-    _configure_windows_app_user_model_id()
-
+def _create_application(argv, *, quit_on_last_window_closed):
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(argv)
     app.setApplicationName("Mouser")
@@ -1043,123 +1044,122 @@ def main():
     if sys.platform == "linux":
         sync_linux_icon_theme()
     app.setWindowIcon(_app_icon())
-    app.setQuitOnLastWindowClosed(False)
-    _configure_macos_app_mode()
-    _install_macos_dock_icon()
-    ui_state = UiState(app)
+    app.setQuitOnLastWindowClosed(quit_on_last_window_closed)
+    return app
 
-    print(f"[Mouser] Version: {APP_VERSION} ({APP_BUILD_MODE})")
-    print(f"[Mouser] Commit: {APP_COMMIT_DISPLAY}")
-    print(f"[Mouser] Launch path: {_runtime_launch_path()}")
 
-    # ── Locale Manager ─────────────────────────────────────────
-    initial_lang = cfg_settings.get("language", "en")
-    locale_mgr = LocaleManager(language=initial_lang)
-
-    # macOS: allow Ctrl+C in terminal to quit the app
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-
-    if sys.platform == "darwin":
-        # SIGUSR1 thread dump (useful for debugging on macOS)
-        import traceback
-        def _dump_threads(sig, frame):
-            import threading
-            for t in threading.enumerate():
-                print(f"\n--- {t.name} ---")
-                if t.ident:
-                    traceback.print_stack(sys._current_frames().get(t.ident))
-        signal.signal(signal.SIGUSR1, _dump_threads)
-
-    server_name = _single_instance_server_name()
-    single_server, single_exit = _single_instance_acquire(app, server_name)
-    if single_exit is not None:
-        sys.exit(single_exit)
-
-    _t6 = _time.perf_counter()
-    # ── Engine (created but started AFTER UI is visible) ───────
-    engine = Engine()
-
-    _t7 = _time.perf_counter()
-    # ── QML Backend ────────────────────────────────────────────
-    backend = Backend(engine, root_dir=ROOT)
-    ui_state.appearanceMode = backend.appearanceMode
-    backend.settingsChanged.connect(
-        lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
-    )
+def _install_screenshot_controller(app, backend):
     if sys.platform == "win32":
         from core.key_simulator import set_screenshot_action_handler
         from ui.windows_screenshot import WindowsScreenshotController
 
-        screenshot_controller = WindowsScreenshotController(
+        controller = WindowsScreenshotController(
             status_callback=backend.statusMessage.emit,
             path_factory=backend.next_screenshot_file_path,
             parent=app,
         )
-        app._mouser_screenshot_controller = screenshot_controller
-        set_screenshot_action_handler(screenshot_controller.request_action)
     elif sys.platform == "linux":
         from core.key_simulator import set_screenshot_action_handler
         from ui.linux_screenshot import LinuxScreenshotController
 
-        screenshot_controller = LinuxScreenshotController(
+        controller = LinuxScreenshotController(
             status_callback=backend.statusMessage.emit,
             path_factory=backend.next_screenshot_file_path,
             parent=app,
         )
-        app._mouser_screenshot_controller = screenshot_controller
-        set_screenshot_action_handler(screenshot_controller.request_action)
-    elif sys.platform == "darwin":
+    else:
         from core.key_simulator import (
             execute_screenshot_shortcut,
             set_screenshot_action_handler,
         )
         from ui.macos_screenshot import MacScreenshotController
 
-        screenshot_controller = MacScreenshotController(
+        controller = MacScreenshotController(
             status_callback=backend.statusMessage.emit,
             path_factory=backend.next_screenshot_file_path,
             has_custom_directory=backend.has_custom_screenshot_directory,
             fallback_action=execute_screenshot_shortcut,
             parent=app,
         )
-        app._mouser_screenshot_controller = screenshot_controller
-        set_screenshot_action_handler(screenshot_controller.request_action)
+    app._mouser_screenshot_controller = controller
+    set_screenshot_action_handler(controller.request_action)
 
-    # ── QML Engine ─────────────────────────────────────────────
-    qml_engine = QQmlApplicationEngine()
+
+def _settings_process_command():
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--settings-process"]
+    return [sys.executable, os.path.abspath(__file__), "--settings-process"]
+
+
+def _load_settings_qml(qml_engine, backend, ui_state, locale_mgr):
     qml_engine.addImageProvider("appicons", AppIconProvider(ROOT))
     qml_engine.addImageProvider("systemicons", SystemIconProvider())
     qml_engine.rootContext().setContextProperty("backend", backend)
     qml_engine.rootContext().setContextProperty("uiState", ui_state)
     qml_engine.rootContext().setContextProperty("lm", locale_mgr)
-    qml_engine.rootContext().setContextProperty("launchHidden", launch_hidden)
+    qml_engine.rootContext().setContextProperty("launchHidden", False)
+    qml_engine.rootContext().setContextProperty("standaloneSettingsProcess", True)
     qml_engine.rootContext().setContextProperty("appVersion", APP_VERSION)
     qml_engine.rootContext().setContextProperty("appBuildMode", APP_BUILD_MODE)
     qml_engine.rootContext().setContextProperty("appCommit", APP_COMMIT_DISPLAY)
     qml_engine.rootContext().setContextProperty(
-        "appLaunchPath", _runtime_launch_path().replace("\\", "/"))
-
-    qml_path = os.path.join(ROOT, "ui", "qml", "Main.qml")
-    qml_engine.load(QUrl.fromLocalFile(qml_path))
-    _t8 = _time.perf_counter()
-
+        "appLaunchPath", _runtime_launch_path().replace("\\", "/")
+    )
+    qml_engine.load(QUrl.fromLocalFile(os.path.join(ROOT, "ui", "qml", "Main.qml")))
     if not qml_engine.rootObjects():
-        print("[Mouser] FATAL: Failed to load QML")
-        sys.exit(1)
+        raise RuntimeError("failed to load Mouser settings QML")
+    return qml_engine.rootObjects()[0]
 
-    root_window = qml_engine.rootObjects()[0]
 
-    def show_main_window():
-        # Promote BEFORE show so the window registers with WindowServer's
-        # foreground-app surfaces (Dock + Cmd+Tab + Mission Control) at
-        # creation time on macOS. visibilityChanged below also catches the
-        # transition (idempotent), so promotion is correct on the initial
-        # launch path where this function is never called.
+def _run_settings_process():
+    if QQmlApplicationEngine is None:
+        raise RuntimeError("Qt Quick was not loaded for the settings process")
+    _maybe_relaunch_with_mouser_process_name()
+    argv, _, _, _ = _parse_cli_args(sys.argv)
+    _rename_macos_bundle_for_dock()
+    _configure_windows_app_user_model_id()
+    app = _create_application(argv, quit_on_last_window_closed=True)
+    _set_macos_activation_policy(regular=True)
+    _install_macos_dock_icon()
+
+    cfg = load_config()
+    locale_mgr = LocaleManager(language=cfg.get("settings", {}).get("language", "en"))
+    remote_engine = RemoteEngine.from_environment()
+    backend = Backend(remote_engine, root_dir=ROOT)
+    ui_state = UiState(app)
+    ui_state.appearanceMode = backend.appearanceMode
+    backend.settingsChanged.connect(
+        lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
+    )
+
+    def sync_daemon_config():
+        remote_engine.cfg = backend._cfg
+
+    backend.settingsChanged.connect(sync_daemon_config)
+    backend.mappingsChanged.connect(sync_daemon_config)
+    backend.hapticChanged.connect(sync_daemon_config)
+    backend.profilesChanged.connect(sync_daemon_config)
+    backend.activeProfileChanged.connect(sync_daemon_config)
+    backend.smartShiftChanged.connect(sync_daemon_config)
+    backend.forceSensingChanged.connect(sync_daemon_config)
+
+    def save_language():
+        saved_cfg = load_config()
+        saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
+        save_config(saved_cfg)
+        remote_engine.cfg = saved_cfg
+
+    locale_mgr.languageChanged.connect(save_language)
+    qml_engine = QQmlApplicationEngine()
+    root_window = _load_settings_qml(
+        qml_engine, backend, ui_state, locale_mgr
+    )
+
+    def show_window():
         _set_macos_activation_policy(regular=True)
         root_window.showNormal()
         root_window.raise_()
         root_window.requestActivate()
-        _schedule_macos_dock_icon_refresh()
         _activate_macos_window()
 
     def _on_window_visibility_changed(visibility):
@@ -1184,7 +1184,7 @@ def main():
             QWindow.Visibility.Hidden,
             QWindow.Visibility.Minimized,
         )
-        engine.set_frontend_visible(frontend_visible)
+        remote_engine.set_frontend_visible(frontend_visible)
         if sys.platform != "darwin":
             return
         _set_macos_activation_policy(regular=has_window_surface)
@@ -1209,51 +1209,134 @@ def main():
             lambda *_: _allow_macos_session_quit_if_requested(_MACOS_QUIT_FILTER)
         )
 
-    def _on_second_instance_activate():
-        _drain_local_activate_socket(single_server.nextPendingConnection())
-        show_main_window()
+    import queue
+    from core.local_control import LocalControlServer
 
-    single_server.newConnection.connect(_on_second_instance_activate)
+    commands = queue.Queue()
+    settings_server = LocalControlServer("settings", commands.put)
+    try:
+        settings_server.start()
+    except RuntimeError:
+        remote_engine.close()
+        return 0
 
-    print(f"[Startup] QApp create:      {(_t6-_t5)*1000:7.1f} ms")
-    print(f"[Startup] Engine create:    {(_t7-_t6)*1000:7.1f} ms")
-    print(f"[Startup] QML load:         {(_t8-_t7)*1000:7.1f} ms")
-    print(f"[Startup] TOTAL to window:  {(_t8-_t0)*1000:7.1f} ms")
+    def handle_settings_messages():
+        while True:
+            try:
+                message = commands.get_nowait()
+            except queue.Empty:
+                return
+            if message == "quit":
+                app.quit()
+            else:
+                show_window()
 
-    # ── Accessibility check (macOS) ──────────────────────────────
+    command_timer = QTimer(app)
+    command_timer.setInterval(100)
+    command_timer.timeout.connect(handle_settings_messages)
+    command_timer.start()
+    show_window()
+    try:
+        return app.exec()
+    finally:
+        settings_server.close()
+        remote_engine.close()
+
+
+def _run_daemon():
+    _maybe_relaunch_with_mouser_process_name()
+    _print_startup_times()
+    argv, hid_backend, start_hidden, force_show = _parse_cli_args(sys.argv)
+    cfg = load_config()
+    settings = cfg.get("settings", {})
+    launch_hidden = not force_show and (
+        start_hidden or bool(settings.get("start_minimized", False))
+    )
+    if hid_backend:
+        try:
+            set_hid_backend_preference(hid_backend)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid --hid-backend setting: {exc}") from exc
+
+    _rename_macos_bundle_for_dock()
+    _configure_windows_app_user_model_id()
+    app = _create_application(argv, quit_on_last_window_closed=False)
+    _configure_macos_app_mode()
+    _install_macos_dock_icon()
+    locale_mgr = LocaleManager(
+        language=settings.get("language", "en")
+    )
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    server_name = _single_instance_server_name()
+    single_server, single_exit = _single_instance_acquire(app, server_name)
+    if single_exit is not None:
+        return single_exit
+
+    engine = Engine()
+    backend = Backend(engine, root_dir=ROOT)
+    _install_screenshot_controller(app, backend)
     accessibility_granted = _check_accessibility(locale_mgr)
-
-    # ── Start engine AFTER window is ready (deferred) ──────────
     _schedule_engine_start(engine, accessibility_granted=accessibility_granted)
+    bridge = DaemonBridgeServer(
+        engine,
+        on_shutdown=QCoreApplication.quit,
+        on_config_sync=lambda config: setattr(backend, "_cfg", config),
+        state_provider=lambda: {
+            "battery_level": backend.batteryLevel,
+            "debug_lines": list(backend._debug_lines),
+        },
+    )
+    bridge.start()
 
-    # ── System Tray ────────────────────────────────────────────
+    settings_server_name = f"{server_name}_settings"
+    settings_process = {"process": None}
+
+    def show_settings():
+        if _try_activate_existing_instance(settings_server_name, timeout_ms=150):
+            return
+        process = settings_process["process"]
+        if process is not None and process.poll() is None:
+            return
+        settings_process["process"] = subprocess.Popen(
+            _settings_process_command(),
+            cwd=ROOT,
+            env=bridge.child_environment(),
+        )
+
+    def handle_second_instance():
+        _drain_local_activate_socket(single_server.nextPendingConnection())
+        show_settings()
+
+    single_server.newConnection.connect(handle_second_instance)
+
     tray = QSystemTrayIcon(_tray_icon(), app)
     tray.setToolTip("Mouser")
-
     tray_menu = QMenu()
-
     open_action = QAction(locale_mgr.tr("tray.open_settings"), tray_menu)
-    open_action.triggered.connect(show_main_window)
+    open_action.triggered.connect(show_settings)
     tray_menu.addAction(open_action)
 
-    toggle_action = QAction(locale_mgr.tr("tray.disable_remapping"), tray_menu)
+    toggle_action = QAction("", tray_menu)
+
+    def sync_toggle_action():
+        toggle_action.setText(
+            locale_mgr.tr("tray.disable_remapping") if engine.enabled
+            else locale_mgr.tr("tray.enable_remapping")
+        )
 
     def toggle_remapping():
-        enabled = not engine.enabled
-        engine.set_enabled(enabled)
-        toggle_action.setText(
-            locale_mgr.tr("tray.disable_remapping") if enabled
-            else locale_mgr.tr("tray.enable_remapping"))
+        engine.set_enabled(not engine.enabled)
+        sync_toggle_action()
 
     toggle_action.triggered.connect(toggle_remapping)
     tray_menu.addAction(toggle_action)
 
-    debug_action = QAction(locale_mgr.tr("tray.enable_debug"), tray_menu)
+    debug_action = QAction("", tray_menu)
 
     def sync_debug_action():
-        debug_enabled = bool(backend.debugMode)
         debug_action.setText(
-            locale_mgr.tr("tray.disable_debug") if debug_enabled
+            locale_mgr.tr("tray.disable_debug") if backend.debugMode
             else locale_mgr.tr("tray.enable_debug")
         )
 
@@ -1261,28 +1344,31 @@ def main():
         backend.setDebugMode(not backend.debugMode)
         sync_debug_action()
         if backend.debugMode:
-            show_main_window()
+            show_settings()
 
     debug_action.triggered.connect(toggle_debug_mode)
     tray_menu.addAction(debug_action)
-    backend.settingsChanged.connect(sync_debug_action)
-    sync_debug_action()
 
-    check_updates_action = QAction(locale_mgr.tr("tray.check_for_updates"), tray_menu)
+    check_updates_action = QAction(
+        locale_mgr.tr("tray.check_for_updates"), tray_menu
+    )
     check_updates_action.triggered.connect(backend.manualCheckForUpdates)
     tray_menu.addAction(check_updates_action)
-
-    open_release_action = QAction(locale_mgr.tr("tray.open_latest_release"), tray_menu)
+    open_release_action = QAction(
+        locale_mgr.tr("tray.open_latest_release"), tray_menu
+    )
     open_release_action.triggered.connect(backend.openLatestReleasePage)
     tray_menu.addAction(open_release_action)
-
     tray_menu.addSeparator()
-
     quit_action = QAction(locale_mgr.tr("tray.quit"), tray_menu)
 
+    def close_settings():
+        _send_local_instance_message(
+            settings_server_name, b"quit", timeout_ms=150
+        )
+
     def quit_app():
-        if _MACOS_QUIT_FILTER is not None:
-            _MACOS_QUIT_FILTER.allow_quit()
+        close_settings()
         engine.stop()
         tray.hide()
         app.quit()
@@ -1290,30 +1376,21 @@ def main():
     quit_action.triggered.connect(quit_app)
     tray_menu.addAction(quit_action)
 
-    def _update_tray_texts():
-        """Refresh tray menu labels after a language change."""
+    def refresh_tray_state():
+        current = load_config()
+        backend._cfg = current
+        locale_mgr.setLanguage(
+            current.get("settings", {}).get("language", "en")
+        )
         open_action.setText(locale_mgr.tr("tray.open_settings"))
-        quit_action.setText(locale_mgr.tr("tray.quit"))
         check_updates_action.setText(locale_mgr.tr("tray.check_for_updates"))
         open_release_action.setText(locale_mgr.tr("tray.open_latest_release"))
+        quit_action.setText(locale_mgr.tr("tray.quit"))
+        sync_toggle_action()
         sync_debug_action()
-        # Re-sync toggle text based on current engine state
-        toggle_action.setText(
-            locale_mgr.tr("tray.disable_remapping") if engine.enabled
-            else locale_mgr.tr("tray.enable_remapping"))
 
-    def _save_language():
-        """Persist the selected language to config.json."""
-        try:
-            saved_cfg = load_config()
-            saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
-            save_config(saved_cfg)
-        except Exception as exc:
-            print(f"[Mouser] Failed to save language preference: {exc}")
-
-    locale_mgr.languageChanged.connect(_update_tray_texts)
-    locale_mgr.languageChanged.connect(_save_language)
-
+    tray_menu.aboutToShow.connect(refresh_tray_state)
+    refresh_tray_state()
     backend.updateAvailable.connect(lambda version, url: tray.showMessage(
         "Mouser",
         locale_mgr.tr("tray.update_available").format(version=version),
@@ -1322,36 +1399,39 @@ def main():
     ))
 
     tray.setContextMenu(tray_menu)
-    tray.activated.connect(lambda reason: (
-        show_main_window()
-    ) if reason in (
+    tray.activated.connect(lambda reason: show_settings() if reason in (
         QSystemTrayIcon.ActivationReason.Trigger,
         QSystemTrayIcon.ActivationReason.DoubleClick,
     ) else None)
     tray.show()
 
-    # macOS only: install a native NSStatusItem so the menu-bar icon
-    # can use AppKit's variable-length item path on notched MacBooks
-    # where Qt's square status item can disappear under constrained
-    # menu-bar space. We keep QSystemTrayIcon alive for notifications
-    # and hide only its icon surface to avoid two menu-bar items.
     if sys.platform == "darwin":
-        native_tray = _install_native_macos_status_item(
-            tray_menu, show_main_window
-        )
+        native_tray = _install_native_macos_status_item(tray_menu, show_settings)
         if native_tray is not None:
             tray.setVisible(False)
-
     if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
         _schedule_tray_minimized_notice(tray, locale_mgr)
+    else:
+        QTimer.singleShot(0, show_settings)
 
-    # ── Run ────────────────────────────────────────────────────
     try:
-        sys.exit(app.exec())
+        return app.exec()
     finally:
+        close_settings()
+        bridge.close()
         engine.stop()
-        print("[Mouser] Shut down cleanly")
+        print("[Mouser] daemon shut down cleanly")
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--mouser-apply-update":
+        from core.update_installer import apply_windows_update_from_state
+
+        return apply_windows_update_from_state(sys.argv[2])
+    if _SETTINGS_PROCESS:
+        return _run_settings_process()
+    return _run_daemon()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
