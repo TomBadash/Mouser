@@ -52,6 +52,7 @@ _BTN_TO_GESTURE_OWNER = {
 _SCROLL_INVERT_MARKER = 0x4D4F5553
 _INJECTED_EVENT_MARKER = 0x4D4F5554
 _SHIFT_WHEEL_HSCROLL_MARKER = 0x4D4F5556
+_PAN_SCROLL_MARKER = 0x4D4F5557
 _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
@@ -210,6 +211,61 @@ class MouseHook(BaseMouseHook):
             Quartz.CGEventSetIntegerValueField(inverted, field, value)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, inverted)
         return True
+
+    def _emit_pan_scroll(self, dv, dh):
+        """Inject one pixel-unit scroll step during a pan hold.
+
+        Posted inline from the event tap rather than handed to the dispatch
+        thread: panning must track the hand, and a queue hop would add visible
+        lag. This is the same thing the scroll-inversion path already does from
+        inside the callback, and CGEventPost is cheap enough not to risk the
+        tap-timeout that made *action* dispatch go async.
+        """
+        if not _QUARTZ_OK:
+            return False
+        # Pixel units (not lines) so the content tracks the pointer smoothly and
+        # lands wherever the hand stops, instead of jumping in wheel notches.
+        event = Quartz.CGEventCreateScrollWheelEvent(
+            None, Quartz.kCGScrollEventUnitPixel, 2, int(dv), int(dh)
+        )
+        if not event:
+            return False
+        Quartz.CGEventSetIntegerValueField(
+            event, Quartz.kCGEventSourceUserData, _PAN_SCROLL_MARKER
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        return True
+
+    def _current_window_under_pointer(self):
+        """Topmost normal-layer window number under the pointer.
+
+        Used by the pinned glide policy (glide-across-windows off) to notice
+        the pointer leaving the throw's window. Front-to-back order of
+        CGWindowListCopyWindowInfo means the first bounds hit is the topmost;
+        non-zero layers (menu bar, Dock, overlays) are skipped so hovering
+        the menu bar doesn't read as a window change.
+        """
+        if not _QUARTZ_OK:
+            return None
+        try:
+            loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+            windows = Quartz.CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+            )
+            for win in windows or ():
+                if win.get("kCGWindowLayer", 0) != 0:
+                    continue
+                bounds = win.get("kCGWindowBounds")
+                if not bounds:
+                    continue
+                if (bounds["X"] <= loc.x <= bounds["X"] + bounds["Width"]
+                        and bounds["Y"] <= loc.y
+                        <= bounds["Y"] + bounds["Height"]):
+                    return win.get("kCGWindowNumber")
+        except Exception:
+            return None
+        return None
 
     def _emit_gesture_swipe(self, mouse_event):
         self._enqueue_dispatch_event(mouse_event)
@@ -377,6 +433,10 @@ class MouseHook(BaseMouseHook):
                 if source_marker in (
                     _SCROLL_INVERT_MARKER,
                     _SHIFT_WHEEL_HSCROLL_MARKER,
+                    # Pan output is already in its final direction (the
+                    # pan_natural setting decided it), so it must bypass the
+                    # invert pass rather than be flipped a second time.
+                    _PAN_SCROLL_MARKER,
                 ):
                     return cg_event
                 if self.ignore_trackpad:

@@ -1335,6 +1335,7 @@ def main():
     # where Qt's square status item can disappear under constrained
     # menu-bar space. We keep QSystemTrayIcon alive for notifications
     # and hide only its icon surface to avoid two menu-bar items.
+    native_tray = None
     if sys.platform == "darwin":
         native_tray = _install_native_macos_status_item(
             tray_menu, show_main_window
@@ -1342,7 +1343,27 @@ def main():
         if native_tray is not None:
             tray.setVisible(False)
 
-    if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
+    # Fully-background mode: hide the menu-bar icon entirely. The app keeps
+    # running (window close already only hides it), and relaunching Mouser
+    # (Spotlight, Applications) activates this instance and shows the window
+    # through the single-instance socket. Applied live when the setting
+    # changes; both the Qt tray and the native NSStatusItem are covered.
+    def _apply_tray_visibility():
+        hidden = bool(backend.hideTrayIcon)
+        if native_tray is not None:
+            try:
+                native_tray.setVisible_(not hidden)
+            except Exception as exc:
+                print(f"[Mouser] native status item visibility failed: {exc}")
+            tray.setVisible(False)   # icon surface stays owned by AppKit
+        else:
+            tray.setVisible(not hidden)
+
+    _apply_tray_visibility()
+    backend.settingsChanged.connect(_apply_tray_visibility)
+
+    if (launch_hidden and not backend.hideTrayIcon
+            and QSystemTrayIcon.isSystemTrayAvailable()):
         _schedule_tray_minimized_notice(tray, locale_mgr)
 
     # ── Run ────────────────────────────────────────────────────
