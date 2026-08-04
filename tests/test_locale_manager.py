@@ -141,6 +141,19 @@ class RussianLocaleManagerTests(unittest.TestCase):
         self.assertEqual(lm.trCategory("Browser"), "Браузер")
         self.assertEqual(lm.trAction("Copy (Cmd+C)"), "Копировать (Cmd+C)")
 
+        expected_action_labels = {
+            "Cycle DPI Presets": "Циклическое переключение пресетов DPI",
+            "Actions Ring": "Кольцо действий",
+            "Left Click": "Левый клик",
+            "Right Click": "Правый клик",
+            "Middle Click": "Средний клик",
+            "Back (Mouse Button 4)": "Назад (кнопка мыши 4)",
+            "Forward (Mouse Button 5)": "Вперёд (кнопка мыши 5)",
+        }
+        for english_label, russian_label in expected_action_labels.items():
+            with self.subTest(action=english_label):
+                self.assertEqual(lm.trAction(english_label), russian_label)
+
         codes = [lang["code"] for lang in lm.availableLanguages]
         self.assertIn("ru", codes)
 

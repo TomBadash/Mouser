@@ -1374,6 +1374,13 @@ _ACTION_TR: dict[str, dict[str, str]] = {
     "ru": {
         # ── Other ─────────────────────────────────────────────────────
         "Do Nothing (Pass-through)":                "Ничего не делать (без изменений)",
+        "Cycle DPI Presets":                        "Циклическое переключение пресетов DPI",
+        "Actions Ring":                             "Кольцо действий",
+        "Left Click":                               "Левый клик",
+        "Right Click":                              "Правый клик",
+        "Middle Click":                             "Средний клик",
+        "Back (Mouse Button 4)":                    "Назад (кнопка мыши 4)",
+        "Forward (Mouse Button 5)":                 "Вперёд (кнопка мыши 5)",
 
         # ── Navigation (Windows) ──────────────────────────────────────
         "Alt + Tab (Switch Windows)":               "Alt + Tab (Переключение окон)",
