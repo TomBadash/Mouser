@@ -81,6 +81,9 @@ def _print_startup_times():
 
 LINUX_DESKTOP_FILE_BASENAME = "io.github.tombadash.mouser"
 WINDOWS_APP_USER_MODEL_ID = "TomBadash.Mouser"
+# Windows 10 1809 exposes immersive dark mode as attribute 19; newer
+# Windows 10 builds and Windows 11 use the documented attribute 20.
+_WINDOWS_DWMWA_USE_IMMERSIVE_DARK_MODE = (20, 19)
 
 
 def _parse_cli_args(argv):
@@ -247,6 +250,42 @@ def _configure_windows_app_user_model_id() -> None:
             )
     except Exception as exc:
         print(f"[Mouser] Failed to set Windows AppUserModelID: {exc}")
+
+
+def _set_windows_title_bar_dark_mode(window, enabled: bool) -> bool:
+    """Ask DWM to render a Qt window's native caption in the requested mode.
+
+    Qt Quick Controls themes only the client area.  The title bar belongs to
+    Windows' Desktop Window Manager and needs this per-HWND opt-in.  Attribute
+    19 is required by Windows 10 1809, while 20 is the documented value on
+    later Windows versions, so try the latter first and retain the fallback.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = int(window.winId())
+        if not hwnd:
+            return False
+        set_window_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_window_attribute.argtypes = [
+            wintypes.HWND,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        set_window_attribute.restype = ctypes.c_long  # HRESULT
+        value = ctypes.c_int(bool(enabled))
+        for attribute in _WINDOWS_DWMWA_USE_IMMERSIVE_DARK_MODE:
+            if set_window_attribute(
+                hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+            ) == 0:
+                return True
+    except Exception as exc:
+        print(f"[Mouser] Failed to set Windows title-bar theme: {exc}")
+    return False
 
 
 def _configure_linux_desktop_file_name(app: QGuiApplication) -> None:
@@ -1148,6 +1187,15 @@ def main():
         sys.exit(1)
 
     root_window = qml_engine.rootObjects()[0]
+
+    # Keep Windows' DWM-drawn title bar in sync with the QML theme. Calling
+    # winId() inside the helper ensures the native HWND exists even for a
+    # start-minimized launch.
+    if sys.platform == "win32":
+        _set_windows_title_bar_dark_mode(root_window, ui_state.darkMode)
+        ui_state.darkModeChanged.connect(
+            lambda: _set_windows_title_bar_dark_mode(root_window, ui_state.darkMode)
+        )
 
     def show_main_window():
         # Promote BEFORE show so the window registers with WindowServer's
