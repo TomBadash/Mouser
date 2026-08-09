@@ -69,8 +69,10 @@ class MouseHook(BaseMouseHook):
         self._tap_source = None
         self.ignore_trackpad = True
         self._wake_observer = None
+        self._screens_wake_observer = None
         self._session_resign_observer = None
         self._session_activate_observer = None
+        self._last_resume_at = 0.0
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_thread = None
         self._first_event_logged = False
@@ -453,6 +455,40 @@ class MouseHook(BaseMouseHook):
         self._emit_debug("HID DPI switch button up")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
+    # Give the macOS HID stack a moment to return, then replace the stale
+    # pre-sleep handle once. HidGestureListener owns all subsequent retries;
+    # queueing more force requests while it reconnects would tear down each
+    # fresh connection as soon as it opens.
+    _RESUME_RECONNECT_DELAY_S = 0.5
+    _RESUME_DEDUPE_S = 5.0
+
+    def _start_resume_recovery(self, reason):
+        # A full wake commonly raises both system-wake and screens-wake.
+        # Collapse that burst into one recovery pass.
+        now = time.monotonic()
+        if now - self._last_resume_at < self._RESUME_DEDUPE_S:
+            return False
+        self._last_resume_at = now
+        print(f"[MouseHook] Resume detected ({reason}) — recovering")
+        threading.Thread(
+            target=self._resume_recovery_worker,
+            daemon=True,
+            name="MouseHook-resume",
+        ).start()
+        return True
+
+    def _resume_recovery_worker(self):
+        time.sleep(self._RESUME_RECONNECT_DELAY_S)
+        if not self._running or not self._device_connected:
+            return
+        hg = self._hid_gesture
+        if hg is None:
+            return
+        try:
+            hg.force_reconnect()
+        except Exception as exc:
+            print(f"[MouseHook] resume reconnect request failed: {exc}")
+
     def _register_wake_observer(self):
         try:
             from AppKit import NSWorkspace
@@ -461,7 +497,7 @@ class MouseHook(BaseMouseHook):
         notification_center = NSWorkspace.sharedWorkspace().notificationCenter()
         hg = self._hid_gesture
 
-        def _re_enable_tap_and_reconnect(reason):
+        def _re_enable_tap_and_reconnect(reason, reconnect=True):
             if self._tap and self._running:
                 Quartz.CGEventTapEnable(self._tap, True)
                 ok = Quartz.CGEventTapIsEnabled(self._tap)
@@ -470,11 +506,16 @@ class MouseHook(BaseMouseHook):
                     f"{'OK' if ok else 'FAILED — may need restart'}",
                     flush=True,
                 )
-            if hg:
+            if hg and reconnect:
                 hg.force_reconnect()
 
         def _on_wake(notification):
-            _re_enable_tap_and_reconnect("wake")
+            _re_enable_tap_and_reconnect("wake", reconnect=False)
+            self._start_resume_recovery("system wake")
+
+        def _on_screens_wake(notification):
+            _re_enable_tap_and_reconnect("screens wake", reconnect=False)
+            self._start_resume_recovery("screens wake")
 
         def _on_session_resign(notification):
             print("[MouseHook] Session deactivated", flush=True)
@@ -487,6 +528,12 @@ class MouseHook(BaseMouseHook):
             None,
             None,
             _on_wake,
+        )
+        self._screens_wake_observer = notification_center.addObserverForName_object_queue_usingBlock_(
+            "NSWorkspaceScreensDidWakeNotification",
+            None,
+            None,
+            _on_screens_wake,
         )
         self._session_resign_observer = (
             notification_center.addObserverForName_object_queue_usingBlock_(
@@ -512,6 +559,7 @@ class MouseHook(BaseMouseHook):
             notification_center = NSWorkspace.sharedWorkspace().notificationCenter()
             for attr in (
                 "_wake_observer",
+                "_screens_wake_observer",
                 "_session_resign_observer",
                 "_session_activate_observer",
             ):
