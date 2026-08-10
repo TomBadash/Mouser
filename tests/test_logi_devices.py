@@ -1,6 +1,7 @@
 import unittest
 
 from core.device_layouts import get_device_layout
+from core.logi_device_catalog import M720_BUTTONS
 from core.logi_devices import (
     DEFAULT_GESTURE_CIDS,
     GENERIC_BUTTONS,
@@ -273,7 +274,14 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
         self.assertEqual(info.supported_buttons, ("middle", "xbutton1", "xbutton2"))
 
-    def test_m720_falls_back_to_generic_layout_without_device_claim(self):
+    def test_m720_resolves_to_full_support(self):
+        # Issue #47: the M720 Triathlon is now a first-class catalog entry. It
+        # matches by its Bluetooth PID (0xB015) and, when it enumerates behind a
+        # shared Unifying receiver PID (0xC52B), by its reported name/alias.
+        # These fixtures are CID-only (no flags); the divert/rawXY helpers do
+        # not over-narrow CID-only dumps, and gesture_cids falls back to the
+        # spec's (0x00D0, 0x00D7), so the full M720 button set -- including
+        # gesture click + directions -- surfaces via the exact M720 layout.
         for product_id in (0xC52B, 0xB015):
             with self.subTest(product_id=f"0x{product_id:04X}"):
                 info = build_connected_device_info(
@@ -292,11 +300,33 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                     ],
                 )
 
-                self.assertEqual(info.key, "m720_triathlon_multi-device_mouse")
+                self.assertEqual(info.key, "m720_triathlon")
                 self.assertEqual(info.display_name, "M720 Triathlon Multi-Device Mouse")
-                self.assertEqual(info.ui_layout, "generic_mouse")
-                self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
-                self.assertEqual(info.supported_buttons, ("middle", "xbutton1", "xbutton2"))
+                self.assertEqual(info.ui_layout, "m720_triathlon")
+                self.assertEqual(
+                    info.image_asset, "logitech-mice/m720_triathlon/mouse.png"
+                )
+                self.assertEqual(info.supported_buttons, M720_BUTTONS)
+
+    def test_m720_bare_receiver_pid_without_name_falls_back_to_generic(self):
+        # Over-claim guard (preserved from the pre-#47 behavior): the shared
+        # Unifying receiver PID 0xC52B must NOT claim M720 support on its own --
+        # only a name/alias match (previous test) or the device-specific BT PID
+        # may. A bare receiver PID with no recognizable name stays generic.
+        info = build_connected_device_info(
+            product_id=0xC52B,
+            product_name=None,
+            reprog_controls=[
+                {"cid": 0x0052},
+                {"cid": 0x0053},
+                {"cid": 0x0056},
+            ],
+        )
+
+        self.assertNotEqual(info.key, "m720_triathlon")
+        self.assertEqual(info.ui_layout, "generic_mouse")
+        self.assertEqual(info.image_asset, "icons/mouse-simple.svg")
+        self.assertEqual(info.supported_buttons, GENERIC_BUTTONS)
 
     def test_resolve_g502_hero_by_product_id(self):
         device = resolve_device(product_id=0xC08B)
@@ -651,7 +681,13 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         self.assertTrue(info.capability_inventory.smart_shift)
         self.assertTrue(info.capability_inventory.adjustable_dpi)
 
-    def test_m720_issue_47_reports_capability_inventory_without_support_claim(self):
+    def test_m720_issue_47_full_support_with_runtime_gesture(self):
+        # Issue #47, resolved: with the gesture button (0x00D0) diverted and a
+        # successful rawXY divert at connect time, the M720 surfaces its full
+        # button set -- middle, gesture (click + four directions), back/forward
+        # and horizontal scroll -- via the exact M720 layout. The capability
+        # inventory still reports the runtime findings, and the no-mode-shift
+        # guard from the pre-support behavior is preserved.
         info = build_connected_device_info(
             product_id=0xB015,
             product_name="M720_Triathlon",
@@ -671,8 +707,10 @@ class RuntimeSupportedButtonTests(unittest.TestCase):
         )
 
         self.assertEqual(info.key, "m720_triathlon")
-        self.assertEqual(info.ui_layout, "generic_mouse")
-        self.assertEqual(info.supported_buttons, GENERIC_BUTTONS)
+        self.assertEqual(info.ui_layout, "m720_triathlon")
+        self.assertEqual(info.supported_buttons, M720_BUTTONS)
+        self.assertIn("gesture", info.supported_buttons)
+        self.assertIn("gesture_left", info.supported_buttons)
         self.assertEqual(info.capability_inventory.active_gesture_cid, 0x00D0)
         self.assertEqual(info.capability_inventory.hscroll_cids, (0x005B, 0x005D))
         self.assertNotIn("mode_shift", info.supported_buttons)
