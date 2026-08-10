@@ -108,10 +108,9 @@ M590_BUTTONS = (
     "hscroll_right",
 )
 
-# M720 Triathlon Multi-Device Mouse: same physical control set as the M585/M590
-# (middle click, back/forward thumb buttons, wheel tilt) PLUS a physical gesture
-# / app-switch button. The gesture button is CID 0x00D0 -- a real, divertable,
-# rawXY-capable control (flags 0x0171) -- so it supports click plus the four
+# M720 Triathlon Multi-Device Mouse: middle click, back/forward thumb buttons,
+# wheel tilt PLUS a physical gesture button. The gesture button is CID 0x00D0,
+# a rawXY-capable control (flags 0x0171). It supports click plus the four
 # directional swipes when a rawXY divert succeeds at connect time. This is why
 # the M720 gets its own tuple instead of reusing ``M590_BUTTONS``.
 M720_BUTTONS = (
@@ -357,18 +356,14 @@ LOGI_DEVICE_SPECS = (
         "dpi_max": 8000,
     },
     # -- M720 Triathlon Multi-Device Mouse -----------------------------------
-    # Resolves issue #47. Multi-device (Bluetooth + Unifying) mouse. Confirmed
-    # via live HID++ probe over Bluetooth: REPROG_CONTROLS_V4 (0x1B04),
-    # HIRES_WHEEL_ENHANCED (0x2121) and BATTERY_STATUS (0x1000). Physical
-    # controls are middle click (0x0052), back (0x0053), forward (0x0056), the
-    # scroll wheel's left/right tilt (0x005B / 0x005D, reports as horizontal
-    # scroll) and a physical gesture / app-switch button.
-    #
-    # The gesture button is CID 0x00D0 -- a real (non-virtual), divertable,
-    # rawXY-capable control (flags 0x0171) -- listed first in ``gesture_cids``
-    # so ``_divert`` requests rawXY on it and directional swipes work. 0x00D7
-    # (the firmware's *virtual* gesture control) is kept as a fallback
-    # candidate. DPI is fixed at 1000 (no ADJUSTABLE_DPI feature); there is no
+    # Multi-device mouse. Confirmed via live HID++ probe over Bluetooth:
+    # REPROG_CONTROLS_V4 (0x1B04), HIRES_WHEEL_ENHANCED (0x2121), BATTERY_STATUS (0x1000)
+    # Physical controls are middle click (0x0052), back (0x0053), forward (0x0056), the
+    # scroll wheel's left/right tilt (0x005B / 0x005D, horizontal scroll) and
+    # gesture button is CID 0x00D0, a rawXY-capable control (flags 0x0171)
+    # listed first in ``gesture_cids`` so ``_divert`` requests rawXY on it
+    # and directional swipes work. 0x00D7 (firmware virtual gesture control)
+    # is kept as a fallback candidate. DPI is fixed at 1000; there is no
     # mode-shift or SmartShift.
     #
     # Enumerated directly over Bluetooth with the device-specific PID 0xB015,
@@ -460,6 +455,82 @@ LOGI_DEVICE_SPECS = (
 
 
 LOGI_DEVICE_LAYOUTS = {
+    # M720 Triathlon Multi-Device Mouse: “MiNe-M_100-3389U” by MiNe,
+    # CC BY 2.0 <https://creativecommons.org/licenses/by/2.0>.
+    # middle click (wheel press), thumb gesture button, wheel tilt,
+    # thumb back/forward. Device switch button doesn't show up via HID
+    "m720_triathlon": _layout(
+        "m720_triathlon",
+        "M720 Triathlon Multi-Device Mouse",
+        "logitech-mice/m720_triathlon/mouse.png",
+        248,
+        400,
+        [
+            _hotspot(
+                "middle",
+                "Middle button",
+                "mapping",
+                0.565,
+                0.20,
+                label_side="right",
+                label_off_x=150,
+                label_off_y=-40,
+            ),
+            _hotspot(
+                "gesture",
+                "Gesture button",
+                "gesture",
+                0.55,
+                0.30,
+                label_side="right",
+                label_off_x=150,
+                label_off_y=20,
+            ),
+            _hotspot(
+                "hscroll_right",
+                "Scroll right",
+                "mapping",
+                0.63,
+                0.15,
+                label_side="right",
+                label_off_x=150,
+                label_off_y=35,
+                is_hscroll=True,
+            ),
+            _hotspot(
+                "hscroll_left",
+                "Scroll left",
+                "mapping",
+                0.505,
+                0.20,
+                label_side="left",
+                label_off_x=-170,
+                label_off_y=-45,
+                is_hscroll=True,
+            ),
+            _hotspot(
+                "xbutton2",
+                "Forward button",
+                "mapping",
+                0.30,
+                0.40,
+                label_side="left",
+                label_off_x=-180,
+                label_off_y=-10,
+            ),
+            _hotspot(
+                "xbutton1",
+                "Back button",
+                "mapping",
+                0.275,
+                0.47,
+                label_side="left",
+                label_off_x=-170,
+                label_off_y=10,
+            ),
+        ],
+        manual_selectable=True,
+    ),
     # M650 Signature: no device art yet; shows generic silhouette with the
     # three-button layout. Interactive hotspot diagram can be added once
     # mouse artwork is sourced and product_ids are confirmed.
@@ -536,85 +607,6 @@ LOGI_DEVICE_LAYOUTS = {
                 "mapping",
                 0.285,
                 0.55,
-                label_side="left",
-                label_off_x=-170,
-                label_off_y=10,
-            ),
-        ],
-        manual_selectable=True,
-    ),
-    # M720 Triathlon Multi-Device Mouse: three-quarter product render. Six
-    # remappable controls are hotspotted -- middle click (wheel press), the
-    # gesture / app-switch button just below the wheel, the scroll wheel's
-    # left/right tilt (horizontal scroll), and the back/forward thumb buttons on
-    # the left flank. The gesture hotspot's swipe directions are edited in the
-    # shared gesture sub-editor. Coordinates are approximate markers on the
-    # angled photo and can be refined against a top-down render.
-    "m720_triathlon": _layout(
-        "m720_triathlon",
-        "M720 Triathlon Multi-Device Mouse",
-        "logitech-mice/m720_triathlon/mouse.png",
-        600,
-        600,
-        [
-            _hotspot(
-                "middle",
-                "Middle button",
-                "mapping",
-                0.565,
-                0.20,
-                label_side="right",
-                label_off_x=150,
-                label_off_y=-40,
-            ),
-            _hotspot(
-                "gesture",
-                "Gesture button",
-                "gesture",
-                0.55,
-                0.30,
-                label_side="right",
-                label_off_x=150,
-                label_off_y=20,
-            ),
-            _hotspot(
-                "hscroll_right",
-                "Scroll right",
-                "mapping",
-                0.63,
-                0.15,
-                label_side="right",
-                label_off_x=150,
-                label_off_y=35,
-                is_hscroll=True,
-            ),
-            _hotspot(
-                "hscroll_left",
-                "Scroll left",
-                "mapping",
-                0.505,
-                0.20,
-                label_side="left",
-                label_off_x=-170,
-                label_off_y=-45,
-                is_hscroll=True,
-            ),
-            _hotspot(
-                "xbutton2",
-                "Forward button",
-                "mapping",
-                0.30,
-                0.40,
-                label_side="left",
-                label_off_x=-180,
-                label_off_y=-10,
-            ),
-            _hotspot(
-                "xbutton1",
-                "Back button",
-                "mapping",
-                0.275,
-                0.47,
                 label_side="left",
                 label_off_x=-170,
                 label_off_y=10,
