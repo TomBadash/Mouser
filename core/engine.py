@@ -37,6 +37,7 @@ BACKGROUND_BATTERY_POLL_INTERVAL_S = 1800
 BACKGROUND_SMART_SHIFT_POLL_INTERVAL_S = 300
 BACKGROUND_HID_POLL_IDLE_GRACE_S = 60.0
 BACKGROUND_HID_POLL_EVENT_FUZZ_S = 2.0
+BACKGROUND_HID_RESUME_PROBE_WINDOW_S = 10.0
 
 
 def _system_idle_seconds():
@@ -77,6 +78,37 @@ def _system_idle_seconds():
     return None
 
 
+def _mouse_idle_seconds():
+    """Return seconds since the last mouse input on macOS.
+
+    Unlike ``_system_idle_seconds()``, this ignores keyboard activity so a
+    background health probe does not wake a mouse that the user has not
+    actually resumed using.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        import Quartz
+        state = getattr(Quartz, "kCGEventSourceStateCombinedSessionState", 0)
+        event_names = (
+            "kCGEventMouseMoved",
+            "kCGEventLeftMouseDown",
+            "kCGEventRightMouseDown",
+            "kCGEventOtherMouseDown",
+            "kCGEventScrollWheel",
+        )
+        idle_values = [
+            float(Quartz.CGEventSourceSecondsSinceLastEventType(
+                state, getattr(Quartz, event_name)
+            ))
+            for event_name in event_names
+            if hasattr(Quartz, event_name)
+        ]
+        return min(idle_values) if idle_values else None
+    except Exception:
+        return None
+
+
 class Engine:
     """
     Core logic: reads config, installs the mouse hook,
@@ -110,6 +142,7 @@ class Engine:
         self._battery_poll_thread = None          # track the poller thread
         self._last_background_hid_poll_at = None
         self._frontend_visible = False
+        self._hidden_hid_resume_probe_armed = False
         self._last_connection_state = bool(self._hid_runtime_state().input_ready)
         self._wheel_divert_change_cb = None
         self._wheel_divert_active_local = False
@@ -1368,6 +1401,31 @@ class Engine:
     def set_frontend_visible(self, visible):
         self._frontend_visible = bool(visible)
 
+    def _hidden_hid_resume_probe_due(self):
+        """Arm while the mouse is idle; fire once when mouse input resumes.
+
+        This keeps hidden-window polling dormant while the mouse is asleep,
+        but gives the HID++ listener one chance to discover a stale macOS
+        IOKit handle as soon as the user starts using the mouse again.
+        """
+        if self._frontend_visible:
+            self._hidden_hid_resume_probe_armed = False
+            return False
+
+        idle_seconds = _mouse_idle_seconds()
+        if idle_seconds is None:
+            return False
+        if idle_seconds >= BACKGROUND_HID_POLL_IDLE_GRACE_S:
+            self._hidden_hid_resume_probe_armed = True
+            return False
+        if (
+            self._hidden_hid_resume_probe_armed
+            and idle_seconds <= BACKGROUND_HID_RESUME_PROBE_WINDOW_S
+        ):
+            self._hidden_hid_resume_probe_armed = False
+            return True
+        return False
+
     def _battery_poll_loop(self, stop_event):
         """Read battery and smart shift mode periodically until disconnected."""
         _battery_poll_interval = BACKGROUND_BATTERY_POLL_INTERVAL_S
@@ -1380,6 +1438,12 @@ class Engine:
             now = time.time()
             hg = self.hook._hid_gesture
             if hg and hg.connected_device is not None:
+                if self._hidden_hid_resume_probe_due():
+                    print("[Engine] Mouse resumed after idle; checking HID++ connection")
+                    hg.check_connection()
+                    if stop_event.is_set():
+                        return
+
                 if (
                     now - _last_battery >= _battery_poll_interval
                     and self._background_hid_poll_allowed(now)

@@ -128,6 +128,32 @@ class GestureCandidateSelectionTests(unittest.TestCase):
         )
 
 
+class HidConnectionCheckTests(unittest.TestCase):
+    def test_connection_check_uses_reprog_feature_as_health_probe(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+
+        with patch.object(listener, "_find_feature", return_value=0x09) as find:
+            listener._apply_pending_connection_check()
+
+        find.assert_called_once_with(hid_gesture.FEAT_REPROG_V4, timeout_ms=1000)
+        self.assertTrue(listener._connection_check_result)
+        self.assertTrue(listener._connection_check_event.is_set())
+
+    def test_failed_connection_check_drives_reconnect_exception(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+
+        with (
+            patch.object(listener, "_find_feature", return_value=None),
+            self.assertRaisesRegex(IOError, "health check failed"),
+        ):
+            listener._apply_pending_connection_check()
+
+        self.assertFalse(listener._connection_check_result)
+        self.assertTrue(listener._connection_check_event.is_set())
+
+
 class DeviceInfoDumpTests(unittest.TestCase):
     def test_dump_device_info_includes_runtime_capability_inventory(self):
         listener = hid_gesture.HidGestureListener()

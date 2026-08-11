@@ -318,6 +318,8 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         return SimpleNamespace(
             connected_device=connected_device,
             read_battery=Mock(return_value=None),
+            read_smart_shift=Mock(return_value=None),
+            check_connection=Mock(return_value=True),
             set_dpi=Mock(return_value=dpi_result),
             set_smart_shift=Mock(return_value=smart_shift_result),
             smart_shift_supported=True,
@@ -537,7 +539,8 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             read_smart_shift=Mock(return_value={"mode": "ratchet", "enabled": False, "threshold": 25}),
         )
 
-        engine._battery_poll_loop(stop_event)
+        with patch("core.engine._system_idle_seconds", return_value=0.0):
+            engine._battery_poll_loop(stop_event)
 
         engine.hook._hid_gesture.read_battery.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_not_called()
@@ -611,6 +614,36 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
 
         engine.hook._hid_gesture.read_battery.assert_called_once_with()
         engine.hook._hid_gesture.read_smart_shift.assert_called_once_with()
+
+    def test_hidden_mouse_resume_runs_one_connection_check(self):
+        engine = self._make_engine()
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.side_effect = [False, True]
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=SimpleNamespace(name="MX Master 3S")
+        )
+
+        with patch("core.engine._mouse_idle_seconds", side_effect=[120.0, 1.0]):
+            engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.check_connection.assert_called_once_with()
+        engine.hook._hid_gesture.read_battery.assert_not_called()
+        engine.hook._hid_gesture.read_smart_shift.assert_not_called()
+
+    def test_hidden_mouse_activity_without_prior_idle_does_not_probe(self):
+        engine = self._make_engine()
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.return_value = True
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=SimpleNamespace(name="MX Master 3S")
+        )
+
+        with patch("core.engine._mouse_idle_seconds", return_value=1.0):
+            engine._battery_poll_loop(stop_event)
+
+        engine.hook._hid_gesture.check_connection.assert_not_called()
 
 
 class WheelInvertConnectThreadingTests(unittest.TestCase):
