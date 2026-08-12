@@ -275,7 +275,6 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(info.supported_buttons, ("middle", "xbutton1", "xbutton2"))
 
     def test_m720_resolves_to_full_support(self):
-        # Should probably remove this test now.
         for product_id in (0xC52B, 0xB015):
             with self.subTest(product_id=f"0x{product_id:04X}"):
                 info = build_connected_device_info(
@@ -298,9 +297,28 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                 self.assertEqual(info.display_name, "M720 Triathlon Multi-Device Mouse")
                 self.assertEqual(info.ui_layout, "m720_triathlon")
                 self.assertEqual(
-                    info.image_asset, "logitech-mice/m720_triathlon/mouse.png"
+                    info.image_asset, "logitech-mice/m720_triathlon/mouse.svg"
                 )
                 self.assertEqual(info.supported_buttons, M720_BUTTONS)
+
+    def test_m720_resolves_by_documented_bluetooth_pairing_name(self):
+        info = build_connected_device_info(
+            product_id=0xB015,
+            product_name="M720 Triathlon Mouse",
+        )
+
+        self.assertEqual(info.key, "m720_triathlon")
+        self.assertEqual(info.ui_layout, "m720_triathlon")
+
+    def test_m720_catalog_declares_verified_controls_and_fixed_dpi(self):
+        device = resolve_device(product_id=0xB015)
+
+        self.assertIsNotNone(device)
+        self.assertEqual(device.gesture_cids, (0x00D0, 0x00D7))
+        self.assertEqual(device.supported_buttons, M720_BUTTONS)
+        self.assertEqual(device.dpi_min, 1000)
+        self.assertEqual(device.dpi_max, 1000)
+        self.assertIn("M720 Triathlon Mouse", device.aliases)
 
     def test_m720_bare_receiver_pid_without_name_falls_back_to_generic(self):
         # Over-claim guard (preserved from the pre-#47 behavior): the shared

@@ -192,6 +192,53 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertNotIn("gesture", hotspot_keys)
         self.assertNotIn("mode_shift", hotspot_keys)
 
+    def test_m720_layout_uses_project_schematic_and_control_anchors(self):
+        layout = get_device_layout("m720_triathlon")
+        hotspots = {hotspot["buttonKey"]: hotspot for hotspot in layout["hotspots"]}
+
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(
+            layout["image_asset"],
+            "logitech-mice/m720_triathlon/mouse.svg",
+        )
+        self.assertEqual(
+            set(hotspots),
+            {
+                "middle",
+                "gesture",
+                "hscroll_left",
+                "hscroll_right",
+                "xbutton1",
+                "xbutton2",
+            },
+        )
+        self.assertEqual(
+            (hotspots["middle"]["normX"], hotspots["middle"]["normY"]),
+            (0.355, 0.240),
+        )
+        self.assertEqual(
+            (hotspots["hscroll_left"]["normX"], hotspots["hscroll_left"]["normY"]),
+            (0.327, 0.235),
+        )
+        self.assertEqual(
+            (hotspots["hscroll_right"]["normX"], hotspots["hscroll_right"]["normY"]),
+            (0.385, 0.246),
+        )
+        self.assertEqual(
+            (hotspots["xbutton1"]["normX"], hotspots["xbutton1"]["normY"]),
+            (0.248, 0.551),
+        )
+        self.assertEqual(
+            (hotspots["xbutton2"]["normX"], hotspots["xbutton2"]["normY"]),
+            (0.364, 0.516),
+        )
+        self.assertEqual(
+            (hotspots["gesture"]["normX"], hotspots["gesture"]["normY"]),
+            (0.297, 0.721),
+        )
+        self.assertTrue(hotspots["hscroll_left"]["isHScroll"])
+        self.assertTrue(hotspots["hscroll_right"]["isHScroll"])
+
     def test_exact_mx_master_3s_layout_uses_catalog_asset(self):
         layout = get_device_layout("mx_master_3s")
 

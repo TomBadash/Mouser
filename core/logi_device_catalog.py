@@ -356,8 +356,10 @@ LOGI_DEVICE_SPECS = (
         "dpi_max": 8000,
     },
     # -- M720 Triathlon Multi-Device Mouse -----------------------------------
-    # Multi-device mouse. Confirmed via live HID++ probe over Bluetooth:
-    # REPROG_CONTROLS_V4 (0x1B04), HIRES_WHEEL_ENHANCED (0x2121), BATTERY_STATUS (0x1000)
+    # Multi-device mouse. Bluetooth dumps confirm REPROG_CONTROLS_V4 (0x1B04)
+    # and BATTERY_STATUS (0x1000). HIRES_WHEEL_ENHANCED (0x2121) is present
+    # in the Unifying (0x405E) dump, but is not claimed for Bluetooth here.
+    # https://github.com/pwr-Solaar/Solaar/tree/master/docs/devices
     # Physical controls are middle click (0x0052), back (0x0053), forward (0x0056), the
     # scroll wheel's left/right tilt (0x005B / 0x005D, horizontal scroll) and
     # gesture button is CID 0x00D0, a rawXY-capable control (flags 0x0171)
@@ -377,12 +379,15 @@ LOGI_DEVICE_SPECS = (
         "product_ids": (0xB015,),
         "aliases": (
             "M720 Triathlon Multi-Device Mouse",
+            # Logitech's M720 setup guide documents this Bluetooth pairing name:
+            # https://www.logitech.com/assets/64937/2/m720-web-qsg.pdf
+            "M720 Triathlon Mouse",
             "M720 Triathlon",
             "Logitech M720 Triathlon",
             "M720",
         ),
         "ui_layout": "m720_triathlon",
-        "image_asset": "logitech-mice/m720_triathlon/mouse.png",
+        "image_asset": "logitech-mice/m720_triathlon/mouse.svg",
         "supported_buttons": M720_BUTTONS,
         "gesture_cids": (0x00D0, 0x00D7),
         "dpi_min": 1000,
@@ -455,14 +460,13 @@ LOGI_DEVICE_SPECS = (
 
 
 LOGI_DEVICE_LAYOUTS = {
-    # M720 Triathlon Multi-Device Mouse: “MiNe-M_100-3389U” by MiNe,
-    # CC BY 2.0 <https://creativecommons.org/licenses/by/2.0>.
-    # middle click (wheel press), thumb gesture button, wheel tilt,
-    # thumb back/forward. Device switch button doesn't show up via HID
+    # Project-authored M720 control schematic. See its shipped credits file.
+    # The targets correspond to the wheel press/tilt, side back/forward, and
+    # thumb gesture controls; the Easy-Switch control is not exposed by HID++.
     "m720_triathlon": _layout(
         "m720_triathlon",
         "M720 Triathlon Multi-Device Mouse",
-        "logitech-mice/m720_triathlon/mouse.png",
+        "logitech-mice/m720_triathlon/mouse.svg",
         431,
         341,
         [
@@ -470,8 +474,8 @@ LOGI_DEVICE_LAYOUTS = {
                 "middle",
                 "Middle button",
                 "mapping",
-                0.29,
-                0.16,
+                0.355,
+                0.240,
                 label_side="left",
                 label_off_x=-170,
                 label_off_y=45,
@@ -480,8 +484,8 @@ LOGI_DEVICE_LAYOUTS = {
                 "gesture",
                 "Gesture button",
                 "gesture",
-                0.25,
-                0.68,
+                0.297,
+                0.721,
                 label_side="left",
                 label_off_x=-140,
                 label_off_y=58,
@@ -490,8 +494,8 @@ LOGI_DEVICE_LAYOUTS = {
                 "hscroll_right",
                 "Scroll right",
                 "mapping",
-                0.255,
-                0.10,
+                0.385,
+                0.246,
                 label_side="right",
                 label_off_x=153,
                 label_off_y=-34,
@@ -501,8 +505,8 @@ LOGI_DEVICE_LAYOUTS = {
                 "hscroll_left",
                 "Scroll left",
                 "mapping",
-                0.20,
-                0.15,
+                0.327,
+                0.235,
                 label_side="left",
                 label_off_x=-132,
                 label_off_y=-25,
@@ -512,18 +516,18 @@ LOGI_DEVICE_LAYOUTS = {
                 "xbutton2",
                 "Forward button",
                 "mapping",
-                0.22,
-                0.525,
-                label_side="left",
-                label_off_x=-147,
-                label_off_y=-8,
+                0.364,
+                0.516,
+                label_side="right",
+                label_off_x=145,
+                label_off_y=20,
             ),
             _hotspot(
                 "xbutton1",
                 "Back button",
                 "mapping",
-                0.315,
-                0.56,
+                0.248,
+                0.551,
                 label_side="left",
                 label_off_x=-190,
                 label_off_y=27,

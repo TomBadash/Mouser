@@ -1,0 +1,56 @@
+<!--
+  M720 control schematic — Mouser contributors, 2026
+  Original project-authored artwork; licensed under the repository MIT License.
+  See credits.txt in this directory.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="431" height="341" viewBox="0 0 431 341" role="img" aria-labelledby="title description">
+  <title id="title">M720 Triathlon control schematic</title>
+  <desc id="description">A non-branded schematic showing the wheel, tilt, side back and forward buttons, and thumb gesture button.</desc>
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#53606d"/>
+      <stop offset="0.48" stop-color="#36414b"/>
+      <stop offset="1" stop-color="#202832"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#687583"/>
+      <stop offset="1" stop-color="#3f4a55"/>
+    </linearGradient>
+    <linearGradient id="wheel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b9c3cb"/>
+      <stop offset="0.5" stop-color="#687682"/>
+      <stop offset="1" stop-color="#d5dde2"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M45 106C65 62 126 30 205 22c79-8 150 19 185 80 32 56 23 138-20 188-49 57-179 55-258 20C48 281 17 233 28 171c3-24 8-46 17-65Z" fill="url(#body)" stroke="#161c22" stroke-width="5"/>
+  <path d="M50 107C72 70 130 43 203 36c69-7 133 14 164 65 16 26 20 57 14 82-42-42-100-60-163-50-62 9-119 40-170 89-15-35-13-76 2-115Z" fill="url(#top)" stroke="#202a33" stroke-width="3"/>
+
+  <!-- Primary click shells. -->
+  <path d="M53 107C77 73 118 51 158 44l-8 82c-44 10-76 30-102 58-8-24-7-52 5-77Z" fill="#4d5964" stroke="#202932" stroke-width="3"/>
+  <path d="M160 44c52-12 123-2 160 38l-108 51c-22-4-42-6-62-7l10-82Z" fill="#45515c" stroke="#202932" stroke-width="3"/>
+
+  <!-- Scroll wheel. The center is the middle-click anchor; edges are tilt anchors. -->
+  <g transform="rotate(-16 153 82)">
+    <rect x="128" y="58" width="50" height="49" rx="20" fill="#1d252d" stroke="#11171c" stroke-width="3"/>
+    <rect x="140" y="53" width="26" height="59" rx="12" fill="url(#wheel)" stroke="#dbe2e6" stroke-width="2"/>
+    <path d="M144 65h18M144 73h18M144 81h18M144 89h18M144 97h18" stroke="#3d4a55" stroke-width="2"/>
+  </g>
+  <path d="M189 93l28-15 10 20-28 15Z" fill="#25303a" stroke="#171e25" stroke-width="3"/>
+
+  <!-- Side back and forward buttons. -->
+  <path d="M84 180c19-17 42-29 66-35l16 22c-28 8-49 21-67 38l-22-7c-4-5-1-12 7-18Z" fill="#202932" stroke="#12181e" stroke-width="3"/>
+  <path d="M154 165c20-7 41-11 63-10l12 24c-26 1-47 7-66 17l-18-18c-4-4 0-10 9-13Z" fill="#202932" stroke="#12181e" stroke-width="3"/>
+  <path d="M93 185c17-14 35-23 55-29M162 172c17-6 34-9 52-8" fill="none" stroke="#758391" stroke-width="2" opacity=".7"/>
+
+  <!-- Recessed thumb gesture control. -->
+  <path d="M100 233c18-10 40-14 61-11 15 2 23 14 19 25-5 14-27 29-48 34-21 5-40 0-45-12-5-13 0-26 13-36Z" fill="#26313a" stroke="#151c22" stroke-width="3"/>
+  <rect x="114" y="238" width="29" height="16" rx="8" fill="#64727e" stroke="#192128" stroke-width="2"/>
+  <path d="M119 246h19" stroke="#b9c4cc" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Non-interactive Easy-Switch indicator, deliberately not used as a hotspot. -->
+  <g fill="#97a4af">
+    <circle cx="270" cy="147" r="4"/><circle cx="286" cy="151" r="4"/><circle cx="302" cy="156" r="4"/>
+  </g>
+  <path d="M42 206c49-10 95-4 140 17" fill="none" stroke="#75818d" stroke-width="3" opacity=".35"/>
+</svg>

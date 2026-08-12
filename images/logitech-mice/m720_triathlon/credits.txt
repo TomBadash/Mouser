@@ -1,1 +1,13 @@
-“MiNe-M_100-3389U” by MiNe, CC BY 2.0 <https://creativecommons.org/licenses/by/2.0>
+M720 control schematic — Mouser contributors, 2026
+
+Original project-authored vector artwork. Canonical editable source:
+mouse.svg in this directory.
+
+Source permalink:
+https://github.com/Las-re/Mouser/blob/add-m720-triathlon-support/images/logitech-mice/m720_triathlon/mouse.svg
+
+Licensed under the repository MIT License:
+https://github.com/TomBadash/Mouser/blob/master/LICENSE
+
+This schematic is not a derivative of “MiNe-M_100-3389U” or any other
+third-party photograph. It replaces the previous unverified CC BY image.
