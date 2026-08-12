@@ -429,6 +429,16 @@ Item {
         selectedActionId = mapping ? mapping.actionId : "none"
     }
 
+    function selectedButtonIsHScroll() {
+        var hotspots = backend.deviceHotspots
+        for (var i = 0; i < hotspots.length; i++) {
+            if (hotspots[i].buttonKey === selectedButton) {
+                return hotspots[i].isHScroll === true
+            }
+        }
+        return false
+    }
+
     Connections {
         id: mappingsConn
         target: backend
@@ -1302,7 +1312,7 @@ Item {
                                         color: theme.textPrimary
                                     }
                                     Text {
-                                        text: selectedButton === "hscroll_left"
+                                        text: selectedButton !== "" && selectedButtonIsHScroll()
                                               ? s["mouse.configure_scroll_actions"]
                                               : isSwipeButton
                                                 && backend.supportsGestureDirections
@@ -1320,7 +1330,7 @@ Item {
                             Column {
                                 width: parent.width
                                 spacing: 14
-                                visible: selectedButton === "hscroll_left"
+                                visible: selectedButton !== "" && selectedButtonIsHScroll()
 
                                 Text {
                                     text: s["mouse.scroll_left"]
@@ -1636,7 +1646,7 @@ Item {
                                 width: parent.width
                                 spacing: 14
                                 visible: selectedButton !== ""
-                                         && selectedButton !== "hscroll_left"
+                                         && !selectedButtonIsHScroll()
                                          && !(isSwipeButton
                                               && backend.supportsGestureDirections)
                                          && !isGestureSwipeMode
