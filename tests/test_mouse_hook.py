@@ -156,6 +156,202 @@ class BaseMouseHookRuntimeStateTests(unittest.TestCase):
         self.assertFalse(hook._should_intercept_events())
 
 
+class _MacOSNotificationCenter:
+    """Minimal NSWorkspace notification-center stand-in for wake tests."""
+
+    def __init__(self):
+        self.callbacks = {}
+        self.removed = []
+
+    def addObserverForName_object_queue_usingBlock_(
+        self, name, _object, _queue, callback
+    ):
+        token = object()
+        self.callbacks[name] = (token, callback)
+        return token
+
+    def removeObserver_(self, token):
+        self.removed.append(token)
+
+
+class MacOSWakeRecoveryTests(unittest.TestCase):
+    """Unit-test the macOS wake recovery without requiring PyObjC or hardware."""
+
+    _WAKE = "NSWorkspaceDidWakeNotification"
+    _SCREENS_WAKE = "NSWorkspaceScreensDidWakeNotification"
+    _SESSION_ACTIVE = "NSWorkspaceSessionDidBecomeActiveNotification"
+
+    def setUp(self):
+        # CI is Linux-only. Import the macOS hook against lightweight PyObjC
+        # stand-ins so these recovery semantics stay covered there too.
+        self._module_name = "core.mouse_hook_macos"
+        self._loaded_test_module = False
+        self.module = sys.modules.get(self._module_name)
+        if self.module is None:
+            fake_objc = SimpleNamespace(autorelease_pool=MagicMock())
+            fake_quartz = MagicMock(name="Quartz")
+            with patch.dict(sys.modules, {"objc": fake_objc, "Quartz": fake_quartz}):
+                self.module = importlib.import_module(self._module_name)
+            self._loaded_test_module = True
+            self.addCleanup(self._unload_module)
+
+        self.hook = self.module.MouseHook()
+        self.hook._running = True
+        self.hook._device_connected = True
+        self.listener = Mock()
+        self.hook._hid_gesture = self.listener
+
+    def _unload_module(self):
+        if self._loaded_test_module and sys.modules.get(self._module_name) is self.module:
+            sys.modules.pop(self._module_name, None)
+        if self._loaded_test_module and getattr(core, "mouse_hook_macos", None) is self.module:
+            delattr(core, "mouse_hook_macos")
+
+    def _register_observers(self):
+        center = _MacOSNotificationCenter()
+        workspace = SimpleNamespace(notificationCenter=lambda: center)
+        fake_appkit = SimpleNamespace(
+            NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace)
+        )
+        with patch.dict(sys.modules, {"AppKit": fake_appkit}):
+            self.hook._register_wake_observer()
+        return center, fake_appkit
+
+    @staticmethod
+    def _capturing_thread_class(created):
+        class CapturingThread:
+            def __init__(self, *, target, daemon, name):
+                self.target = target
+                self.daemon = daemon
+                self.name = name
+                created.append(self)
+
+            def start(self):
+                pass
+
+        return CapturingThread
+
+    def test_system_and_screens_wake_coalesce_to_one_recovery_worker(self):
+        center, _ = self._register_observers()
+        workers = []
+
+        with (
+            patch.object(
+                self.module.threading,
+                "Thread",
+                self._capturing_thread_class(workers),
+            ),
+            patch.object(self.module.time, "monotonic", return_value=100.0),
+        ):
+            center.callbacks[self._SCREENS_WAKE][1](None)
+            center.callbacks[self._WAKE][1](None)
+
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0].name, "MouseHook-resume")
+        self.assertTrue(workers[0].daemon)
+
+    def test_later_wake_outside_dedupe_window_schedules_another_worker(self):
+        center, _ = self._register_observers()
+        workers = []
+
+        with (
+            patch.object(
+                self.module.threading,
+                "Thread",
+                self._capturing_thread_class(workers),
+            ),
+            patch.object(self.module.time, "monotonic", side_effect=(100.0, 106.0)),
+        ):
+            center.callbacks[self._WAKE][1](None)
+            center.callbacks[self._SCREENS_WAKE][1](None)
+
+        self.assertEqual(len(workers), 2)
+
+    def test_resume_worker_does_not_reconnect_after_stop(self):
+        self.hook._running = False
+
+        with patch.object(self.module.time, "sleep") as sleep:
+            self.hook._resume_recovery_worker()
+
+        sleep.assert_called_once_with(self.hook._RESUME_RECONNECT_DELAY_S)
+        self.listener.force_reconnect.assert_not_called()
+
+    def test_resume_worker_skips_disconnected_or_missing_listener(self):
+        for connected, listener in ((False, self.listener), (True, None)):
+            with self.subTest(connected=connected, listener=listener is not None):
+                self.hook._running = True
+                self.hook._device_connected = connected
+                self.hook._hid_gesture = listener
+                with patch.object(self.module.time, "sleep"):
+                    self.hook._resume_recovery_worker()
+                if listener is not None:
+                    listener.force_reconnect.assert_not_called()
+
+    def test_resume_worker_contains_and_logs_reconnect_failure(self):
+        self.listener.force_reconnect.side_effect = RuntimeError("boom")
+
+        with (
+            patch.object(self.module.time, "sleep"),
+            patch("builtins.print") as print_mock,
+        ):
+            self.hook._resume_recovery_worker()
+
+        self.assertTrue(
+            any(
+                "resume reconnect request failed: boom" in str(call.args)
+                for call in print_mock.call_args_list
+            )
+        )
+
+    def test_registration_stores_every_observer_including_screens_wake(self):
+        center, _ = self._register_observers()
+
+        self.assertEqual(
+            set(center.callbacks),
+            {
+                self._WAKE,
+                self._SCREENS_WAKE,
+                "NSWorkspaceSessionDidResignActiveNotification",
+                self._SESSION_ACTIVE,
+            },
+        )
+        for attr in (
+            "_wake_observer",
+            "_screens_wake_observer",
+            "_session_resign_observer",
+            "_session_activate_observer",
+        ):
+            self.assertIsNotNone(getattr(self.hook, attr))
+
+    def test_unregistration_removes_and_clears_every_observer(self):
+        center, fake_appkit = self._register_observers()
+        tokens = {
+            self.hook._wake_observer,
+            self.hook._screens_wake_observer,
+            self.hook._session_resign_observer,
+            self.hook._session_activate_observer,
+        }
+
+        with patch.dict(sys.modules, {"AppKit": fake_appkit}):
+            self.hook._unregister_wake_observer()
+
+        self.assertCountEqual(center.removed, tokens)
+        for attr in (
+            "_wake_observer",
+            "_screens_wake_observer",
+            "_session_resign_observer",
+            "_session_activate_observer",
+        ):
+            self.assertIsNone(getattr(self.hook, attr))
+
+    def test_session_activation_keeps_its_separate_direct_reconnect_path(self):
+        center, _ = self._register_observers()
+
+        center.callbacks[self._SESSION_ACTIVE][1](None)
+
+        self.listener.force_reconnect.assert_called_once_with()
+
+
 class BaseMouseHookDispatchQueueTests(unittest.TestCase):
     def test_enqueue_keeps_queue_bounded_and_drops_oldest(self):
         hook = BaseMouseHook()
