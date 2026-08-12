@@ -115,6 +115,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Switch scroll mode** — bind a button to flip ratchet / free-spin without opening the UI; defaults to mode-shift.
 - **Scroll direction inversion** — independent toggles for vertical and horizontal scroll.
 - **Gesture button + swipe actions** — tap for one action, swipe up/down/left/right for four others.
+- **Pan (macOS)** — hold a button and move the mouse to scroll in any direction, like a hand tool. Adjustable speed, and the direction can be flipped between content-follows-mouse and scrollbar-style.
 
 ### Cross-platform
 
@@ -185,6 +186,7 @@ Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS
 | **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
 | **Media** | Volume Up, Volume Down, Volume Mute, Play / Pause, Next Track, Previous Track |
 | **Scroll** | Switch Scroll Mode (Ratchet / Free Spin), Toggle SmartShift, Cycle DPI Presets |
+| **Hold modes** | Gesture Swipe (hold + slide → four directional actions), Pan (hold + move → scroll, macOS only) |
 | **Mouse** | Left Click, Right Click, Middle Click, Back (Mouse Button 4), Forward (Mouse Button 5) |
 | **Custom** | User-defined keyboard shortcuts (any key combination, captured in the UI) |
 | **Other** | Do Nothing (pass-through) |
@@ -316,6 +318,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access. Quit Options+ before running Mouser.
 - **Scroll inversion** uses coalesced post-injection on Windows to avoid LL-hook deadlocks; it's stable in mainstream apps but may misbehave in some games or low-level drivers.
 - **Admin not required** — but injected keystrokes may not reach elevated windows or some games. Run Mouser elevated if you need that path.
+- **Hold modes need a button that reports a hold** — Pan and Gesture Swipe both work by holding a button and moving. Some devices don't report a sustained hold for every button: on an MX Anywhere 3S over Bluetooth, the side (back / forward) buttons emit a ~20 ms click on tap and send nothing at all while held, so hold modes can't arm on them. The middle button and mode shift report holds normally and work fine. If a hold mode does nothing on one button but works on another, this is why.
 - **Linux app detection is partial** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, GNOME / other Wayland compositors still fall back to the default profile.
 - **Linux device permissions** — Mouser needs access to `/dev/hidraw*`, `/dev/input/event*`, and `/dev/uinput`. Use [`install-linux-permissions.sh`](packaging/linux/install-linux-permissions.sh) once instead of running as root.
 
