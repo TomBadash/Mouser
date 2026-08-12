@@ -4,7 +4,7 @@
   <img src="images/logo_icon.png" width="128" alt="Mouser logo" />
 </p>
 
-中文文档｜[English README](README.md)
+中文文档 ｜ [English README](README.md) ｜ [Русский](README_RU.md)
 
 一个轻量、开源、**完全本地运行** 的 **Logitech Options+** 替代品，用于对罗技 HID++ 鼠标进行按键 / 手势重映射。当前对 **MX Master** 与 **MX Anywhere** 系列体验最佳，并对更多罗技型号提供识别与通用回退 UI。
 

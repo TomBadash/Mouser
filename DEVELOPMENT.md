@@ -253,7 +253,7 @@ mouser/
 │
 ├── ui/                          # UI layer
 │   ├── backend.py               # QML ↔ Python bridge (QObject)
-│   ├── locale_manager.py        # en / zh_CN / zh_TW translations + button/action labels
+│   ├── locale_manager.py        # en / zh_CN / zh_TW / ru translations + button/action labels
 │   └── qml/
 │       ├── Main.qml             # App shell (sidebar + page stack + tray toast)
 │       ├── MousePage.qml        # Merged mouse diagram + profile manager

@@ -1,6 +1,6 @@
 """
 Locale Manager — provides i18n support for the QML UI.
-Supports English (en), Simplified Chinese (zh_CN), and Traditional Chinese (zh_TW).
+Supports English (en), Simplified Chinese (zh_CN), Traditional Chinese (zh_TW), and Russian (ru).
 Exposed to QML as the context property `lm`.
 """
 
@@ -282,8 +282,9 @@ _TRANSLATIONS = {
 
         # Language names
         "lang.en": "English",
-        "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
-        "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
+        "lang.zh_CN": "简体中文",
+        "lang.zh_TW": "繁體中文",
+        "lang.ru": "Russian",
     },
 
     # ── Simplified Chinese ────────────────────────────────────────
@@ -544,8 +545,9 @@ _TRANSLATIONS = {
         "about.close": "\u5173\u95ed",
 
         "lang.en": "English",
-        "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
-        "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
+        "lang.zh_CN": "简体中文",
+        "lang.zh_TW": "繁體中文",
+        "lang.ru": "俄语",
     },
 
     # ── Traditional Chinese ───────────────────────────────────────
@@ -806,15 +808,298 @@ _TRANSLATIONS = {
         "about.close": "\u95dc\u9589",
 
         "lang.en": "English",
-        "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
-        "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
+        "lang.zh_CN": "简体中文",
+        "lang.zh_TW": "繁體中文",
+        "lang.ru": "俄語",
+    },
+
+    # ── Russian ───────────────────────────────────────────────────
+    "ru": {
+        # Navigation sidebar
+        "nav.mouse_profiles": "Мышь и профили",
+        "nav.point_scroll": "Основные",
+        "nav.haptic_feedback": "Тактильная отдача",
+        "nav.actions_ring": "Кольцо действий",
+        "nav.about": "О программе",
+
+        # Haptic Feedback page
+        "haptic.title": "Тактильная отдача",
+        "haptic.subtitle": "Настройка тактильной отдачи в вашей MX Master 4",
+        "haptic.level": "Интенсивность отдачи",
+        "haptic.level_desc": "Выберите силу отклика тактильной отдачи. Высокие уровни расходуют больше заряда.",
+        "haptic.level_subtle": "Легкая",
+        "haptic.level_low": "Низкая",
+        "haptic.level_medium": "Средняя",
+        "haptic.level_high": "Высокая",
+        "haptic.test_title": "Проверить отдачу",
+        "haptic.test_desc": "Воспроизвести короткий тактильный импульс для проверки текущей интенсивности.",
+        "haptic.test": "Проверить",
+        "haptic.actions_title": "Отдача для действий",
+        "haptic.actions_desc": "Выберите действия, вызывающие тактильную отдачу. Нажмите на действие для переноса между «Включено» и «Доступно».",
+        "haptic.actions_enabled": "Включено",
+        "haptic.actions_available": "Доступно",
+        "haptic.actions_empty": "Действия не выбраны. Выберите из доступных.",
+        "haptic.buttons_title": "Отдача для кнопок",
+        "haptic.buttons_desc": "Выберите кнопки, вызывающие тактильную отдачу, в дополнение к выбранным выше действиям.",
+        "haptic.buttons_enabled": "Включено",
+        "haptic.buttons_available": "Доступно",
+        "haptic.buttons_empty": "Кнопки не выбраны. Выберите из доступных.",
+        "haptic.dedup_title": "Предотвращать повторы отдачи",
+        "haptic.dedup_desc": "При срабатывании двух тактильных событий подряд воспроизводится только один импульс. Отключите для срабатывания обоих.",
+        "haptic.experimental_note": "Поддержка тактильной отдачи является экспериментальной. Некоторые настройки могут не действовать до полной документации протокола.",
+
+        # Actions Ring page
+        "ring.title": "Кольцо действий",
+        "ring.subtitle": "Настройка задержки удержания и секторов кругового меню",
+        "ring.hold_delay": "Задержка удержания",
+        "ring.hold_delay_desc": "Время удержания боковой кнопки до появления кольца",
+        "ring.slots_title": "Действия кольца",
+        "ring.slots_desc": "Выберите действия, доступные в каждом секторе кругового меню",
+        "ring.slot_prefix": "Сектор ",
+
+        # Mouse page — profile list
+        "mouse.profiles": "Профили",
+        "mouse.all_applications": "Все приложения",
+        "mouse.add_app_profile": "Добавить профиль",
+        "mouse.search_installed_apps": "Поиск установленных приложений или ручной выбор",
+        "mouse.delete_profile": "Удалить профиль",
+
+        # Mouse page — connection / status
+        "mouse.connected": "Подключено",
+        "mouse.not_connected": "Не подключено",
+        "mouse.waiting_for_connection": "Ожидание подключения",
+        "mouse.connect_mouse": "Подключите мышь Logitech",
+        "mouse.connect_mouse_desc": "Mouser определит активное устройство, разблокирует назначение кнопок и включит подходящий режим раскладки при подключении мыши.",
+        "mouse.layout_appears_auto": "Режим раскладки выбирается автоматически",
+        "mouse.per_device_settings": "Настройки устройств сохраняются отдельно",
+
+        # Mouse page — header subtitles
+        "mouse.turn_on_mouse": "Включите мышь Logitech, чтобы начать настройку кнопок",
+        "mouse.click_dot": "Нажмите на точку, чтобы настроить действие",
+        "mouse.choose_layout": "Выберите режим раскладки ниже, пока разрабатывается отдельный оверлей",
+
+        # Mouse page — layout mode
+        "mouse.layout_mode": "Режим раскладки",
+        "mouse.experimental_override_prefix": "Активно экспериментальное переопределение: ",
+        "mouse.experimental_override_suffix": ". Вернитесь к автоопределению, если точки не совпадают с кнопками.",
+        "mouse.interactive_layout_coming": "Интерактивная раскладка появится позже",
+        "mouse.auto_detect": "Автоопределение",
+
+        # Mouse page — action / mapping helpers
+        "mouse.do_nothing": "Без действия",
+        "mouse.horizontal_scroll": "Горизонтальная прокрутка",
+        "mouse.tap": "Нажатие: ",
+        "mouse.swipes_configured": "Свайпы настроены",
+        "mouse.installed_app": "Установленное приложение",
+        "mouse.applications": "Приложения",
+        "mouse.system_applications": "Системные приложения",
+        "mouse.macos_coreservices": "Службы macOS",
+
+        # Mouse page — action picker
+        "mouse.choose_action_suffix": " — Выбор действия",
+        "mouse.configure_scroll_actions": "Настройте раздельные действия для прокрутки влево и вправо",
+        "mouse.configure_gesture": "Настройте поведение при нажатии и свайпах для кнопки жестов",
+        "mouse.select_button_action": "Выберите действие при использовании этой кнопки",
+        "mouse.scroll_left": "ПРОКРУТКА ВЛЕВО",
+        "mouse.scroll_right": "ПРОКРУТКА ВПРАВО",
+        "mouse.tap_action": "ДЕЙСТВИЕ ПРИ НАЖАТИИ",
+        "mouse.swipe_actions": "ДЕЙСТВИЯ ПРИ СВАЙПАХ",
+        "mouse.swipe_left": "Свайп влево",
+        "mouse.swipe_right": "Свайп вправо",
+        "mouse.swipe_up": "Свайп вверх",
+        "mouse.swipe_down": "Свайп вниз",
+        "mouse.threshold": "Порог чувствительности",
+        "mouse.haptic_feedback": "Тактильный отклик",
+
+        # Mouse page — debug panel
+        "mouse.debug_events": "Отладка событий",
+        "mouse.debug_events_desc": "Сбор обнаруженных нажатий, жестов и назначенных действий",
+        "mouse.clear": "Очистить",
+        "mouse.clear_rec": "Очистить зап.",
+        "mouse.on": "Вкл",
+        "mouse.off": "Выкл",
+        "mouse.rec": "Зап",
+        "mouse.record": "Запись",
+        "mouse.live_gesture_monitor": "Мониторинг жестов",
+        "mouse.held": "Удерживается",
+        "mouse.idle": "Ожидание",
+        "mouse.move_seen": "Движение обнаружено",
+        "mouse.no_move": "Нет движения",
+        "mouse.debug_placeholder": "Включите режим отладки, затем нажимайте кнопки или используйте кнопку жестов.",
+        "mouse.gesture_placeholder": "Включите запись и выполните несколько жестов.",
+
+        # Mouse page — add app dialog
+        "mouse.add_app_dialog.title": "Добавить профиль приложения",
+        "mouse.add_app_dialog.desc": "Выберите приложение. Mouser переключится на этот профиль, когда окно приложения станет активным.",
+        "mouse.search_placeholder": "Поиск приложений по названию",
+        "mouse.browse": "Обзор",
+        "mouse.search_results": "Результаты поиска",
+        "mouse.suggested_apps": "Рекомендуемые приложения",
+        "mouse.no_matched": "Приложения по вашему запросу не найдены.",
+        "mouse.no_suggested": "Рекомендуемые приложения отсутствуют.",
+        "mouse.try_different": "Попробуйте изменить запрос или воспользуйтесь обзором для ручного выбора.",
+        "mouse.use_search": "Используйте поле поиска выше или нажмите «Обзор» для выбора приложения.",
+        "mouse.create_profile": "Создать профиль",
+        "mouse.cancel": "Отмена",
+
+        # Mouse page — delete dialog
+        "mouse.delete_dialog.title": "Удалить профиль?",
+        "mouse.delete_dialog.confirm_prefix": "Удалить профиль для ",
+        "mouse.delete_dialog.confirm_suffix": "?",
+        "mouse.delete_dialog.desc": "Настройки кнопок для этого приложения будут удалены. Профиль по умолчанию сохранится.",
+
+        # Scroll / Settings page
+        "scroll.title": "Общие настройки",
+        "scroll.subtitle": "Настройка параметров приложения, скорости указателя, снимков экрана и прокрутки",
+        "scroll.pointer_speed": "Скорость указателя (DPI)",
+        "scroll.pointer_speed_desc": "Регулировка скорости перемещения указателя. Выше = быстрее.",
+        "scroll.pointer_speed_desc_range_prefix": "Регулировка скорости перемещения указателя. Это устройство поддерживает от ",
+        "scroll.pointer_speed_desc_range_to": " до ",
+        "scroll.pointer_speed_desc_range_suffix": " DPI.",
+        "scroll.presets": "Пресеты:",
+        "scroll.wheel_mode": "Режим колеса прокрутки",
+        "scroll.wheel_mode_desc": "Переключение между пошаговой и свободной прокруткой.",
+        "scroll.ratchet": "Пошаговый",
+        "scroll.freespin": "Свободный",
+        "scroll.smart_shift": "SmartShift",
+        "scroll.smart_shift_desc": "Автоматически переключает колесо от пошаговой к быстрой прокрутке при ускорении вращения.",
+        "scroll.sensitivity_value": "ЧУВСТВИТЕЛЬНОСТЬ",
+        "scroll.scroll_mode_section": "РЕЖИМ ПРОКРУТКИ",
+        "scroll.scroll_force": "Сопротивление прокрутки",
+        "scroll.scroll_force_desc": "Настройка жесткости фиксатора колеса. Низкая = мягкий ход, высокая = четкие шаги.",
+        "scroll.scroll_force_value": "СИЛА",
+        "scroll.appearance": "Оформление",
+        "scroll.appearance_desc": "Выберите системную, светлую или тёмную тему интерфейса Mouser.",
+        "scroll.system": "Системная",
+        "scroll.light": "Светлая",
+        "scroll.dark": "Тёмная",
+        "scroll.startup": "Автозапуск",
+        "scroll.startup_desc": "Запускать Mouser при входе в систему и выбирать, открывать ли окно настроек или сворачивать в трей.",
+        "scroll.start_at_login": "Запускать при входе в систему",
+        "scroll.start_minimized": "Запускать свёрнутым",
+        "scroll.screenshots": "Снимки экрана",
+        "scroll.screenshots_desc": "Выберите папку для сохранения файлов снимков экрана. Сохранение в буфер обмена не меняется.",
+        "scroll.screenshots_save_to": "Сохранять в",
+        "scroll.screenshots_choose": "Выбрать...",
+        "scroll.screenshots_default": "По умолчанию",
+        "scroll.screenshots_system_default": "Системная папка по умолчанию",
+        "scroll.check_for_updates": "Проверка обновлений",
+        "scroll.check_for_updates_desc": "Уведомлять о выходе новых версий Mouser. Загрузка и установка выполняются вручную.",
+        "scroll.update_idle": "Mouser готов к проверке обновлений.",
+        "scroll.update_available": "Доступна версия Mouser %1.",
+        "scroll.update_checking": "Проверка наличия обновлений...",
+        "scroll.update_downloading": "Загрузка обновления...",
+        "scroll.update_verifying": "Проверка файла обновления...",
+        "scroll.update_ready": "Обновление готово к установке после закрытия Mouser.",
+        "scroll.update_installing": "Установка обновления...",
+        "scroll.update_installed": "Обновление установлено.",
+        "scroll.update_installed_version": "Обновлено до версии %1.",
+        "scroll.update_cancelled": "Обновление отменено.",
+        "scroll.update_manual": "Доступна новая версия Mouser. Загрузите и установите её вручную со страницы релизов.",
+        "scroll.update_manual_windows": "Доступна новая версия Mouser. Загрузите и установите её вручную для Windows.",
+        "scroll.update_manual_macos": "Доступна новая версия Mouser. Загрузите и установите её вручную для macOS.",
+        "scroll.update_manual_linux": "Доступна новая версия Mouser. Загрузите и установите её вручную для Linux.",
+        "scroll.update_no_asset": "Подходящий пакет обновления не найден для этого компьютера.",
+        "scroll.update_error": "Не удалось подготовить обновление.",
+        "scroll.update_error_check_first": "Сначала выполните проверку обновлений.",
+        "scroll.update_error_network_error": "Не удалось связаться со службой обновлений. Попробуйте позже.",
+        "scroll.update_error_metadata_missing": "Данные об обновлении недоступны. Откройте страницу релиза для ручной установки.",
+        "scroll.update_error_metadata_invalid": "Не удалось прочитать данные об обновлении. Откройте страницу релиза для ручной установки.",
+        "scroll.update_error_permission_denied": "У Mouser нет прав для подготовки обновления.",
+        "scroll.update_error_file_error": "Не удалось записать файлы обновления.",
+        "scroll.update_error_install_failed": "Установка обновления не завершена. Откройте страницу релиза для ручной установки.",
+        "scroll.update_error_sha256_mismatch": "Загруженный файл не прошёл проверку подлинности. Попробуйте позже.",
+        "scroll.update_error_size_mismatch": "Размер загруженного файла не совпадает. Попробуйте позже.",
+        "scroll.update_error_expired_metadata": "Данные об обновлении устарели. Попробуйте позже.",
+        "scroll.update_error_older_build": "Mouser отклонил более старую версию обновления.",
+        "scroll.update_check": "Проверить",
+        "scroll.update_download": "Скачать",
+        "scroll.update_verify": "Проверить",
+        "scroll.update_install": "Установить",
+        "scroll.update_cancel": "Отмена",
+        "scroll.update_open_release": "Страница релиза",
+        "scroll.scroll_speed": "Скорость прокрутки",
+        "scroll.scroll_speed_desc": "Настройка скорости прокрутки страницы за один шаг колеса. 1.0× — значение по умолчанию.",
+        "scroll.scroll_speed_presets": "Пресеты:",
+        "scroll.smooth_scroll": "Плавная прокрутка",
+        "scroll.smooth_scroll_desc": "Добавляет инерцию прокрутке для плавной остановки страницы.",
+        "scroll.scroll_direction": "Направление прокрутки",
+        "scroll.scroll_direction_desc": "Инвертировать направление прокрутки (естественная прокрутка)",
+        "scroll.invert_vertical": "Инвертировать вертикальную прокрутку",
+        "scroll.invert_horizontal": "Инвертировать горизонтальную прокрутку",
+        "scroll.ignore_trackpad": "Игнорировать трекпад",
+        "scroll.ignore_trackpad_desc": "Реагировать только на события мыши, игнорируя трекпад и Magic Mouse",
+        "scroll.dpi_note": "Изменение DPI требует передачи команд HID++ на устройство и вступает в силу с небольшой задержкой.",
+        "scroll.language": "Язык",
+        "scroll.language_desc": "Выберите язык интерфейса приложения.",
+
+        # Key-capture dialog
+        "key_capture.title": "Своё сочетание клавиш",
+        "key_capture.placeholder": "например: Super+Shift+f5",
+        "key_capture.placeholder_recording": "Нажмите клавиши…",
+        "key_capture.record_hint": "Нажмите нужную комбинацию. Клавиши-модификаторы (например, Win) перехватываются здесь без срабатывания в системе.",
+        "key_capture.type_hint": "Вводите сочетание через знак +, например: super+shift+f5.",
+        "key_capture.mode_type": "Ввести вручную",
+        "key_capture.mode_record": "Записать клавиши",
+        "key_capture.valid_keys": "Допустимые клавиши: ctrl/control, shift, alt/option/opt, super (синонимы: cmd, command, meta, win, windows),\n0–9, a–z, f1–f24, space, tab, enter, esc, left, right, up, down, delete, ...",
+        "key_capture.reserved_warning": "Операционная система может перехватывать это сочетание. Его можно сохранить, но поведение может зависеть от системы.",
+        "key_capture.error.unsupported_key": "Выберите другую клавишу. Клавиша %1 не поддерживается в Mouser.",
+        "key_capture.error.unknown_key": "Неизвестная клавиша: %1.",
+        "key_capture.error.duplicate_key": "Удалите дублирующуюся клавишу.",
+        "key_capture.error.multiple_main_keys": "Используйте одну основную клавишу с возможными Ctrl, Shift, Alt или Super.",
+        "key_capture.error.missing_main_key": "Добавьте клавишу, например A, F5 или Page Down.",
+        "key_capture.error.empty_segment": "Используйте + только между клавишами. Напишите plus для клавиши +.",
+        "key_capture.error.unsupported": "Сочетание клавиш не поддерживается.",
+        "key_capture.cancel": "Отмена",
+        "key_capture.confirm": "Подтвердить",
+
+        # System tray (used from Python)
+        "tray.open_settings": "Открыть настройки",
+        "tray.disable_remapping": "Отключить переназначение",
+        "tray.enable_remapping": "Включить переназначение",
+        "tray.enable_debug": "Включить режим отладки",
+        "tray.disable_debug": "Отключить режим отладки",
+        "tray.check_for_updates": "Проверить обновления...",
+        "tray.open_latest_release": "Открыть последний релиз",
+        "tray.update_available": "Доступна версия Mouser {version}. Откройте страницу релиза для скачивания.",
+        "tray.quit": "Выйти из Mouser",
+        "tray.tray_message": "Mouser работает в системном трее. Нажмите на иконку, чтобы открыть настройки.",
+
+        # Accessibility dialog (macOS)
+        "accessibility.title": "Требуется разрешение универсального доступа",
+        "accessibility.text": (
+            "Mouser требуется разрешение универсального доступа для перехвата "
+            "событий кнопок мыши.\n\n"
+            "macOS должна была открыть запрос в системных настройках.\n"
+            "Предоставьте разрешение и перезапустите Mouser."
+        ),
+        "accessibility.info": "Системные настройки -> Конфиденциальность и безопасность -> Универсальный доступ",
+
+        # Common dialog chrome
+        "dialog.close": "Закрыть",
+
+        # About dialog
+        "about.title": "О программе Mouser",
+        "about.subtitle": "Сведения о среде исполнения и сборке для поддержки и отладки.",
+        "about.version": "Версия",
+        "about.build_mode": "Режим сборки",
+        "about.commit": "Коммит",
+        "about.launch_path": "Путь запуска",
+        "about.close": "Закрыть",
+
+        # Language names
+        "lang.en": "English",
+        "lang.zh_CN": "简体中文",
+        "lang.zh_TW": "繁體中文",
+        "lang.ru": "Русский",
     },
 }
 
 AVAILABLE_LANGUAGES = [
     {"code": "en",    "name": "English"},
-    {"code": "zh_CN", "name": "\u7b80\u4f53\u4e2d\u6587"},
-    {"code": "zh_TW", "name": "\u7e41\u9ad4\u4e2d\u6587"},
+    {"code": "zh_CN", "name": "简体中文"},
+    {"code": "zh_TW", "name": "繁體中文"},
+    {"code": "ru",    "name": "Русский"},
 ]
 
 # ── Button name translations ──────────────────────────────────────────────────
@@ -857,8 +1142,28 @@ _BUTTON_TR: dict[str, dict[str, str]] = {
         "Actions Ring swipe left":  "\u52d5\u4f5c\u74b0\u5de6\u6ed1",
         "Actions Ring swipe right": "\u52d5\u4f5c\u74b0\u53f3\u6ed1",
         "Actions Ring swipe up":    "\u52d5\u4f5c\u74b0\u4e0a\u6ed1",
-        "Actions Ring swipe down":  "\u52d5\u4f5c\u74b0\u4e0b\u6ed1",
-        "Actions Ring": "\u52d5\u4f5c\u74b0",
+        "Actions Ring swipe down":  "動作環向下劃",
+        "Actions Ring": "動作環",
+    },
+    "ru": {
+        "Middle button":          "Средняя кнопка",
+        "Gesture button":         "Кнопка жестов",
+        "Back button":            "Кнопка «Назад»",
+        "Forward button":         "Кнопка «Вперёд»",
+        "Thumb button":           "Боковая кнопка",
+        "Horizontal scroll":      "Горизонтальная прокрутка",
+        "Horizontal scroll right":"Горизонтальная прокрутка вправо",
+        "Horizontal Scroll":      "Горизонтальная прокрутка",
+        "Mode shift button":      "Кнопка смены режима",
+        "Gesture swipe left":     "Свайп жестом влево",
+        "Gesture swipe right":    "Свайп жестом вправо",
+        "Gesture swipe up":       "Свайп жестом вверх",
+        "Gesture swipe down":     "Свайп жестом вниз",
+        "Actions Ring swipe left":  "Свайп кольца действий влево",
+        "Actions Ring swipe right": "Свайп кольца действий вправо",
+        "Actions Ring swipe up":    "Свайп кольца действий вверх",
+        "Actions Ring swipe down":  "Свайп кольца действий вниз",
+        "Actions Ring": "Кольцо действий",
     },
 }
 
@@ -883,6 +1188,16 @@ _CATEGORY_TR: dict[str, dict[str, str]] = {
         "Scroll":     "\u6eda\u8f2a",
         "Screenshot": "\u622a\u5716",
         "Custom":     "\u81ea\u8a02",
+    },
+    "ru": {
+        "Other":      "Разное",
+        "Browser":    "Браузер",
+        "Editing":    "Редактирование",
+        "Media":      "Медиа",
+        "Navigation": "Навигация",
+        "Scroll":     "Прокрутка",
+        "Screenshot": "Снимок экрана",
+        "Custom":     "Пользовательские",
     },
 }
 
@@ -1055,6 +1370,96 @@ _ACTION_TR: dict[str, dict[str, str]] = {
 
         # ── Custom ────────────────────────────────────────────────────
         "Custom Shortcut\u2026": "\u81ea\u8a02\u5feb\u901f\u9375\u2026",
+    },
+    "ru": {
+        # ── Other ─────────────────────────────────────────────────────
+        "Do Nothing (Pass-through)":                "Ничего не делать (без изменений)",
+        "Cycle DPI Presets":                        "Циклическое переключение пресетов DPI",
+        "Actions Ring":                             "Кольцо действий",
+        "Left Click":                               "Левый клик",
+        "Right Click":                              "Правый клик",
+        "Middle Click":                             "Средний клик",
+        "Back (Mouse Button 4)":                    "Назад (кнопка мыши 4)",
+        "Forward (Mouse Button 5)":                 "Вперёд (кнопка мыши 5)",
+
+        # ── Navigation (Windows) ──────────────────────────────────────
+        "Alt + Tab (Switch Windows)":               "Alt + Tab (Переключение окон)",
+        "Alt + Shift + Tab (Switch Windows Reverse)":"Alt + Shift + Tab (Реверсивное переключение окон)",
+        "Show Desktop (Win+D)":                     "Показать рабочий стол (Win+D)",
+        "Task View (Win+Tab)":                      "Представление задач (Win+Tab)",
+        "Previous Desktop":                         "Предыдущий рабочий стол",
+        "Next Desktop":                             "Следующий рабочий стол",
+        "Cycle Desktops":                           "Циклическое переключение рабочих столов",
+        "Page Up":                                  "Page Up",
+        "Page Down":                                "Page Down",
+        "Home":                                     "Home",
+        "End":                                      "End",
+        "Zoom In":                                  "Увеличить",
+        "Zoom Out":                                 "Уменьшить",
+
+        # ── Navigation (macOS) ────────────────────────────────────────
+        "Cmd + Tab (Switch Windows)":               "Cmd + Tab (Переключение окон)",
+        "Cmd + Shift + Tab (Switch Windows Reverse)":"Cmd + Shift + Tab (Реверсивное переключение окон)",
+        "Mission Control (Ctrl+Up)":                "Mission Control (Ctrl+↑)",
+        "Mission Control":                          "Mission Control",
+        "App Expose":                               "Exposé приложений",
+        "Show Desktop":                             "Показать рабочий стол",
+        "Launchpad":                                "Launchpad",
+
+        # ── Navigation (Linux) ────────────────────────────────────────
+        "Show Desktop (Super+D)":                   "Показать рабочий стол (Super+D)",
+        "Activities (Super)":                       "Обзор (Super)",
+
+        # ── Browser ───────────────────────────────────────────────────
+        "Browser Back":                             "Назад в браузере",
+        "Browser Forward":                          "Вперёд в браузере",
+        "Browser Back (Cmd+[)":                     "Назад в браузере (Cmd+[)",
+        "Browser Forward (Cmd+])":                  "Вперёд в браузере (Cmd+])",
+        "Close Tab (Ctrl+W)":                       "Закрыть вкладку (Ctrl+W)",
+        "Close Tab (Cmd+W)":                        "Закрыть вкладку (Cmd+W)",
+        "New Tab (Ctrl+T)":                         "Новая вкладка (Ctrl+T)",
+        "New Tab (Cmd+T)":                          "Новая вкладка (Cmd+T)",
+        "Next Tab (Ctrl+Tab)":                      "Следующая вкладка (Ctrl+Tab)",
+        "Next Tab (Cmd+Shift+])":                   "Следующая вкладка (Cmd+Shift+])",
+        "Previous Tab (Ctrl+Shift+Tab)":            "Предыдущая вкладка (Ctrl+Shift+Tab)",
+        "Previous Tab (Cmd+Shift+[)":               "Предыдущая вкладка (Cmd+Shift+[)",
+
+        # ── Editing ───────────────────────────────────────────────────
+        "Copy (Ctrl+C)":        "Копировать (Ctrl+C)",
+        "Copy (Cmd+C)":         "Копировать (Cmd+C)",
+        "Paste (Ctrl+V)":       "Вставить (Ctrl+V)",
+        "Paste (Cmd+V)":        "Вставить (Cmd+V)",
+        "Cut (Ctrl+X)":         "Вырезать (Ctrl+X)",
+        "Cut (Cmd+X)":          "Вырезать (Cmd+X)",
+        "Undo (Ctrl+Z)":        "Отменить (Ctrl+Z)",
+        "Undo (Cmd+Z)":         "Отменить (Cmd+Z)",
+        "Select All (Ctrl+A)":  "Выделить всё (Ctrl+A)",
+        "Select All (Cmd+A)":   "Выделить всё (Cmd+A)",
+        "Save (Ctrl+S)":        "Сохранить (Ctrl+S)",
+        "Save (Cmd+S)":         "Сохранить (Cmd+S)",
+        "Find (Ctrl+F)":        "Найти (Ctrl+F)",
+        "Find (Cmd+F)":         "Найти (Cmd+F)",
+
+        # ── Media ─────────────────────────────────────────────────────
+        "Volume Up":            "Увеличить громкость",
+        "Volume Down":          "Уменьшить громкость",
+        "Volume Mute":          "Отключить звук",
+        "Play / Pause":         "Воспроизведение / Пауза",
+        "Next Track":           "Следующий трек",
+        "Previous Track":       "Предыдущий трек",
+
+        # ── Scroll ────────────────────────────────────────────────────
+        "Toggle SmartShift":                        "Переключить SmartShift",
+        "Switch Scroll Mode (Ratchet / Free Spin)": "Сменить режим колеса (Пошаговый / Свободный)",
+
+        # ── Screenshot ────────────────────────────────────────────────
+        "Screenshot Region → Clipboard":       "Снимок области → Буфер обмена",
+        "Screenshot Region → File":            "Снимок области → Файл",
+        "Screenshot Full Screen → Clipboard":  "Снимок экрана → Буфер обмена",
+        "Screenshot Full Screen → File":       "Снимок экрана → Файл",
+
+        # ── Custom ────────────────────────────────────────────────────
+        "Custom Shortcut…": "Своё сочетание клавиш…",
     },
 }
 
