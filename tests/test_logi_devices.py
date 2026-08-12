@@ -180,6 +180,53 @@ class LogiDeviceRegistryTests(unittest.TestCase):
             "logitech-mice/mx_anywhere_3s/mouse.png",
         )
 
+    def test_mx_anywhere_2_retained_pids_use_shared_layout_and_metadata(self):
+        expected_buttons = (
+            "middle",
+            "gesture",
+            "gesture_left",
+            "gesture_right",
+            "gesture_up",
+            "gesture_down",
+            "xbutton1",
+            "xbutton2",
+            "hscroll_left",
+            "hscroll_right",
+        )
+
+        for product_id in (0xB013, 0xB01F):
+            with self.subTest(product_id=f"0x{product_id:04X}"):
+                info = build_connected_device_info(product_id=product_id)
+                layout = get_device_layout(info.ui_layout)
+
+                self.assertEqual(info.key, "mx_anywhere_2")
+                self.assertEqual(info.display_name, "MX Anywhere 2")
+                self.assertEqual(info.ui_layout, "mx_anywhere_2s")
+                self.assertEqual(
+                    info.image_asset,
+                    "logitech-mice/mx_anywhere_2s/mouse.png",
+                )
+                self.assertEqual(layout["key"], "mx_anywhere_2s")
+                self.assertTrue(layout["interactive"])
+                self.assertEqual(info.supported_buttons, expected_buttons)
+                self.assertEqual((info.dpi_min, info.dpi_max), (400, 1600))
+                self.assertEqual(clamp_dpi(200, info), 400)
+                self.assertEqual(clamp_dpi(1601, info), 1600)
+
+    def test_mx_anywhere_2_receiver_name_resolves_with_shared_receiver_pid(self):
+        # 0xC52B identifies a shared Unifying receiver; HID++ supplies the
+        # connected mouse name that must select the MX Anywhere 2 catalog entry.
+        info = build_connected_device_info(
+            product_id=0xC52B,
+            product_name="Wireless Mouse MX Anywhere 2",
+            transport="USB receiver",
+        )
+
+        self.assertEqual(info.key, "mx_anywhere_2")
+        self.assertEqual(info.ui_layout, "mx_anywhere_2s")
+        self.assertEqual(info.product_id, 0xC52B)
+        self.assertEqual(info.product_name, "Wireless Mouse MX Anywhere 2")
+
     def test_exact_mx_anywhere_button_sets_include_expected_controls(self):
         anywhere_2s = get_buttons_for_layout("mx_anywhere_2s")
         anywhere_3 = get_buttons_for_layout("mx_anywhere_3")

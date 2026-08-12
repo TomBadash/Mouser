@@ -277,8 +277,9 @@ LOGI_DEVICE_SPECS = (
     {
         "key": "mx_anywhere_2",
         "display_name": "MX Anywhere 2",
-        "product_ids": (0xB013, 0xB018, 0xB01F),
+        "product_ids": (0xB013, 0xB01F),
         "aliases": (
+            "Wireless Mouse MX Anywhere 2",
             "Wireless Mobile Mouse MX Anywhere 2",
             "MX Anywhere 2",
             "MX Anywhere 2 for Mac",
@@ -286,6 +287,7 @@ LOGI_DEVICE_SPECS = (
         "ui_layout": "mx_anywhere_2s",
         "image_asset": "logitech-mice/mx_anywhere_2s/mouse.png",
         "supported_buttons": MX_ANYWHERE_BUTTONS,
+        "dpi_min": 400,
         "dpi_max": 1600,
     },
     # -- M650 Signature family ------------------------------------------------
