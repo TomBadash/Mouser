@@ -879,9 +879,16 @@ SHORT_LEN      = 7
 LONG_LEN       = 20
 
 BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
-# Known Logi Bolt receiver PID.
+# Known Logi Bolt / Unifying receiver PIDs.
 # Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
+# Both fall inside the 0xC500-0xC5FF receiver range (see RECEIVER_PID_MASK
+# below); they are kept as named constants only to pick the right label
+# ("Logi Bolt" vs. the generic "USB Receiver") once a receiver is confirmed.
 BOLT_RECEIVER_PID = 0xC548
+UNIFYING_RECEIVER_PID = 0xC52B
+# All Logitech USB receiver PIDs (Unifying, Bolt, ...) live in this block.
+RECEIVER_PID_MASK = 0xFF00
+RECEIVER_PID_PREFIX = 0xC500
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
@@ -3211,7 +3218,37 @@ class HidGestureListener:
                         # firmware does not advertise.
                         self._install_thumb_button_extra(device_spec, controls)
                         self._divert_extras()
-                        if idx == BT_DEV_IDX:
+                        # A PID inside the 0xC500-0xC5FF block is always a
+                        # Logitech USB receiver (Unifying, Bolt, ...); the
+                        # mask alone already covers BOLT_RECEIVER_PID and
+                        # UNIFYING_RECEIVER_PID, so there is no need to test
+                        # them individually here.
+                        is_receiver_pid = bool(
+                            pid is not None
+                            and (int(pid) & RECEIVER_PID_MASK) == RECEIVER_PID_PREFIX
+                        )
+                        # Explicit BT signals (dev-index or a reported
+                        # transport string) always win. They matter for the
+                        # rare case where a direct/BT device answered on a
+                        # receiver-slot dev-index (see idx_order fallback
+                        # above) -- without this override it would otherwise
+                        # be misread as a receiver connection.
+                        has_bt_signal = bool(
+                            idx == BT_DEV_IDX
+                            or "bluetooth" in (opened_transport or "").lower()
+                            or "bluetooth" in (candidate_transport or "").lower()
+                            or "ble" in (opened_transport or "").lower()
+                            or "ble" in (candidate_transport or "").lower()
+                        )
+
+                        if not is_receiver_pid:
+                            # Every PID outside the receiver block is a
+                            # direct connection. Mouser only ships Bluetooth
+                            # and USB-receiver support (see README), so a
+                            # non-receiver PID is reported as "Bluetooth"
+                            # regardless of has_bt_signal.
+                            actual_transport = "Bluetooth"
+                        elif has_bt_signal:
                             actual_transport = "Bluetooth"
                         elif pid == BOLT_RECEIVER_PID:
                             actual_transport = "Logi Bolt"
