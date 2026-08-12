@@ -3,7 +3,7 @@ import sys
 import unittest
 import ctypes
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 try:
     import main_qml
@@ -156,6 +156,185 @@ class AppIdentityTests(unittest.TestCase):
                 (250, main_qml._install_macos_dock_icon),
             ],
         )
+
+
+@unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
+class MacOSStatusItemReinstallTests(unittest.TestCase):
+    _global_names = (
+        "_MACOS_ACTIVATION_POLICY_REGULAR",
+        "_MACOS_NATIVE_STATUS_ITEM",
+        "_MACOS_NATIVE_STATUS_TARGET",
+        "_MACOS_STATUS_ITEM_PARAMS",
+        "_MACOS_STATUS_ITEM_REINSTALL_GENERATION",
+    )
+
+    def setUp(self):
+        self._original_globals = {
+            name: getattr(main_qml, name) for name in self._global_names
+        }
+        for name in self._global_names:
+            self.addCleanup(setattr, main_qml, name, self._original_globals[name])
+
+    @staticmethod
+    def _attached_status_item():
+        return SimpleNamespace(
+            button=lambda: SimpleNamespace(window=lambda: object())
+        )
+
+    def _queue_reinstall_callbacks(self):
+        callbacks = []
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(
+                main_qml.QTimer,
+                "singleShot",
+                side_effect=lambda delay, callback: callbacks.append((delay, callback)),
+            ),
+        ):
+            main_qml._schedule_macos_status_item_reinstall()
+        self.assertEqual([delay for delay, _ in callbacks], [0, 250])
+        return [callback for _, callback in callbacks]
+
+    def test_successful_immediate_reinstall_skips_delayed_replacement(self):
+        main_qml._MACOS_STATUS_ITEM_PARAMS = ("menu", lambda: None)
+        status_item = self._attached_status_item()
+
+        def install(*_args):
+            main_qml._MACOS_NATIVE_STATUS_ITEM = status_item
+            return status_item
+
+        with patch.object(
+            main_qml,
+            "_install_native_macos_status_item",
+            side_effect=install,
+        ) as installer:
+            immediate, delayed = self._queue_reinstall_callbacks()
+            immediate()
+            delayed()
+
+        installer.assert_called_once_with("menu", ANY)
+
+    def test_delayed_reinstall_runs_only_when_immediate_attempt_failed(self):
+        main_qml._MACOS_STATUS_ITEM_PARAMS = ("menu", lambda: None)
+        status_item = self._attached_status_item()
+
+        def install(*_args):
+            if installer.call_count == 1:
+                return None
+            main_qml._MACOS_NATIVE_STATUS_ITEM = status_item
+            return status_item
+
+        with patch.object(
+            main_qml,
+            "_install_native_macos_status_item",
+            side_effect=install,
+        ) as installer:
+            immediate, delayed = self._queue_reinstall_callbacks()
+            immediate()
+            delayed()
+
+        self.assertEqual(installer.call_count, 2)
+
+    def test_delayed_reinstall_runs_when_appkit_detaches_the_new_item(self):
+        main_qml._MACOS_STATUS_ITEM_PARAMS = ("menu", lambda: None)
+        status_item = self._attached_status_item()
+
+        def install(*_args):
+            main_qml._MACOS_NATIVE_STATUS_ITEM = status_item
+            return status_item
+
+        with patch.object(
+            main_qml,
+            "_install_native_macos_status_item",
+            side_effect=install,
+        ) as installer:
+            immediate, delayed = self._queue_reinstall_callbacks()
+            immediate()
+            main_qml._MACOS_NATIVE_STATUS_ITEM = None
+            delayed()
+
+        self.assertEqual(installer.call_count, 2)
+
+    def test_policy_change_invalidates_stale_reinstall_callbacks(self):
+        main_qml._MACOS_STATUS_ITEM_PARAMS = ("menu", lambda: None)
+        main_qml._MACOS_ACTIVATION_POLICY_REGULAR = False
+        main_qml._MACOS_STATUS_ITEM_REINSTALL_GENERATION = 10
+        appkit = SimpleNamespace(
+            NSApplicationActivationPolicyRegular="regular",
+            NSApplicationActivationPolicyAccessory="accessory",
+            NSApp=SimpleNamespace(setActivationPolicy_=MagicMock()),
+        )
+        callbacks = []
+
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml, "_macos_appkit", return_value=appkit),
+            patch.object(main_qml, "_install_macos_dock_icon"),
+            patch.object(main_qml, "_schedule_macos_dock_icon_refresh"),
+            patch.object(
+                main_qml.QTimer,
+                "singleShot",
+                side_effect=lambda delay, callback: callbacks.append((delay, callback)),
+            ),
+            patch.object(main_qml, "_install_native_macos_status_item") as installer,
+        ):
+            main_qml._set_macos_activation_policy(regular=True)
+            main_qml._set_macos_activation_policy(regular=False)
+            self.assertEqual([delay for delay, _ in callbacks], [0, 250])
+            immediate, delayed = [callback for _, callback in callbacks]
+            immediate()
+            delayed()
+
+        installer.assert_not_called()
+        self.assertEqual(main_qml._MACOS_STATUS_ITEM_REINSTALL_GENERATION, 12)
+
+    def test_failed_initial_native_install_leaves_qt_fallback_unarmed(self):
+        main_qml._MACOS_STATUS_ITEM_PARAMS = None
+
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml, "_macos_appkit", return_value=None),
+        ):
+            self.assertIsNone(
+                main_qml._install_native_macos_status_item("menu", lambda: None)
+            )
+
+        self.assertIsNone(main_qml._MACOS_STATUS_ITEM_PARAMS)
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml.QTimer, "singleShot") as single_shot,
+        ):
+            main_qml._schedule_macos_status_item_reinstall()
+        single_shot.assert_not_called()
+
+    def test_remove_failure_keeps_existing_item_and_does_not_replace_it(self):
+        original_item = object()
+        original_target = object()
+        original_params = ("old-menu", lambda: None)
+        status_bar = SimpleNamespace(
+            removeStatusItem_=MagicMock(side_effect=RuntimeError("remove failed"))
+        )
+        appkit = SimpleNamespace(
+            NSStatusBar=SimpleNamespace(systemStatusBar=lambda: status_bar)
+        )
+        main_qml._MACOS_NATIVE_STATUS_ITEM = original_item
+        main_qml._MACOS_NATIVE_STATUS_TARGET = original_target
+        main_qml._MACOS_STATUS_ITEM_PARAMS = original_params
+
+        with (
+            patch.object(main_qml.sys, "platform", "darwin"),
+            patch.object(main_qml, "_macos_appkit", return_value=appkit),
+            patch("builtins.print") as printed,
+        ):
+            self.assertIsNone(
+                main_qml._install_native_macos_status_item("new-menu", lambda: None)
+            )
+
+        status_bar.removeStatusItem_.assert_called_once_with(original_item)
+        self.assertIs(main_qml._MACOS_NATIVE_STATUS_ITEM, original_item)
+        self.assertIs(main_qml._MACOS_NATIVE_STATUS_TARGET, original_target)
+        self.assertIs(main_qml._MACOS_STATUS_ITEM_PARAMS, original_params)
+        printed.assert_called_once()
 
 
 @unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
