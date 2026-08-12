@@ -1115,6 +1115,9 @@ class HidGestureListener:
         self._pending_battery = None
         self._battery_result = None
         self._battery_event = threading.Event()
+        self._pending_connection_check = False
+        self._connection_check_result = False
+        self._connection_check_event = threading.Event()
         self._last_logged_battery = None
         self._last_battery_event = None
         self._connected_device_info = None
@@ -2610,6 +2613,37 @@ class HidGestureListener:
             return None
         return self._battery_result
 
+    def check_connection(self):
+        """Probe the active HID++ session on the listener thread.
+
+        Returns True on a valid IRoot response. A transport error or timeout
+        raises inside the listener loop so its normal cleanup/reconnect path
+        runs; this caller receives False once pending requests are drained.
+        """
+        self._connection_check_result = False
+        self._connection_check_event.clear()
+        self._pending_connection_check = True
+        if not self._connection_check_event.wait(3.0):
+            print("[HidGesture] Connection check timed out waiting for listener")
+            self._pending_connection_check = False
+            return False
+        return self._connection_check_result
+
+    def _apply_pending_connection_check(self):
+        """Validate the live handle with an idempotent HID++ IRoot query."""
+        if self._dev is None:
+            self._connection_check_result = False
+            self._pending_connection_check = False
+            self._connection_check_event.set()
+            return
+
+        feature_idx = self._find_feature(FEAT_REPROG_V4, timeout_ms=1000)
+        self._connection_check_result = feature_idx is not None
+        self._pending_connection_check = False
+        self._connection_check_event.set()
+        if feature_idx is None:
+            raise IOError("HID++ connection health check failed")
+
     @staticmethod
     def _parse_battery_params(params):
         """Extract ``(level, charging)`` from a 0x1004/0x1000 battery payload.
@@ -2688,6 +2722,9 @@ class HidGestureListener:
 
     def _drain_pending_requests(self):
         """Abort all pending HID++ requests, unblocking waiting threads."""
+        self._pending_connection_check = False
+        self._connection_check_result = False
+        self._connection_check_event.set()
         self._pending_battery = None
         self._battery_event.set()
         self._pending_dpi = None
@@ -3396,6 +3433,8 @@ class HidGestureListener:
                         self._apply_pending_native_wheel_invert()
                     if self._pending_battery is not None:
                         self._apply_pending_read_battery()
+                    if self._pending_connection_check:
+                        self._apply_pending_connection_check()
                     if self._pending_haptic is not None:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
