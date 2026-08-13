@@ -125,6 +125,8 @@ class LinuxDesktopShortcutTests(unittest.TestCase):
         self.assertEqual(module._KEY_NAME_TO_CODE["control"], module.KEY_LEFTCTRL)
         self.assertEqual(module._KEY_NAME_TO_CODE["cmd"], module.KEY_LEFTMETA)
         self.assertEqual(module._KEY_NAME_TO_CODE["insert"], 110)
+        self.assertEqual(module._KEY_NAME_TO_CODE["printscreen"], module.KEY_SYSRQ)
+        self.assertIn(module.KEY_SYSRQ, module._ALL_KEY_CODES)
         self.assertIn(module._KEY_NAME_TO_CODE["semicolon"], module._ALL_KEY_CODES)
         self.assertIn(module._KEY_NAME_TO_CODE["f24"], module._ALL_KEY_CODES)
 

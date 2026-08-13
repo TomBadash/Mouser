@@ -51,6 +51,10 @@ class KeyRegistryParsingTests(unittest.TestCase):
         self.assertEqual(macos["insert"], 0x72)
         self.assertEqual(linux["insert"], 110)
 
+        self.assertEqual(windows["printscreen"], 0x2C)
+        self.assertEqual(macos["printscreen"], 0x69)
+        self.assertEqual(linux["printscreen"], 99)
+
         self.assertEqual(windows["semicolon"], 0xBA)
         self.assertEqual(macos["semicolon"], 0x29)
         self.assertEqual(linux["semicolon"], 39)
@@ -66,6 +70,16 @@ class KeyRegistryParsingTests(unittest.TestCase):
         self.assertIn("plus", names)
         self.assertIn(";", names)
         self.assertIn("insert", names)
+        self.assertIn("printscreen", names)
+        self.assertIn("prtsc", names)
+
+    def test_print_screen_aliases_normalize_to_one_cross_platform_key(self):
+        for alias in ("print", "Print Screen", "PrtSc", "PrtScn", "SysRq"):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    key_registry.canonical_shortcut_text(alias),
+                    "printscreen",
+                )
 
     def test_platform_support_validation_rejects_unsupported_keys(self):
         self.assertEqual(

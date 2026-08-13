@@ -155,6 +155,8 @@ def _qt_shortcut_key_name(key, text=""):
         return "pagedown"
     if key == _qt_enum_int(Qt.Key_Insert):
         return "insert"
+    if key == _qt_enum_int(Qt.Key_Print):
+        return "printscreen"
 
     for n in range(1, 25):
         qt_key = getattr(Qt, f"Key_F{n}", None)

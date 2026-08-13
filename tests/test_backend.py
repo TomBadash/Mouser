@@ -1119,6 +1119,18 @@ class BackendDeviceLayoutTests(unittest.TestCase):
                 "ctrl+f24",
             )
 
+    def test_shortcut_capture_accepts_print_screen(self):
+        backend = self._make_backend()
+
+        self.assertEqual(
+            backend.shortcutComboFromQtEvent(
+                Qt.Key_Print,
+                Qt.NoModifier,
+                "",
+            ),
+            "printscreen",
+        )
+
     def test_shortcut_capture_accepts_shifted_symbol_text(self):
         backend = self._make_backend()
 
