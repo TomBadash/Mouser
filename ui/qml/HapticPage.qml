@@ -256,7 +256,7 @@ Item {
                     spacing: 12
 
                     Text {
-                        text: s["haptic.force_title"] || "Gesture Button Sensitivity"
+                        text: s["haptic.force_title"] || "Actions Button Sensitivity"
                         font {
                             family: uiState.fontFamily
                             pixelSize: 16
@@ -266,7 +266,7 @@ Item {
                     }
 
                     Text {
-                        text: s["haptic.force_desc"] || "Adjust how hard you need to press the gesture button to activate it."
+                        text: s["haptic.force_desc"] || "Adjust how hard you need to press the Actions button to activate it."
                         font {
                             family: uiState.fontFamily
                             pixelSize: 12
