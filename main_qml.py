@@ -1410,7 +1410,10 @@ def main():
     def _save_language():
         """Persist the selected language to config.json."""
         try:
-            saved_cfg = load_config()
+            # Write through the Backend's live config dict -- the same object
+            # the Engine holds -- so this save cannot be clobbered by a stale
+            # in-memory copy the next time another component saves config.
+            saved_cfg = backend._cfg if backend is not None else load_config()
             saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
             save_config(saved_cfg)
         except Exception as exc:
