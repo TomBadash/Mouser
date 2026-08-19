@@ -387,6 +387,171 @@ class ApplyLoginStartupMacTests(unittest.TestCase):
             ]
         )
 
+    def test_macos_enable_noop_when_plist_matches_and_job_loaded(self):
+        domain = "gui/501"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plist = os.path.join(tmp, "io.github.tombadash.mouser.plist")
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_program_arguments", return_value=["/X/Mouser"]),
+                patch.object(st, "_launchctl_run") as m_lc,
+            ):
+                m_lc.return_value = MagicMock(returncode=0)
+                st.apply_login_startup(True)
+                with open(plist, "rb") as f:
+                    written = f.read()
+
+                # Startup sync with identical on-disk agent and the job
+                # already loaded: must not bootout (kills a login-started
+                # instance) and must not bootstrap (RunAtLoad ghost run).
+                m_lc.reset_mock()
+                m_lc.return_value = MagicMock(returncode=0)
+                st.apply_login_startup(True)
+
+                self.assertEqual(
+                    [call.args[0] for call in m_lc.call_args_list],
+                    [
+                        [
+                            "launchctl",
+                            "print",
+                            f"{domain}/{st.MACOS_LAUNCH_AGENT_LABEL}",
+                        ]
+                    ],
+                )
+                with open(plist, "rb") as f:
+                    self.assertEqual(f.read(), written)
+
+    def test_macos_enable_noop_when_running_as_launch_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plist = os.path.join(tmp, "io.github.tombadash.mouser.plist")
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_program_arguments", return_value=["/X/Mouser"]),
+                patch.object(st, "_launchctl_run") as m_lc,
+                patch.dict(
+                    os.environ, {"XPC_SERVICE_NAME": st.MACOS_LAUNCH_AGENT_LABEL}
+                ),
+            ):
+                m_lc.return_value = MagicMock(returncode=0)
+                st.apply_login_startup(True)
+                with open(plist, "rb") as f:
+                    written = f.read()
+
+                m_lc.reset_mock()
+                st.apply_login_startup(True)
+
+            # The agent-spawned process must not reload its own job: bootout
+            # would terminate it, bootstrap would spawn a duplicate.
+            m_lc.assert_not_called()
+            with open(plist, "rb") as f:
+                self.assertEqual(f.read(), written)
+
+    def test_macos_enable_bootstraps_matching_plist_when_job_not_loaded(self):
+        domain = "gui/501"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plist = os.path.join(tmp, "io.github.tombadash.mouser.plist")
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_program_arguments", return_value=["/X/Mouser"]),
+                patch.object(st, "_launchctl_run") as m_lc,
+            ):
+                m_lc.return_value = MagicMock(returncode=0)
+                st.apply_login_startup(True)
+                with open(plist, "rb") as f:
+                    written = f.read()
+
+                m_lc.reset_mock()
+                m_lc.side_effect = [
+                    MagicMock(returncode=1),  # print: job not loaded
+                    MagicMock(returncode=0),  # bootstrap
+                ]
+                st.apply_login_startup(True)
+
+                self.assertEqual(
+                    [call.args[0] for call in m_lc.call_args_list],
+                    [
+                        [
+                            "launchctl",
+                            "print",
+                            f"{domain}/{st.MACOS_LAUNCH_AGENT_LABEL}",
+                        ],
+                        ["launchctl", "bootstrap", domain, plist],
+                    ],
+                )
+                with open(plist, "rb") as f:
+                    self.assertEqual(f.read(), written)
+
+    def test_macos_enable_rewrites_changed_plist_without_reloading_when_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plist = os.path.join(tmp, "io.github.tombadash.mouser.plist")
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_program_arguments", return_value=["/X/Mouser"]),
+                patch.object(st, "_launchctl_run") as m_lc,
+            ):
+                m_lc.return_value = MagicMock(returncode=0)
+                st.apply_login_startup(True)
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_program_arguments", return_value=["/Y/Mouser"]),
+                patch.object(st, "_launchctl_run") as m_lc,
+                patch.dict(
+                    os.environ, {"XPC_SERVICE_NAME": st.MACOS_LAUNCH_AGENT_LABEL}
+                ),
+            ):
+                st.apply_login_startup(True)
+
+            m_lc.assert_not_called()
+            with open(plist, "rb") as f:
+                payload = plistlib.load(f)
+            self.assertEqual(payload["ProgramArguments"], ["/Y/Mouser"])
+
+    def test_macos_disable_skips_bootout_when_running_as_launch_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plist = os.path.join(tmp, "io.github.tombadash.mouser.plist")
+            with open(plist, "wb") as f:
+                f.write(b"agent plist")
+
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch("core.startup.os.getuid", return_value=501, create=True),
+                patch.object(st, "supports_login_startup", return_value=True),
+                patch.object(st, "_macos_plist_path", return_value=plist),
+                patch.object(st, "_launchctl_run") as m_lc,
+                patch.dict(
+                    os.environ, {"XPC_SERVICE_NAME": st.MACOS_LAUNCH_AGENT_LABEL}
+                ),
+            ):
+                st.apply_login_startup(False)
+
+            # Disabling from the agent-spawned process itself: booting the
+            # job out would quit the app; removing the plist is enough to
+            # stop the agent at the next login.
+            m_lc.assert_not_called()
+            self.assertFalse(os.path.exists(plist))
+
 
 class SyncFromConfigTests(unittest.TestCase):
     def test_delegates_to_apply(self):
