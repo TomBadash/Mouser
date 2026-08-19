@@ -288,6 +288,35 @@ class EngineHorizontalScrollTests(unittest.TestCase):
         self.assertTrue(engine._app_detector.start_called)
 
 
+class EngineReloadMappingsConfigIdentityTests(unittest.TestCase):
+    def _make_engine(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            return Engine()
+
+    def test_reload_mappings_updates_config_in_place(self):
+        # Backend shares the Engine's live config dict; reload_mappings must
+        # refresh that dict in place instead of rebinding self.cfg, which
+        # would fork the two holders and resurrect the stale-copy overwrite
+        # bug (language/start_at_login silently reverted on later saves).
+        engine = self._make_engine()
+        original_cfg = engine.cfg
+
+        fresh_cfg = copy.deepcopy(DEFAULT_CONFIG)
+        fresh_cfg["settings"]["language"] = "zh"
+        with patch("core.engine.load_config", return_value=fresh_cfg):
+            engine.reload_mappings()
+
+        self.assertIs(engine.cfg, original_cfg)
+        self.assertEqual(engine.cfg["settings"]["language"], "zh")
+
+
 class EngineDesktopCycleTests(unittest.TestCase):
     def _make_engine(self):
         from core.engine import Engine

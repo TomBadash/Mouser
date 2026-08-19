@@ -272,7 +272,14 @@ class Backend(QObject):
         super().__init__(parent)
         self._engine = engine
         self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self._cfg = load_config()
+        # Share the engine's live config dict when one exists. Separate
+        # per-component copies previously let a stale holder clobber newer
+        # settings on its next whole-config save: changing the UI language
+        # (persisted by main_qml through a fresh load) was silently reverted
+        # to "en" the next time the Backend or Engine saved anything, and
+        # start_at_login was reverted the same way by Engine-side saves.
+        engine_cfg = getattr(engine, "cfg", None) if engine is not None else None
+        self._cfg = engine_cfg if isinstance(engine_cfg, dict) else load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
         self._connected_device_key = ""
