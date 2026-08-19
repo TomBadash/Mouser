@@ -354,6 +354,18 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertTrue(config.action_haptic_enabled(cfg, "cycle_dpi"))
         self.assertFalse(config.action_haptic_enabled(cfg, "alt_tab"))
 
+    def test_gesture_swipe_haptic_defaults_on(self):
+        # Absent from config → on by default (matches Logi Options+ behaviour).
+        self.assertTrue(config.gesture_swipe_haptic_enabled({}))
+        self.assertTrue(
+            config.gesture_swipe_haptic_enabled(config.DEFAULT_CONFIG))
+
+    def test_gesture_swipe_haptic_reflects_setting(self):
+        self.assertFalse(config.gesture_swipe_haptic_enabled(
+            {"settings": {"gesture_swipe_haptic": False}}))
+        self.assertTrue(config.gesture_swipe_haptic_enabled(
+            {"settings": {"gesture_swipe_haptic": True}}))
+
     def test_set_action_haptic_adds_and_removes(self):
         cfg = {"settings": {"action_haptic": []}}
 

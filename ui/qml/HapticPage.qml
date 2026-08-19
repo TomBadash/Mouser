@@ -842,6 +842,62 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            // Gesture Swipe Feedback Toggle Card
+            Rectangle {
+                id: gestureSwipeCard
+                opacity: backend.hapticEnabled ? 1.0 : 0.4
+                Behavior on opacity { NumberAnimation { duration: 150 } }
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: gestureSwipeRow.implicitHeight + 32
+                radius: Theme.radius
+                color: hapticPage.theme.bgCard
+                border.width: 1
+                border.color: hapticPage.theme.border
+
+                Column {
+                    id: gestureSwipeRow
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 6
+
+                    Row {
+                        width: parent.width
+
+                        Text {
+                            text: s["haptic.gesture_swipe_title"] || "Gesture Swipe Feedback"
+                            font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                            color: hapticPage.theme.textPrimary
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - gestureSwipeSwitch.width
+                        }
+
+                        Switch {
+                            id: gestureSwipeSwitch
+                            checked: backend.gestureSwipeHaptic
+                            anchors.verticalCenter: parent.verticalCenter
+                            enabled: backend.hapticEnabled
+                            onToggled: backend.setGestureSwipeHaptic(checked)
+                        }
+                    }
+
+                    Text {
+                        text: s["haptic.gesture_swipe_desc"]
+                              || "Fire a haptic pulse the moment a Gesture button swipe direction is recognized."
+                        font { family: uiState.fontFamily; pixelSize: 12 }
+                        color: hapticPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── Experimental Note ────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
