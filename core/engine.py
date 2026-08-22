@@ -114,6 +114,10 @@ class Engine:
         self._wheel_divert_change_cb = None
         self._wheel_divert_active_local = False
         self._last_native_invert_target = (False, False)
+        self._wheel_invert_apply_lock = threading.Lock()
+        self._wheel_invert_apply_inflight = False
+        self._wheel_invert_apply_pending = False
+        self._wheel_invert_apply_pending_force = False
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
         self._desktop_direction = "right"
@@ -132,6 +136,8 @@ class Engine:
         self.hook.set_status_callback(self._emit_status)
         self._setup_hooks()
         self.hook.set_connection_change_callback(self._on_connection_change)
+        if hasattr(self.hook, "set_device_wake_callback"):
+            self.hook.set_device_wake_callback(self._on_device_wake)
         self.hook.set_battery_notify_callback(self._on_hid_battery_notification)
         # Apply persisted DPI setting
         dpi = self.cfg.get("settings", {}).get("dpi", 1000)
@@ -661,6 +667,89 @@ class Engine:
             def _write():
                 hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
+
+    def _schedule_wheel_invert_apply(self, *, force: bool = False) -> None:
+        """Run ``_apply_wheel_invert_setting`` on a worker thread.
+
+        Callers are HID listener-thread callbacks, and the apply blocks until
+        that same listener services the queued write -- doing it inline
+        deadlocks until the request times out. Only one worker runs at a
+        time, so a burst of wake/connect notifications cannot stack threads
+        that would each sit on ``_wheel_divert_call_lock`` for the full
+        timeout.
+
+        A request arriving while one is in flight is coalesced into a re-run
+        rather than dropped, mirroring ``_request_saved_settings_replay``. A
+        wake means the firmware forgot its state, so silently discarding one
+        is the very failure this path exists to prevent: the in-flight write
+        may already have landed before the device power-cycled again.
+        """
+        hg = getattr(self.hook, "_hid_gesture", None)
+        if hg is None or not hasattr(hg, "request_wheel_native_invert"):
+            return
+        with self._wheel_invert_apply_lock:
+            if self._wheel_invert_apply_inflight:
+                self._wheel_invert_apply_pending = True
+                self._wheel_invert_apply_pending_force |= bool(force)
+                return
+            self._wheel_invert_apply_inflight = True
+
+        def _run():
+            run_force = force
+            try:
+                while True:
+                    try:
+                        self._apply_wheel_invert_setting(force=run_force)
+                    except Exception as exc:
+                        print(f"[Engine] wheel invert apply failed: {exc}")
+                    # Clear the in-flight flag in the same critical section
+                    # that finds no pending re-run, so a request landing
+                    # between the two cannot be lost by either side.
+                    with self._wheel_invert_apply_lock:
+                        if not self._wheel_invert_apply_pending:
+                            self._wheel_invert_apply_inflight = False
+                            return
+                        run_force = self._wheel_invert_apply_pending_force
+                        self._wheel_invert_apply_pending = False
+                        self._wheel_invert_apply_pending_force = False
+            except BaseException:
+                self._release_wheel_invert_apply_slot()
+                raise
+
+        try:
+            threading.Thread(
+                target=_run, daemon=True, name="WheelInvertApply"
+            ).start()
+        except Exception as exc:
+            # Thread.start() can fail outright under handle/memory pressure.
+            # Leaving the flag set would wedge every later wake AND every
+            # reconnect replay for the life of the process, silently.
+            self._release_wheel_invert_apply_slot()
+            print(f"[Engine] wheel invert worker did not start: {exc}")
+
+    def _release_wheel_invert_apply_slot(self) -> None:
+        """Give up the in-flight claim without discarding a coalesced request.
+
+        Only ``_inflight`` is cleared. A caller that coalesced into this
+        worker between the claim and its death was told its request would
+        run, so clearing ``_pending`` here would eat that wake -- the exact
+        loss this path exists to prevent. Leaving the flag set is harmless
+        while no worker exists, and the next scheduler call starts one that
+        consumes it, so the state self-heals.
+        """
+        with self._wheel_invert_apply_lock:
+            self._wheel_invert_apply_inflight = False
+
+    def _on_device_wake(self) -> None:
+        """The device re-linked after power-saving sleep.
+
+        Its volatile firmware state is gone -- the 0x2121 / 0x2150 invert bits
+        included -- but the HID handle never dropped, so nothing here changed
+        and the fast path in ``_apply_wheel_invert_setting`` would short-circuit
+        on its own cached values. Force the write.
+        """
+        print("[Engine] Device wake — replaying wheel native-invert")
+        self._schedule_wheel_invert_apply(force=True)
 
     def _apply_wheel_invert_setting(self, *, force: bool = False) -> None:
         settings = self.cfg.get("settings", {})
@@ -1303,18 +1392,12 @@ class Engine:
                 with self._lock:
                     self.hook.reset_bindings()
                     self._setup_hooks(defer_wheel_invert=True)
-                # This callback runs ON the HID listener thread. The native
-                # wheel-invert write blocks until that same thread services the
-                # queued request from its main loop, so applying it here would
-                # deadlock until the request times out. Defer it to a worker so
-                # the listener can return to its loop and complete the write.
-                hg = getattr(self.hook, "_hid_gesture", None)
-                if hg is not None and hasattr(hg, "request_wheel_native_invert"):
-                    threading.Thread(
-                        target=self._apply_wheel_invert_setting,
-                        daemon=True,
-                        name="WheelInvertApply",
-                    ).start()
+                # Deferred to a worker (see _schedule_wheel_invert_apply):
+                # this callback runs ON the HID listener thread and the write
+                # blocks on that same thread. force=True because the device
+                # may have power-cycled while disconnected, so the firmware
+                # invert bits are unknown even when every cached value matches.
+                self._schedule_wheel_invert_apply(force=True)
             self._battery_poll_stop.set()
             if self._battery_poll_thread is not None:
                 self._battery_poll_thread.join(timeout=5)
