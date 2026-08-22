@@ -896,6 +896,27 @@ FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 FEAT_HAPTIC         = 0x19B0      # Haptic Feedback (MX Master 4)
 FEAT_FORCE_SENSING  = 0x19C0      # Force Sensing Button (MX Master 4)
+FEAT_WIRELESS_DEVICE_STATUS = 0x1D4B  # Wireless Device Status
+
+# 0x1D4B statusBroadcastEvent (function 0). The device sends this itself when
+# it re-links -- after a power-switch cycle, or after parking itself at the
+# end of a long idle -- to say the host must reconfigure it. Nothing else
+# marks that moment: the receiver holds the HID handle open across the whole
+# cycle, so there is no disconnect, no reconnect, and no report gap to infer
+# from (observed: 2.5 h of total silence on the interface, then this).
+#
+# Captured from an MX Master 4 on a Bolt receiver:
+#     11 02 04 00 | 01 01 01 ...
+#                   ^^ ^^ ^^  status / request / reason
+#
+# Byte-identical for a power-switch cycle and for a natural idle wake -- the
+# reason byte reads 0x01 ("power switch activated") in BOTH cases, so it is
+# decoded for the log line only. Do not filter on it: doing so would look
+# correct against the spec and silently drop every idle wake, which is the
+# case users actually hit.
+_WDS_EVENT_FN = 0
+_WDS_STATUS_RECONNECTION = 0x01       # param 0
+_WDS_REQUEST_RECONFIGURE = 0x01       # param 1
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
 # REPROG_V4 ``setCidReporting`` control flags (fn 3 byte 2). The
@@ -915,6 +936,7 @@ _UNDIVERT_BUTTON    = 0x02  # 0x02 only         -- revert button-only divert
 _UNDIVERT_RAW_XY    = 0x22  # 0x02 | 0x20       -- revert rawXY divert
 
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
+
 
 HIDPP_ERROR_NAMES = {
     0x01: "UNKNOWN",
@@ -1036,12 +1058,20 @@ class HidGestureListener:
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
                  on_thumb_button_down=None, on_thumb_button_up=None,
-                 on_thumb_button_move=None, on_battery=None):
+                 on_thumb_button_move=None, on_battery=None,
+                 on_wake=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        # Fired when the device re-links after power-saving sleep *without*
+        # the HID handle ever dropping, so no connect/disconnect pair is seen.
+        # Volatile firmware state Mouser owns -- the 0x2121 / 0x2150 wheel
+        # invert bits -- does not survive that power cycle, so the listener
+        # cannot stay silent about it (issue: inverted horizontal scroll
+        # stops working after the mouse has been idle for a long time).
+        self._on_wake       = on_wake
         # Invoked ``on_battery(level, charging)`` when the device sends an
         # unsolicited HID++ battery status broadcast (e.g. USB plugged in),
         # so the UI updates instantly instead of waiting for the next poll.
@@ -1144,6 +1174,7 @@ class HidGestureListener:
         self._wheel_divert_call_lock = threading.Lock()
         self._wheel_divert_result = None
         self._tx_lock = threading.Lock()    # serialize concurrent HID writes
+        self._wireless_status_idx = None    # feature index of 0x1D4B
         self._haptic_idx = None             # feature index of HAPTIC (0x19B0)
         self._force_sensing_idx = None      # feature index of FORCE_SENSING (0x19C0)
         self._pending_haptic = None
@@ -2289,6 +2320,41 @@ class HidGestureListener:
                 f"thumb={'OK' if ok_h else 'FAIL'}"
             )
 
+    def _handle_wireless_status_event(self, params) -> None:
+        """Decode a 0x1D4B statusBroadcastEvent. Listener-thread only.
+
+        Either flag is reason enough to replay: "reconnection" says the link
+        was re-established, "reconfiguration needed" is the device asking
+        outright. Firmware that sets neither is reporting something else
+        (a status query echo), so stay quiet rather than guess.
+
+        Do not write the firmware invert from here -- the engine owns that
+        decision. It is the side that knows the config, and it must clear
+        ``wheel_native_invert_active`` if the write fails so the OS-layer
+        fallback takes over.
+        """
+        status = params[0] if len(params) > 0 else 0
+        request = params[1] if len(params) > 1 else 0
+        reason = params[2] if len(params) > 2 else 0
+        if not (status == _WDS_STATUS_RECONNECTION
+                or request == _WDS_REQUEST_RECONFIGURE):
+            return
+        print(
+            f"[HidGesture] Device re-linked (0x1D4B status={status:#04x} "
+            f"request={request:#04x} reason={reason:#04x})"
+        )
+        self._notify_wake()
+
+    def _notify_wake(self) -> None:
+        """Invoke the wake callback, isolating listener-loop from its errors."""
+        cb = self._on_wake
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:
+            print(f"[HidGesture] wake callback error: {exc}")
+
     def _abort_pending_wheel_divert(self) -> None:
         """Wake any waiter with result=False when the connection drops
         mid-request, and clear stale post-success state so the next
@@ -2733,6 +2799,18 @@ class HidGestureListener:
             return
         _, feat, func, _sw, params = msg
 
+        # 0x1D4B statusBroadcastEvent: the device re-linked and is asking to
+        # be reconfigured. `_sw != MY_SW` keeps our own polled responses out,
+        # matching the battery broadcast below.
+        if (
+            self._wireless_status_idx is not None
+            and feat == self._wireless_status_idx
+            and func == _WDS_EVENT_FN
+            and _sw != MY_SW
+        ):
+            self._handle_wireless_status_event(params)
+            return
+
         # Unsolicited battery status broadcast (feature 0x1004 / 0x1000,
         # event func 0) — pushed to the UI so charging shows instantly.
         # `_sw != MY_SW` excludes our own polled getStatus responses (which
@@ -2928,6 +3006,7 @@ class HidGestureListener:
             self._battery_idx = None
             self._battery_feature_id = None
             self._haptic_idx = None
+            self._wireless_status_idx = None
             self._force_sensing_idx = None
             self._force_sensing_range = None
             self._haptic_capabilities = None
@@ -3122,6 +3201,29 @@ class HidGestureListener:
                             self._battery_idx = batt_fi
                             self._battery_feature_id = FEAT_BATTERY_STATUS
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
+                    # Wireless Device Status: the device's own "I re-linked,
+                    # reconfigure me" broadcast. Optional -- older or
+                    # wired-only devices do not advertise it.
+                    wds_fi = self._find_feature(FEAT_WIRELESS_DEVICE_STATUS)
+                    if wds_fi:
+                        self._wireless_status_idx = wds_fi
+                        print(
+                            "[HidGesture] Found WIRELESS_DEVICE_STATUS "
+                            f"@0x{wds_fi:02X}"
+                        )
+                    else:
+                        # Clear, do not just log: feature resolution runs per
+                        # receiver slot but the reset above runs once per
+                        # interface candidate, so a slot that resolves 0x1D4B
+                        # and then fails to divert would leave its index
+                        # behind. The wake branch sits in front of the whole
+                        # dispatch in `_on_report`, so a stale index that
+                        # collides on the next slot swallows every event.
+                        self._wireless_status_idx = None
+                        print(
+                            "[HidGesture] WIRELESS_DEVICE_STATUS (0x1D4B) "
+                            "absent -- wake replay falls back to reconnect"
+                        )
                     # Haptic Feedback (MX Master 4)
                     haptic_fi = self._find_feature(FEAT_HAPTIC)
                     if haptic_fi:
@@ -3437,6 +3539,7 @@ class HidGestureListener:
             self._last_battery_event = None
             self._consecutive_request_timeouts = 0
             self._haptic_idx = None
+            self._wireless_status_idx = None
             self._force_sensing_idx = None
             self._force_sensing_range = None
             self._haptic_capabilities = None

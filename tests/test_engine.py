@@ -702,7 +702,6 @@ class WheelInvertConnectThreadingTests(unittest.TestCase):
             request.assert_not_called()
 
             worker = next(t for t in threads if t.name == "WheelInvertApply")
-            self.assertEqual(worker._target, engine._apply_wheel_invert_setting)
 
             # Once deferred to the worker, the write is applied with the
             # configured invert state.

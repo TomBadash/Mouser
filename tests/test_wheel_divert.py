@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import sys
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -20,6 +21,7 @@ from core.config import DEFAULT_CONFIG, _migrate
 from core.hid_gesture import (
     FEAT_HIRES_WHEEL_ENHANCED,
     FEAT_THUMB_WHEEL,
+    FEAT_WIRELESS_DEVICE_STATUS,
     HidGestureListener,
 )
 from core.logi_devices import resolve_device
@@ -434,6 +436,28 @@ class BaseHookFlagTests(unittest.TestCase):
         # No exception, no state change beyond not having the old fields.
         self.assertFalse(hasattr(hook, "_wheel_residual_v"))
 
+    def test_wake_callback_forwarded_to_subscriber(self):
+        hook = BaseMouseHook()
+        seen = []
+        hook.set_device_wake_callback(lambda: seen.append(True))
+        hook._on_hid_wake()
+        self.assertEqual(seen, [True])
+
+    def test_wake_callback_absent_is_harmless(self):
+        BaseMouseHook()._on_hid_wake()   # must not raise
+
+    def test_listener_is_started_with_the_wake_hook(self):
+        # The listener is the only thing that can observe a re-link, so the
+        # hook must hand it a way back in.
+        hook = BaseMouseHook()
+        listener_cls = MagicMock()
+        listener_cls.return_value.start.return_value = True
+        with patch("core.mouse_hook_base.HidGestureListener", listener_cls):
+            hook._start_hid_listener()
+        self.assertEqual(
+            listener_cls.call_args.kwargs["on_wake"], hook._on_hid_wake
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # macOS event-tap suppression of OS-layer inversion
@@ -704,11 +728,13 @@ class _FakeHook:
         self.wheel_divert_active = False  # back-compat alias
         self._hid_gesture = None
         self._blocked_events = set()
+        self.device_wake_cb = None
 
     def set_debug_callback(self, cb): pass
     def set_gesture_callback(self, cb): pass
     def set_status_callback(self, cb): pass
     def set_connection_change_callback(self, cb): pass
+    def set_device_wake_callback(self, cb): self.device_wake_cb = cb
     def set_battery_notify_callback(self, cb): pass
     def configure_gestures(self, **kwargs): pass
     def configure_wheel_multipliers(self, v, h): return None
@@ -748,9 +774,9 @@ class _FakeHidGesture:
         self.flags_set_to = (vertical, thumb)
 
 
-class EngineNativeInvertTests(unittest.TestCase):
-    def _make_engine(self, *, wheel_divert="auto", invert_v=False, invert_h=False,
-                     ack=True, has_wheel=True, has_thumb=True, capable=True):
+def _make_native_invert_engine(*, wheel_divert="auto", invert_v=False,
+                               invert_h=False, ack=True, has_wheel=True,
+                               has_thumb=True, capable=True):
         from core.engine import Engine
 
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -774,6 +800,18 @@ class EngineNativeInvertTests(unittest.TestCase):
             )
         return engine
 
+
+def _join_wheel_invert_workers(timeout=5):
+    for thread in threading.enumerate():
+        if thread.name == "WheelInvertApply":
+            thread.join(timeout=timeout)
+
+
+class _EngineNativeInvertMixin:
+    _make_engine = staticmethod(_make_native_invert_engine)
+
+
+class EngineNativeInvertTests(_EngineNativeInvertMixin, unittest.TestCase):
     def test_capable_device_drives_native_invert(self):
         engine = self._make_engine(invert_v=True, invert_h=False)
         engine._apply_wheel_invert_setting()
@@ -853,6 +891,287 @@ class EngineNativeInvertTests(unittest.TestCase):
         engine.cfg["settings"]["wheel_divert"] = "off"
         engine._apply_wheel_invert_setting()
         self.assertEqual(seen, [False, True, False])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wake after power-saving sleep
+#
+# An MX Master parks itself after a long idle. The 0x2150 thumbwheel invert
+# (and the 0x2121 wheel-mode bit) are volatile, so the device comes back with
+# them cleared while Mouser's own state -- config, UI toggle, and the cached
+# `_wheel_divert_active_local` -- still says "inverted". Nothing here changed,
+# so the fast path in `_apply_wheel_invert_setting` used to short-circuit and
+# the inversion silently stopped working until the setting was toggled.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class DeviceWakeNotificationTests(unittest.TestCase):
+    """0x1D4B statusBroadcastEvent handling.
+
+    The reference payload is the one an MX Master 4 on a Bolt receiver
+    actually emits when its power switch is cycled:
+        11 02 04 00 | 01 01 01
+    """
+
+    WDS_IDX = 0x04
+
+    def _listener(self):
+        listener = _make_listener()
+        listener._dev_idx = 0x02
+        listener._feat_idx = 0x0D
+        listener._battery_idx = 0x09
+        listener._wireless_status_idx = self.WDS_IDX
+        return listener
+
+    def _event(self, status, request, reason=0x00, feat=None, fsw=0x00):
+        # [report-id, device-index, feature-index, func<<4|sw, params...]
+        return [0x11, 0x02, self.WDS_IDX if feat is None else feat, fsw,
+                status, request, reason] + [0x00] * 13
+
+    def test_captured_power_cycle_payload_fires_wake(self):
+        listener = self._listener()
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x01, 0x01, 0x01))
+
+        self.assertEqual(woke, [True])
+
+    def test_reconfigure_request_alone_fires_wake(self):
+        listener = self._listener()
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x00, 0x01))
+
+        self.assertEqual(woke, [True])
+
+    def test_reason_byte_is_not_a_filter(self):
+        # Hardware reports reason=0x01 ("power switch") for a natural idle
+        # wake too, so the byte cannot discriminate. Any value must still
+        # wake -- filtering on it would drop the case users actually hit.
+        listener = self._listener()
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x01, 0x01, reason=0x00))
+
+        self.assertEqual(woke, [True])
+
+    def test_event_with_neither_flag_is_ignored(self):
+        listener = self._listener()
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x00, 0x00))
+
+        self.assertEqual(woke, [])
+
+    def test_our_own_polled_response_is_not_a_wake(self):
+        # Responses to our own requests carry MY_SW in the low nibble.
+        listener = self._listener()
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x01, 0x01, fsw=hg_mod.MY_SW))
+
+        self.assertEqual(woke, [])
+
+    def test_no_wake_before_the_feature_is_resolved(self):
+        # Until connect resolves 0x1D4B, index 4 means nothing -- another
+        # feature could legitimately be sitting there.
+        listener = self._listener()
+        listener._wireless_status_idx = None
+        woke = []
+        listener._on_wake = lambda: woke.append(True)
+
+        listener._on_report(self._event(0x01, 0x01))
+
+        self.assertEqual(woke, [])
+
+    def test_wake_callback_errors_do_not_escape_listener(self):
+        listener = self._listener()
+
+        def _boom():
+            raise RuntimeError("ui gone")
+
+        listener._on_wake = _boom
+        listener._on_report(self._event(0x01, 0x01))   # must not raise
+
+    def test_listener_accepts_on_wake_kwarg(self):
+        seen = []
+        listener = HidGestureListener(on_wake=lambda: seen.append(True))
+        listener._notify_wake()
+        self.assertEqual(seen, [True])
+
+    def test_feature_id_constant(self):
+        self.assertEqual(FEAT_WIRELESS_DEVICE_STATUS, 0x1D4B)
+
+
+class EngineWakeReplayTests(_EngineNativeInvertMixin, unittest.TestCase):
+    def test_wake_replays_invert_despite_unchanged_state(self):
+        engine = self._make_engine(invert_h=True)
+        engine._apply_wheel_invert_setting()
+        hg = engine.hook._hid_gesture
+        self.assertEqual(hg.requests, [(False, True)])
+        hg.requests.clear()
+
+        # The mouse slept and came back: everything Mouser tracks is
+        # unchanged, only the firmware forgot. The plain apply must no-op
+        # (that is the bug) and the wake path must write anyway.
+        engine._apply_wheel_invert_setting()
+        self.assertEqual(hg.requests, [])
+
+        engine._on_device_wake()
+        _join_wheel_invert_workers()
+        self.assertEqual(hg.requests, [(False, True)])
+
+    def test_hook_wake_callback_is_wired_to_engine(self):
+        engine = self._make_engine(invert_h=True)
+        self.assertEqual(engine.hook.device_wake_cb, engine._on_device_wake)
+
+    def test_apply_failure_does_not_wedge_later_wakes(self):
+        # The in-flight flag guards a shared worker. If a raising apply left
+        # it set, every later wake AND every reconnect replay would be
+        # dropped silently for the life of the process.
+        engine = self._make_engine(invert_h=True)
+        hg = engine.hook._hid_gesture
+        boom = [True]
+
+        original = engine._apply_wheel_invert_setting
+
+        def _maybe_raise(*, force=False):
+            if boom[0]:
+                boom[0] = False
+                raise RuntimeError("device vanished mid-apply")
+            return original(force=force)
+
+        engine._apply_wheel_invert_setting = _maybe_raise
+        engine._on_device_wake()
+        _join_wheel_invert_workers()
+        self.assertFalse(engine._wheel_invert_apply_inflight)
+
+        engine._on_device_wake()
+        _join_wheel_invert_workers()
+        self.assertEqual(hg.requests, [(False, True)])
+
+    @staticmethod
+    def _thread_that_cannot_start():
+        def _factory(*args, **kwargs):
+            thread = MagicMock()
+            thread.start.side_effect = RuntimeError("can't start new thread")
+            return thread
+
+        return _factory
+
+    def test_worker_that_fails_to_start_does_not_wedge(self):
+        engine = self._make_engine(invert_h=True)
+        hg = engine.hook._hid_gesture
+        with patch(
+            "core.engine.threading.Thread",
+            side_effect=self._thread_that_cannot_start(),
+        ):
+            engine._on_device_wake()
+        self.assertFalse(engine._wheel_invert_apply_inflight)
+
+        engine._on_device_wake()
+        _join_wheel_invert_workers()
+        self.assertEqual(hg.requests, [(False, True)])
+
+    def test_failed_start_keeps_a_request_coalesced_by_another_caller(self):
+        # A caller that coalesced into a worker was told its wake would run.
+        # If that worker then fails to start, clearing _pending would eat the
+        # wake -- the precise loss this whole path exists to prevent.
+        engine = self._make_engine(invert_h=True)
+        hg = engine.hook._hid_gesture
+        with patch(
+            "core.engine.threading.Thread",
+            side_effect=self._thread_that_cannot_start(),
+        ):
+            engine._on_device_wake()          # claims the slot, start() fails
+            # Second caller lands while the claim is still held. Simulated by
+            # re-claiming, since the real race window is a few instructions.
+            with engine._wheel_invert_apply_lock:
+                engine._wheel_invert_apply_inflight = True
+            engine._on_device_wake()          # coalesces into the dead worker
+            engine._release_wheel_invert_apply_slot()
+
+        self.assertTrue(engine._wheel_invert_apply_pending)
+        self.assertFalse(engine._wheel_invert_apply_inflight)
+
+        # The next scheduler call must service the preserved request.
+        engine._on_device_wake()
+        _join_wheel_invert_workers()
+        self.assertEqual(hg.requests, [(False, True), (False, True)])
+        self.assertFalse(engine._wheel_invert_apply_pending)
+
+    def test_wake_during_inflight_apply_is_coalesced_not_dropped(self):
+        # A wake means the firmware forgot its state. If one arrives while an
+        # apply is in flight, the in-flight write may already have landed
+        # before the device power-cycled again -- so it must re-run, not be
+        # discarded.
+        engine = self._make_engine(invert_h=True)
+        hg = engine.hook._hid_gesture
+        entered = threading.Event()
+        release = threading.Event()
+        original = hg.request_wheel_native_invert
+
+        def _slow(invert_v, invert_h, timeout_s=3.0):
+            entered.set()
+            release.wait(5)
+            return original(invert_v, invert_h, timeout_s)
+
+        hg.request_wheel_native_invert = _slow
+        try:
+            engine._on_device_wake()
+            self.assertTrue(entered.wait(5))
+            engine._on_device_wake()          # lands mid-flight
+            self.assertTrue(engine._wheel_invert_apply_pending)
+        finally:
+            release.set()
+        _join_wheel_invert_workers()
+        self.assertEqual(hg.requests, [(False, True), (False, True)])
+        self.assertFalse(engine._wheel_invert_apply_inflight)
+        self.assertFalse(engine._wheel_invert_apply_pending)
+
+    def test_burst_of_wakes_collapses_to_one_rerun(self):
+        # Five wakes during one in-flight apply must not spawn five workers
+        # that each sit on _wheel_divert_call_lock for the full timeout --
+        # but they must not vanish either. They collapse to a single re-run.
+        engine = self._make_engine(invert_h=True)
+        hg = engine.hook._hid_gesture
+        release = threading.Event()
+        entered = threading.Event()
+        original = hg.request_wheel_native_invert
+        workers = []
+
+        def _slow(invert_v, invert_h, timeout_s=3.0):
+            entered.set()
+            release.wait(5)
+            return original(invert_v, invert_h, timeout_s)
+
+        hg.request_wheel_native_invert = _slow
+        real_thread = threading.Thread
+
+        def _tracking_thread(*args, **kwargs):
+            t = real_thread(*args, **kwargs)
+            if kwargs.get("name") == "WheelInvertApply":
+                workers.append(t)
+            return t
+
+        with patch("core.engine.threading.Thread", side_effect=_tracking_thread):
+            try:
+                engine._on_device_wake()
+                self.assertTrue(entered.wait(5))
+                for _ in range(5):
+                    engine._on_device_wake()
+            finally:
+                release.set()
+            _join_wheel_invert_workers()
+
+        self.assertEqual(len(workers), 1)                      # no stacking
+        self.assertEqual(hg.requests, [(False, True)] * 2)     # no lost wake
+        self.assertFalse(engine._wheel_invert_apply_inflight)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
