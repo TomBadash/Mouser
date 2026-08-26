@@ -289,6 +289,167 @@ Item {
                             }
                         }
                     }
+
+                    Rectangle {
+                        width: parent.width
+                        height: hostModeRow.implicitHeight + 20
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.osLevelConnect || backend.preferHostModeForDpi
+
+                        RowLayout {
+                            id: hostModeRow
+                            anchors {
+                                fill: parent
+                                leftMargin: 14
+                                rightMargin: 14
+                                topMargin: 10
+                                bottomMargin: 10
+                            }
+                            spacing: 12
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: s["scroll.host_mode_dpi"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: s["scroll.host_mode_dpi_desc"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            Switch {
+                                checked: backend.preferHostModeForDpi
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.host_mode_dpi"]
+                                onToggled: backend.setPreferHostModeForDpi(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: reportRateRow.implicitHeight + 20
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.reportRateSupported
+
+                        RowLayout {
+                            id: reportRateRow
+                            anchors {
+                                fill: parent
+                                leftMargin: 14
+                                rightMargin: 14
+                                topMargin: 10
+                                bottomMargin: 10
+                            }
+                            spacing: 12
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: s["scroll.report_rate"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: backend.preferHostModeForDpi
+                                          ? s["scroll.report_rate_desc"]
+                                          : s["scroll.report_rate_need_host"]
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            ComboBox {
+                                model: backend.reportRateChoices
+                                enabled: backend.preferHostModeForDpi
+                                currentIndex: {
+                                    var hz = backend.reportRateHz
+                                    var i = model.indexOf(hz)
+                                    return i >= 0 ? i : 0
+                                }
+                                onActivated: backend.setReportRateHz(model[index])
+                                Layout.preferredWidth: 110
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: onboardDpiCol.implicitHeight + 20
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+                        visible: backend.onboardDpiVisible
+
+                        Column {
+                            id: onboardDpiCol
+                            anchors {
+                                left: parent.left
+                                right: parent.right
+                                top: parent.top
+                                margins: 14
+                            }
+                            spacing: 4
+
+                            Text {
+                                text: s["scroll.onboard_dpi"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: scrollPage.theme.textPrimary
+                            }
+
+                            Text {
+                                width: parent.width
+                                text: backend.onboardDpiSummary
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 12
+                                }
+                                color: scrollPage.theme.textSecondary
+                                wrapMode: Text.WordWrap
+                            }
+
+                            Text {
+                                width: parent.width
+                                text: s["scroll.onboard_dpi_hint"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 11
+                                }
+                                color: scrollPage.theme.textSecondary
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
                 }
             }
 

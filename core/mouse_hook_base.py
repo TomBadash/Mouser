@@ -481,6 +481,8 @@ class BaseMouseHook:
             on_thumb_button_up=self._on_hid_thumb_button_up,
             on_thumb_button_move=self._on_hid_thumb_button_move,
             on_battery=self._on_hid_battery,
+            on_status=self._emit_status,
+            on_spy_button=self._on_hid_spy_button,
         )
         self._hid_gesture = listener
         if not listener.start():
@@ -610,6 +612,33 @@ class BaseMouseHook:
 
     def _on_hid_dpi_switch_up(self):
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
+    def _on_hid_spy_button(self, button_key, is_down):
+        """G502 MouseButtonSpy → same event types as diverted CIDs."""
+        if button_key == "dpi_switch":
+            if is_down:
+                self._on_hid_dpi_switch_down()
+            else:
+                self._on_hid_dpi_switch_up()
+            return
+        if button_key == "dpi_up":
+            event = (
+                MouseEvent.DPI_UP_DOWN if is_down else MouseEvent.DPI_UP_UP
+            )
+            self._dispatch(MouseEvent(event))
+            return
+        if button_key == "dpi_down":
+            event = (
+                MouseEvent.DPI_DOWN_DOWN if is_down else MouseEvent.DPI_DOWN_UP
+            )
+            self._dispatch(MouseEvent(event))
+            return
+        if button_key == "sniper":
+            event = (
+                MouseEvent.SNIPER_DOWN if is_down else MouseEvent.SNIPER_UP
+            )
+            self._dispatch(MouseEvent(event))
+            return
 
     def _on_hid_thumb_button_down(self):
         # The MX Master 4's small thumb-area button (CID 0x00C3) is the

@@ -152,6 +152,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 | MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive per-model layouts |
 | MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive per-model layouts |
 | MX Vertical | Yes | Generic fallback card (with DPI switch button support) |
+| G502 / G502 X / LIGHTSPEED | Yes (OS-level; no REPROG_V4 divert) | Placeholder `g502` layout |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
 > MX Master and MX Anywhere devices have dedicated visual overlays. Other devices are still detected, show their model name, and can opt into an experimental layout override — button positions just may not line up until a real overlay lands. See [CONTRIBUTING_DEVICES.md](CONTRIBUTING_DEVICES.md) to add yours.
@@ -312,6 +313,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 
 ## Limitations
 
+- **G502 family is OS-level only** — these mice have no `REPROG_CONTROLS_V4`, so Mouser connects without HID++ button divert. Remap middle / back / forward / wheel tilt; when MouseButtonSpy (`0x8110`) is present, sniper and the DPI button are remappable too. Onboard profile flash editing is out of scope.
 - **Per-device mappings aren't fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global.
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access. Quit Options+ before running Mouser.
 - **Scroll inversion** uses coalesced post-injection on Windows to avoid LL-hook deadlocks; it's stable in mainstream apps but may misbehave in some games or low-level drivers.

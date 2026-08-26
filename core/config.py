@@ -43,6 +43,9 @@ BUTTON_NAMES = {
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
     "dpi_switch":    "DPI switch button",
+    "dpi_up":        "DPI up button",
+    "dpi_down":      "DPI down button",
+    "sniper":        "Sniper button",
     "actions_ring":  "Actions Ring",
     "thumb_button":  "Thumb button",
 }
@@ -192,6 +195,9 @@ BUTTON_TO_EVENTS = {
     "hscroll_right":      ("hscroll_right",),
     "mode_shift":         ("mode_shift_down", "mode_shift_up"),
     "dpi_switch":         ("dpi_switch_down", "dpi_switch_up"),
+    "dpi_up":             ("dpi_up_down", "dpi_up_up"),
+    "dpi_down":           ("dpi_down_down", "dpi_down_up"),
+    "sniper":             ("sniper_down", "sniper_up"),
     # Sense Panel ("Actions Ring", MX Master 4)
     "actions_ring":       ("sense_click",),
     "actions_ring_left":  ("sense_swipe_left",),
@@ -270,6 +276,9 @@ DEFAULT_CONFIG = {
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
+        # G502: optional ONBOARD_PROFILES Host mode for DPI persistence.
+        # Default off — Host has reset LEDs / link on some gaming paths.
+        "prefer_host_mode_for_dpi": False,
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,

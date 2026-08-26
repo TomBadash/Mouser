@@ -83,4 +83,5 @@ echo Finished: %END_TIME%
 echo.
 echo To distribute: zip the  dist\Mouser  folder.
 echo.
+if /i "%MOUSER_BUILD_NOPAUSE%"=="1" goto :eof
 pause

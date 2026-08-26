@@ -1,0 +1,4 @@
+G502 family layout photo - contributor-supplied, 2026
+
+Canonical asset: mouse.png (600x514).
+Hotspot norms are calibrated to this file's pixel grid.

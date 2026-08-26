@@ -332,6 +332,828 @@ class HidDiscoveryDiagnosticsTests(unittest.TestCase):
         )
         fake_dev.close.assert_called_once_with()
 
+    def test_try_connect_accepts_g502_x_without_reprog_v4(self):
+        """G502 family has no REPROG_V4; OS-level connect must still succeed."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC098,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "-",
+            "source": "hidapi-enumerate",
+            "product_string": "G502 X LIGHTSPEED",
+            "path": b"/dev/hidraw-g502x",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            # No REPROG_V4. Optional DPI still advertised on G502.
+            if feature_id == hid_gesture.FEAT_ADJ_DPI:
+                return 0x0A
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_divert") as divert_mock,
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print") as print_mock,
+        ):
+            self.assertTrue(listener._try_connect())
+
+        divert_mock.assert_not_called()
+        fake_dev.close.assert_not_called()
+        self.assertIsNotNone(listener.connected_device)
+        self.assertEqual(listener.connected_device.key, "g502_x")
+        self.assertEqual(listener.connected_device.display_name, "G502 X")
+        self.assertIn("middle", listener.connected_device.supported_buttons)
+        self.assertEqual(listener._dpi_idx, 0x0A)
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(
+            any(
+                "OS-level connect without REPROG_V4" in message
+                for message in messages
+            )
+        )
+
+    def test_try_connect_g502_adds_spy_buttons_when_present(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC098,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "-",
+            "source": "hidapi-enumerate",
+            "product_string": "G502 X LIGHTSPEED",
+            "path": b"/dev/hidraw-g502x",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_ADJ_DPI:
+                return 0x0A
+            if feature_id == hid_gesture.FEAT_MOUSE_BUTTON_SPY:
+                return 0x0C
+            if feature_id == hid_gesture.FEAT_ONBOARD_PROFILES:
+                return 0x09
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            if feat == 0x0C and func == 0:
+                return (0x11, 0x0C, 0x0, 0xA, [0x0B])
+            if feat == 0x0C and func == 3:
+                return (0x11, 0x0C, 0x3, 0xA, list(range(1, 17)))
+            if feat == 0x0C and func in (1, 2, 4):
+                return (0x11, 0x0C, func, 0xA, [0x00])
+            if feat == 0x09 and func == 2:
+                return (0x11, 0x09, 0x2, 0xA, [hid_gesture.ONBOARD_MODE_ONBOARD])
+            if feat == 0x09 and func == 0:
+                return (
+                    0x11,
+                    0x09,
+                    0x0,
+                    0xA,
+                    [0x01, 0x02, 0x00, 0x05, 0x00, 0x0B, 0x05, 0x00, 0x10, 0x00],
+                )
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch.object(listener, "_divert"),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        buttons = listener.connected_device.supported_buttons
+        self.assertIn("sniper", buttons)
+        self.assertIn("dpi_switch", buttons)
+        self.assertIn("dpi_up", buttons)
+        self.assertIn("dpi_down", buttons)
+        self.assertIn("middle", buttons)
+        dump = listener.dump_device_info()
+        self.assertTrue(dump["mouse_button_spy"]["supported"])
+        self.assertEqual(dump["mouse_button_spy"]["button_count"], 11)
+        self.assertFalse(dump["onboard_profiles"]["writes_enabled"])
+
+    def test_apply_pending_dpi_rediscovers_feature_index(self):
+        """G502 OS-level connect may miss DPI; set_dpi must rediscover it."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._dpi_idx = None
+        listener._onboard_profiles_idx = None
+        listener._connected_device_info = hid_gesture.build_connected_device_info(
+            product_id=0xC098,
+            product_name="G502 X LIGHTSPEED",
+        )
+        listener._pending_dpi = 1600
+        listener._feat_idx = None
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_ADJ_DPI:
+                return 0x07
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            if feat == 0x07 and func == 3:
+                return (0x11, 0x07, 0x3, 0xA, [0x00, 0x06, 0x40])
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            listener._apply_pending_dpi()
+
+        self.assertEqual(listener._dpi_idx, 0x07)
+        self.assertTrue(listener._dpi_result)
+
+    def test_apply_pending_dpi_is_set_sensor_dpi_only(self):
+        """DPI write must not touch onboard Host mode (resets LEDs / link)."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._dpi_idx = 0x07
+        listener._onboard_profiles_idx = 0x09
+        listener._feat_idx = None
+        listener._connected_device_info = hid_gesture.build_connected_device_info(
+            product_id=0xC098,
+            product_name="G502 X LIGHTSPEED",
+        )
+        listener._pending_dpi = 2400
+        calls = []
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params)))
+            if feat == 0x07 and func == 3:
+                return (0x11, 0x07, 0x3, 0xA, [0x00, 0x09, 0x60])
+            return None
+
+        with (
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            listener._apply_pending_dpi()
+
+        self.assertTrue(listener._dpi_result)
+        self.assertEqual(calls, [(0x07, 3, [0x00, 0x09, 0x60])])
+
+    def test_spy_notification_emits_sniper_and_dpi_switch(self):
+        """G502 X Lightspeed: sniper=4, dpi_switch=8, dpi_down=9, dpi_up=10."""
+        events = []
+        listener = hid_gesture.HidGestureListener(
+            on_spy_button=lambda key, down: events.append((key, down))
+        )
+        listener._mouse_button_spy_idx = 0x0C
+        listener._feat_idx = None
+
+        # Bits 4+8+9+10: 0x0010|0x0100|0x0200|0x0400 = 0x0710
+        listener._handle_spy_notification([0x07, 0x10])
+        listener._handle_spy_notification([0x00, 0x00])
+
+        self.assertEqual(
+            events,
+            [
+                ("sniper", True),
+                ("dpi_switch", True),
+                ("dpi_down", True),
+                ("dpi_up", True),
+                ("sniper", False),
+                ("dpi_switch", False),
+                ("dpi_down", False),
+                ("dpi_up", False),
+            ],
+        )
+
+    def test_reapply_spy_after_receiver_link(self):
+        """0x41 link-up rewrites patched remapping + Start (nibble)."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._mouse_button_spy_idx = 0x0C
+        listener._spy_started = True
+        listener._spy_remap_original = [i + 1 for i in range(16)]
+        listener._spy_remap_patched = list(listener._spy_remap_original)
+        listener._spy_remap_patched[4] = 0
+        listener._spy_remap_patched[8] = 0
+        calls = []
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params)))
+            return (0x11, feat, func, 0xA, [0x00])
+
+        with (
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            # Receiver link notification: feat=0x41, params[0] bit6 clear = up.
+            raw = bytes([0x10, 0x01, 0x41, 0x00, 0x00] + [0x00] * 2)
+            listener._on_report(raw)
+            self.assertTrue(listener._pending_spy_reapply)
+            listener._apply_pending_spy_reapply()
+
+        set_calls = [c for c in calls if c[0] == 0x0C and c[1] == 4]
+        start_calls = [c for c in calls if c[0] == 0x0C and c[1] == 1]
+        self.assertEqual(len(set_calls), 1)
+        self.assertEqual(set_calls[0][2][4], 0)
+        self.assertEqual(set_calls[0][2][8], 0)
+        self.assertEqual(set_calls[0][2][0], 1)
+        self.assertEqual(len(start_calls), 1)
+        # Must not replace original with the already-patched device table.
+        self.assertEqual(listener._spy_remap_original[4], 5)
+        self.assertFalse(listener._pending_spy_reapply)
+
+    def test_on_report_routes_spy_without_reprog(self):
+        events = []
+        listener = hid_gesture.HidGestureListener(
+            on_spy_button=lambda key, down: events.append((key, down))
+        )
+        listener._mouse_button_spy_idx = 0x0C
+        listener._feat_idx = None
+        listener._battery_idx = None
+
+        # Long report: params 0x01 0x10 = dpi bit8 + sniper bit4
+        # (measured on G502 X Lightspeed guided spy).
+        raw = bytes([0x11, 0xFF, 0x0C, 0x00, 0x01, 0x10] + [0x00] * 14)
+        with patch("builtins.print"):
+            listener._on_report(raw)
+
+        self.assertIn(("sniper", True), events)
+        self.assertIn(("dpi_switch", True), events)
+
+    def test_probe_mouse_button_spy_read_only(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_MOUSE_BUTTON_SPY:
+                return 0x0C
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            if feat == 0x0C and func == 0:
+                return (0x11, 0x0C, 0x0, 0xA, [0x0B])
+            if feat == 0x0C and func == 3:
+                return (0x11, 0x0C, 0x3, 0xA, list(range(1, 17)))
+            if feat == 0x0C and func in (1, 2, 4):
+                return (0x11, 0x0C, func, 0xA, [0x00])
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(listener._probe_mouse_button_spy(), 0x0C)
+
+        self.assertEqual(listener._spy_button_count, 11)
+        self.assertTrue(listener.mouse_button_spy_supported)
+        self.assertTrue(listener._spy_started)
+
+    def test_probe_onboard_profiles_readonly_no_writes(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        calls = []
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_ONBOARD_PROFILES:
+                return 0x09
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params)))
+            if feat == 0x09 and func == 2:
+                return (0x11, 0x09, 0x2, 0xA, [hid_gesture.ONBOARD_MODE_ONBOARD])
+            if feat == 0x09 and func == 0:
+                return (
+                    0x11,
+                    0x09,
+                    0x0,
+                    0xA,
+                    [0x01, 0x02, 0x00, 0x05, 0x00, 0x0B, 0x05, 0x00, 0x10, 0x00],
+                )
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(listener._probe_onboard_profiles_readonly(), 0x09)
+
+        self.assertEqual(listener._onboard_mode, hid_gesture.ONBOARD_MODE_ONBOARD)
+        self.assertEqual(listener._onboard_desc["buttons"], 11)
+        # Only read fns 0 and 2 — never sector write 0x60/0x70/0x80.
+        self.assertEqual(sorted(func for _f, func, _p in calls), [0, 2])
+
+    def test_win_hidpp_group_key_strips_collection(self):
+        """Windows splits short/long HID++ into &col01 / &col02 paths."""
+        path = (
+            r"\\?\hid#vid_046d&pid_c547&mi_02&col01#"
+            r"{4d1e55b2-f16f-11cf-88cb-001111000030}"
+        )
+        key = hid_gesture._win_hidpp_group_key(path)
+        self.assertTrue(key.endswith("&mi_02"))
+        self.assertNotIn("&col", key)
+
+    def test_win_hidpp_siblings_same_receiver(self):
+        short = {
+            "product_id": 0xC547,
+            "usage_page": 0xFF00,
+            "usage": 1,
+            "path": b"\\\\?\\hid#vid_046d&pid_c547&mi_02&col01#a",
+        }
+        long = {
+            "product_id": 0xC547,
+            "usage_page": 0xFF00,
+            "usage": 2,
+            "path": b"\\\\?\\hid#vid_046d&pid_c547&mi_02&col02#b",
+        }
+        other = {
+            "product_id": 0xC547,
+            "usage_page": 0xFF00,
+            "usage": 1,
+            "path": b"\\\\?\\hid#vid_046d&pid_c547&mi_00&col01#c",
+        }
+        siblings = hid_gesture._win_hidpp_siblings(short, [short, long, other])
+        usages = sorted(int(i["usage"]) for i in siblings)
+        self.assertEqual(usages, [1, 2])
+
+    def test_candidate_priority_prefers_long_collection(self):
+        short = {
+            "product_id": 0xC547,
+            "usage_page": 0xFF00,
+            "usage": 1,
+            "product_string": "USB Receiver",
+        }
+        long = {
+            "product_id": 0xC547,
+            "usage_page": 0xFF00,
+            "usage": 2,
+            "product_string": "USB Receiver",
+        }
+        self.assertLess(
+            hid_gesture._candidate_probe_priority(long),
+            hid_gesture._candidate_probe_priority(short),
+        )
+
+    def test_win_hidpp_bundle_reads_secondary_collection(self):
+        """Spy bitmaps arrive on the long collection; short-only open misses them."""
+
+        class _QueuedDev:
+            def __init__(self, reports):
+                self._reports = list(reports)
+                self.closed = False
+
+            def write(self, data):
+                return len(data)
+
+            def read(self, size, timeout_ms=0):
+                if self._reports:
+                    return self._reports.pop(0)
+                time.sleep(min(0.02, max(timeout_ms, 1) / 1000.0))
+                return None
+
+            def set_nonblocking(self, enabled):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        # Long-collection Input: sniper bit 4 (0x0010)
+        long_report = [0x11, 0x01, 0x0C, 0x00, 0x00, 0x10] + [0] * 14
+        short_dev = _QueuedDev([])
+        long_dev = _QueuedDev([long_report])
+        bundle = hid_gesture._WinHidppBundle(
+            write_dev=long_dev,
+            read_devs=(short_dev, long_dev),
+        )
+        try:
+            raw = bundle.read(64, timeout_ms=500)
+        finally:
+            bundle.close()
+
+        self.assertIsNotNone(raw)
+        self.assertEqual(list(raw)[:6], long_report[:6])
+
+    def test_probe_mouse_button_spy_enables_notifications(self):
+        """Nibble protocol: fn3 get table, fn4 zero slots, fn1 Start."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        calls = []
+        original = [i + 1 for i in range(16)]
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_MOUSE_BUTTON_SPY:
+                return 0x0C
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params)))
+            if feat == 0x0C and func == 0:
+                return (0x11, 0x0C, 0x0, 0xA, [0x0B])
+            if feat == 0x0C and func == 3:
+                return (0x11, 0x0C, 0x3, 0xA, list(original))
+            if feat == 0x0C and func in (1, 2, 4):
+                return (0x11, 0x0C, func, 0xA, [0x00])
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(listener._probe_mouse_button_spy(), 0x0C)
+
+        self.assertTrue(listener._spy_started)
+        self.assertEqual(listener._spy_remap_original, original)
+        self.assertEqual(listener._spy_remap_patched[4], 0)
+        self.assertEqual(listener._spy_remap_patched[8], 0)
+        self.assertEqual(listener._spy_remap_patched[9], 0)
+        self.assertEqual(listener._spy_remap_patched[10], 0)
+        set_calls = [c for c in calls if c[0] == 0x0C and c[1] == 4]
+        self.assertEqual(len(set_calls), 1)
+        patched = set_calls[0][2]
+        self.assertEqual(patched[4], 0)  # sniper (G502 X bit 4)
+        self.assertEqual(patched[8], 0)  # dpi_switch
+        self.assertEqual(patched[9], 0)  # dpi_down
+        self.assertEqual(patched[10], 0)  # dpi_up
+        self.assertEqual(patched[0], 1)  # left untouched
+        self.assertEqual(patched[5], 6)  # forward slot not zeroed
+        self.assertTrue(any(c[1] == 1 and c[2] == [] for c in calls))
+
+    def test_report_rate_probe_lists_supported_hz(self):
+        """0x8060 fn0 bitfield → Hz list; fn1 current interval."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_REPORT_RATE:
+                return 0x0D
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            if feat == 0x0D and func == 0:
+                # bits 0,1,3,7 → 1/2/4/8 ms → 1000/500/250/125 Hz
+                return (0x11, 0x0D, 0x0, 0xA, [0x8B])
+            if feat == 0x0D and func == 1:
+                return (0x11, 0x0D, 0x1, 0xA, [0x01])  # 1 ms = 1000 Hz
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(listener._probe_report_rate(), 0x0D)
+
+        self.assertTrue(listener.report_rate_supported)
+        self.assertEqual(listener._report_rate_hz_list, [1000, 500, 250, 125])
+        self.assertEqual(listener._report_rate_hz, 1000)
+
+    def test_report_rate_set_requires_host_opt_in(self):
+        """Refuse 0x8060 writes unless Host opt-in is already enabled."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._report_rate_idx = 0x0D
+        listener._report_rate_hz_list = [1000, 500, 250, 125]
+        listener.set_prefer_host_mode(False)
+        calls = []
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params)))
+            return (0x11, feat, func, 0xA, [0x00])
+
+        with (
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            listener._pending_report_rate = 500
+            listener._apply_pending_report_rate()
+
+        self.assertFalse(listener._report_rate_result)
+        self.assertEqual(calls, [])
+
+        listener.set_prefer_host_mode(True)
+        listener._host_mode_applied = True
+        with (
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch.object(listener, "_apply_host_mode_once", return_value=True),
+            patch("builtins.print"),
+        ):
+            listener._pending_report_rate = 500
+            listener._apply_pending_report_rate()
+
+        self.assertTrue(listener._report_rate_result)
+        self.assertEqual(calls, [(0x0D, 2, [0x02])])  # 2 ms = 500 Hz
+        self.assertEqual(listener._report_rate_hz, 500)
+
+    def test_onboard_active_profile_dpi_readonly(self):
+        """Parse active profile DPI stages from memoryRead (Solaar layout)."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._onboard_profiles_idx = 0x09
+        listener._onboard_desc = {
+            "memory": 1,
+            "profile": 5,
+            "count": 5,
+            "buttons": 11,
+            "sectors": 16,
+            "size": 255,
+        }
+
+        # Sector bytes: rate=1ms, default=1, shift=0,
+        # DPI 800,1200,1600,2400,3200 little-endian.
+        sector = bytearray(16)
+        sector[0] = 0x01
+        sector[1] = 0x01
+        sector[2] = 0x00
+        for i, dpi in enumerate((800, 1200, 1600, 2400, 3200)):
+            sector[3 + i * 2] = dpi & 0xFF
+            sector[4 + i * 2] = (dpi >> 8) & 0xFF
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            if feat == 0x09 and func == 4:
+                # getCurrentProfile → sector 0x0001
+                return (0x11, 0x09, 0x4, 0xA, [0x00, 0x01])
+            if feat == 0x09 and func == 5:
+                return (0x11, 0x09, 0x5, 0xA, list(sector))
+            return None
+
+        with (
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            info = listener._read_active_profile_dpi(timeout_ms=400)
+
+        self.assertEqual(
+            info,
+            {
+                "sector": 1,
+                "report_rate_ms": 1,
+                "default_index": 1,
+                "shift_index": 0,
+                "resolutions": [800, 1200, 1600, 2400, 3200],
+            },
+        )
+        self.assertEqual(listener._onboard_active_dpi, info)
+
+    def test_host_mode_switch_once_when_prefer_enabled(self):
+        """Opt-in Host mode uses 0x8100 once; never via setSensorDpi."""
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener._dev_idx = 0x01
+        listener._feat_idx = None
+        listener._dpi_idx = 0x07
+        listener.set_prefer_host_mode(True)
+        calls = []
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            if feature_id == hid_gesture.FEAT_ONBOARD_PROFILES:
+                return 0x09
+            return None
+
+        def fake_request(feat, func, params, timeout_ms=2000, count_timeout=True):
+            calls.append((feat, func, list(params), count_timeout))
+            if feat == 0x09 and func == 2:
+                return (0x11, 0x09, 0x2, 0xA, [hid_gesture.ONBOARD_MODE_ONBOARD])
+            if feat == 0x09 and func == 1:
+                return (0x11, 0x09, 0x1, 0xA, [hid_gesture.ONBOARD_MODE_HOST])
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_request", side_effect=fake_request),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._apply_host_mode_once())
+            self.assertTrue(listener._apply_host_mode_once())
+
+        host_sets = [
+            c for c in calls
+            if c[0] == 0x09 and c[1] == 1
+        ]
+        self.assertEqual(len(host_sets), 1)
+        self.assertEqual(host_sets[0][2], [hid_gesture.ONBOARD_MODE_HOST])
+        self.assertFalse(host_sets[0][3])
+
+    def test_host_mode_skipped_when_prefer_disabled(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = _FakeHidDevice()
+        listener.set_prefer_host_mode(False)
+
+        with (
+            patch.object(listener, "_find_feature") as find_mock,
+            patch.object(listener, "_request") as request_mock,
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._apply_host_mode_once())
+
+        find_mock.assert_not_called()
+        request_mock.assert_not_called()
+
+    def test_vendor_hid_infos_skips_windows_vhf_wpid_stub(self):
+        """User dump: PID 0x4099 / HID VHF Driver / UP 0x59 is not HID++."""
+        infos = [
+            {
+                "product_id": 0x4099,
+                "usage_page": 0x0059,
+                "usage": 0x0001,
+                "transport": "-",
+                "product_string": "HID VHF Driver",
+                "path": (
+                    b"\\\\?\\HID#HID_DEVICE_SYSTEM_VHF#b&30aba98b&0&0000#"
+                    b"{4d1e55b2-f16f-11cf-88cb-001111000030}"
+                ),
+            },
+            {
+                "product_id": hid_gesture.LIGHTSPEED_RECEIVER_PID,
+                "usage_page": 0xFF00,
+                "usage": 0x0001,
+                "transport": "-",
+                "product_string": "LIGHTSPEED Receiver",
+                "path": b"\\\\?\\HID#VID_046D&PID_C547#...",
+            },
+        ]
+
+        with (
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(enumerate=lambda vid, pid: infos),
+                create=True,
+            ),
+            patch("builtins.print") as print_mock,
+        ):
+            found = hid_gesture.HidGestureListener._vendor_hid_infos()
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["product_id"], hid_gesture.LIGHTSPEED_RECEIVER_PID)
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(any("Skipping non-HID++ interface" in m for m in messages))
+
+    def test_try_connect_rejects_g502_without_adjustable_dpi(self):
+        """Catalog match alone must not claim connected with empty features."""
+        status_messages = []
+        listener = hid_gesture.HidGestureListener(on_status=status_messages.append)
+        info = {
+            "product_id": 0xC098,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "-",
+            "source": "hidapi-enumerate",
+            "product_string": "G502 X LIGHTSPEED",
+            "path": b"/dev/hidraw-g502x",
+        }
+        fake_dev = _FakeHidDevice()
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", return_value=None),
+            patch.object(listener, "_query_device_name", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print") as print_mock,
+        ):
+            self.assertFalse(listener._try_connect())
+
+        self.assertIsNone(listener.connected_device)
+        messages = self._printed_messages(print_mock)
+        self.assertTrue(
+            any("ADJUSTABLE_DPI not found" in message for message in messages)
+        )
+        # Phase A Q5: surface a clear UI status, not console-only.
+        self.assertTrue(
+            any("Lightspeed HID++" in message for message in status_messages),
+            status_messages,
+        )
+
+    def test_missing_hidpp_status_is_rate_limited(self):
+        """Reconnect loops must not spam the same missing-HID++ toast."""
+        status_messages = []
+        listener = hid_gesture.HidGestureListener(on_status=status_messages.append)
+        info = {
+            "product_id": 0xC098,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "-",
+            "source": "hidapi-enumerate",
+            "product_string": "G502 X LIGHTSPEED",
+            "path": b"/dev/hidraw-g502x",
+        }
+        fake_dev = _FakeHidDevice()
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", return_value=None),
+            patch.object(listener, "_query_device_name", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertFalse(listener._try_connect())
+            self.assertFalse(listener._try_connect())
+
+        self.assertEqual(
+            sum(1 for m in status_messages if "Lightspeed HID++" in m),
+            1,
+            status_messages,
+        )
+
+    def test_try_connect_g502_retries_dpi_after_short_probe_miss(self):
+        """Short connect probes often time out; final DPI pass must succeed."""
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC098,
+            "usage_page": 0xFF00,
+            "usage": 0x0001,
+            "transport": "-",
+            "source": "hidapi-enumerate",
+            "product_string": "G502 X LIGHTSPEED",
+            "path": b"/dev/hidraw-g502x",
+        }
+        fake_dev = _FakeHidDevice()
+        calls = []
+
+        def fake_find_feature(feature_id, timeout_ms=None):
+            calls.append((feature_id, timeout_ms))
+            if feature_id != hid_gesture.FEAT_ADJ_DPI:
+                return None
+            # Only the longer final probe finds DPI.
+            if timeout_ms is not None and timeout_ms >= 1500:
+                return 0x07
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_query_device_name", return_value=None),
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        self.assertEqual(listener._dpi_idx, 0x07)
+        self.assertTrue(
+            any(
+                feature_id == hid_gesture.FEAT_ADJ_DPI
+                and timeout_ms is not None
+                and timeout_ms >= 1500
+                for feature_id, timeout_ms in calls
+            )
+        )
+
     def test_try_connect_logs_linux_hid_path_access_before_open(self):
         listener, info = self._make_listener()
         fake_dev = _FakeHidDevice()

@@ -128,6 +128,10 @@ class LogiDeviceSpec:
     # Optional second thumb-area control to divert as a button-only extra
     # (no rawXY) alongside the active gesture CID.
     thumb_button_cid: int | None = None
+    # G-series gaming mice (e.g. G502) expose no REPROG_CONTROLS_V4. When
+    # True, HidGestureListener still marks the device connected so OS-level
+    # remapping and optional DPI work without HID++ button divert.
+    connect_without_reprog: bool = False
 
     def matches(self, product_id=None, product_name=None) -> bool:
         if product_id is not None and int(product_id) in self.product_ids:

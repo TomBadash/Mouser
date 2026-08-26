@@ -66,6 +66,12 @@ class MouseEvent:
     MODE_SHIFT_UP = "mode_shift_up"
     DPI_SWITCH_DOWN = "dpi_switch_down"
     DPI_SWITCH_UP = "dpi_switch_up"
+    DPI_UP_DOWN = "dpi_up_down"
+    DPI_UP_UP = "dpi_up_up"
+    DPI_DOWN_DOWN = "dpi_down_down"
+    DPI_DOWN_UP = "dpi_down_up"
+    SNIPER_DOWN = "sniper_down"
+    SNIPER_UP = "sniper_up"
 
     def __init__(self, event_type, raw_data=None):
         self.event_type = event_type

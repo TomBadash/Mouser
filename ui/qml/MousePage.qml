@@ -1016,7 +1016,11 @@ Item {
                     Item {
                         id: mouseImageArea
                         width: parent.width
-                        height: 420
+                        // Non-interactive layouts (G502) grow with the button
+                        // list so the share card below is never overlapped.
+                        height: backend.mouseConnected && !backend.hasInteractiveDeviceLayout
+                                ? Math.max(420, fallbackCard.height + 48)
+                                : Math.max(420, backend.deviceImageHeight + 24)
 
                         Rectangle {
                             anchors.fill: parent
@@ -1030,7 +1034,7 @@ Item {
                             width: backend.deviceImageWidth
                             height: backend.deviceImageHeight
                             anchors.centerIn: parent
-                            visible: backend.mouseConnected
+                            visible: backend.mouseConnected && backend.hasInteractiveDeviceLayout
                             smooth: true
                             mipmap: true
                             asynchronous: true
@@ -1161,8 +1165,9 @@ Item {
                         }
 
                         Rectangle {
+                            id: fallbackCard
                             visible: backend.mouseConnected && !backend.hasInteractiveDeviceLayout
-                            width: Math.min(420, parent.width - 48)
+                            width: Math.min(520, parent.width - 48)
                             height: fallbackCol.implicitHeight + 32
                             radius: 16
                             color: theme.bgCard
@@ -1170,11 +1175,15 @@ Item {
                             border.color: theme.border
                             anchors.centerIn: parent
 
+                            // Avoid anchors.fill on the Column — that fights
+                            // height: implicitHeight and collapses row spacing.
                             Column {
                                 id: fallbackCol
-                                anchors.fill: parent
-                                anchors.margins: 16
-                                spacing: 10
+                                width: parent.width - 32
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.top: parent.top
+                                anchors.topMargin: 16
+                                spacing: 12
 
                                 Text {
                                     text: s["mouse.interactive_layout_coming"]
@@ -1198,7 +1207,7 @@ Item {
                                     delegate: Rectangle {
                                         required property var modelData
                                         width: fallbackCol.width
-                                        height: 40
+                                        height: 44
                                         radius: 10
                                         color: selectedButton === modelData.key
                                                ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.12)
@@ -1210,13 +1219,13 @@ Item {
 
                                         Row {
                                             anchors.fill: parent
-                                            anchors.leftMargin: 12
-                                            anchors.rightMargin: 12
-                                            spacing: 8
+                                            anchors.leftMargin: 14
+                                            anchors.rightMargin: 14
+                                            spacing: 16
 
                                             Text {
                                                 text: lm.trButton(modelData.name)
-                                                width: parent.width * 0.45
+                                                width: Math.min(160, parent.width * 0.38)
                                                 anchors.verticalCenter: parent.verticalCenter
                                                 font { family: uiState.fontFamily; pixelSize: 13; bold: true }
                                                 color: selectedButton === modelData.key
@@ -1226,7 +1235,7 @@ Item {
 
                                             Text {
                                                 text: lm.trAction(modelData.actionLabel)
-                                                width: parent.width * 0.55 - 8
+                                                width: parent.width - x
                                                 anchors.verticalCenter: parent.verticalCenter
                                                 horizontalAlignment: Text.AlignRight
                                                 font { family: uiState.fontFamily; pixelSize: 12 }

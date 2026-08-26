@@ -254,6 +254,14 @@ def _log_once(key, message):
     print(message)
 
 
+# Shown in the UI toast when a G502-family mouse is seen only on a non-HID++
+# interface (e.g. Windows VHF stub) or ADJUSTABLE_DPI cannot be discovered.
+STATUS_NEED_LIGHTSPEED_HIDPP = (
+    "Need Lightspeed HID++ (046D:C547) with DPI — not a VHF stub"
+)
+_STATUS_NEED_HIDPP_COOLDOWN_S = 30.0
+
+
 def _device_path_display(path):
     if isinstance(path, memoryview):
         path = bytes(path)
@@ -834,6 +842,156 @@ def _summarize_hid_infos(infos, limit=8):
     return "; ".join(parts) if parts else "-"
 
 
+def _hid_path_text(info):
+    path = info.get("path")
+    if path is None:
+        return ""
+    if isinstance(path, bytes):
+        return path.decode("utf-8", errors="replace")
+    return str(path)
+
+
+def _is_windows_vhf_stub(info):
+    """Windows Virtual HID Framework stubs are not HID++ endpoints.
+
+    They often re-advertise a Lightspeed WPID (e.g. 0x4099) with product
+    string "HID VHF Driver" and usage page 0x0059. Opening them yields a
+    fake "connected" G502 with zero discovered features — DPI cannot work.
+    """
+    product = (info.get("product_string") or "").strip().lower()
+    if "vhf" in product:
+        return True
+    path = _hid_path_text(info).lower()
+    if "hid_device_system_vhf" in path or "#vhf" in path:
+        return True
+    return False
+
+
+def _allow_known_device_fallback(info):
+    """Fallback open only when vendor usage metadata is missing.
+
+    Concrete non-vendor pages (mouse/keyboard/VHF) are real HID collections
+    that do not speak HID++. WPIDs 0x4xxx belong behind a receiver PID.
+    """
+    if _is_windows_vhf_stub(info):
+        return False
+    usage_page = int(info.get("usage_page", 0) or 0)
+    if usage_page != 0:
+        return False
+    pid = int(info.get("product_id", 0) or 0)
+    # Wireless PIDs are not USB HID++ interfaces; use the receiver instead.
+    if 0x4000 <= pid <= 0x4FFF:
+        return False
+    product = info.get("product_string")
+    return resolve_device(product_id=pid, product_name=product) is not None
+
+
+def _candidate_probe_priority(info):
+    """Prefer vendor HID++ interfaces / receivers over WPID stubs."""
+    pid = int(info.get("product_id", 0) or 0)
+    usage_page = int(info.get("usage_page", 0) or 0)
+    usage = int(info.get("usage", 0) or 0)
+    vendor = 0 if usage_page >= 0xFF00 else 1
+    # Lightspeed 0xC547 / Bolt 0xC548 (constants defined below).
+    receiver = 0 if pid in (0xC547, 0xC548) else 1
+    wpid = 1 if 0x4000 <= pid <= 0x4FFF else 0
+    # Prefer long HID++ collection (usage 2 / report 0x11). On Windows the
+    # short and long collections are separate device paths; MouseButtonSpy
+    # bitmaps only arrive on the long Input pipe.
+    long_first = 0 if usage >= 2 else 1
+    return (vendor, receiver, wpid, long_first, pid)
+
+
+def _win_hidpp_group_key(path):
+    """Path prefix shared by short/long collections of one Windows HID iface."""
+    text = _device_path_display(path).lower()
+    idx = text.find("&col")
+    if idx < 0:
+        return text
+    return text[:idx]
+
+
+def _win_hidpp_siblings(primary, infos):
+    """Vendor HID++ collections that share the Windows interface group key."""
+    key = _win_hidpp_group_key(primary.get("path"))
+    if not key:
+        return []
+    out = []
+    for info in infos:
+        if _win_hidpp_group_key(info.get("path")) != key:
+            continue
+        if int(info.get("usage_page", 0) or 0) < 0xFF00:
+            continue
+        out.append(info)
+    return out
+
+
+class _WinHidppBundle:
+    """Read short+long Windows HID++ collections; write via the long pipe.
+
+    Windows exposes report IDs 0x10 and 0x11 as separate top-level collections
+    (distinct device paths). Opening only the short pipe lets feature probes
+    succeed while MouseButtonSpy long notifications never arrive.
+    """
+
+    def __init__(self, write_dev, read_devs):
+        self._write = write_dev
+        seen = set()
+        self._reads = []
+        for dev in read_devs:
+            if dev is None or id(dev) in seen:
+                continue
+            seen.add(id(dev))
+            self._reads.append(dev)
+        self._queue = queue.Queue()
+        self._stop = threading.Event()
+        self._threads = []
+        for dev in self._reads:
+            thread = threading.Thread(
+                target=self._pump,
+                args=(dev,),
+                daemon=True,
+            )
+            thread.start()
+            self._threads.append(thread)
+
+    def _pump(self, dev):
+        while not self._stop.is_set():
+            try:
+                data = dev.read(64, 200)
+            except Exception:
+                break
+            if not data:
+                continue
+            self._queue.put(list(data) if not isinstance(data, list) else data)
+
+    def write(self, data):
+        return self._write.write(data)
+
+    def read(self, size, timeout_ms=0):
+        try:
+            return self._queue.get(timeout=max(int(timeout_ms), 1) / 1000.0)
+        except queue.Empty:
+            return None
+
+    def set_nonblocking(self, enabled):
+        return None
+
+    def close(self):
+        self._stop.set()
+        closed = set()
+        for dev in list(self._reads) + [self._write]:
+            if dev is None or id(dev) in closed:
+                continue
+            closed.add(id(dev))
+            try:
+                dev.close()
+            except Exception:
+                pass
+        for thread in self._threads:
+            thread.join(timeout=1.0)
+
+
 def _linux_logitech_hidraw_nodes(base="/sys/class/hidraw"):
     if not sys.platform.startswith("linux"):
         return []
@@ -882,6 +1040,8 @@ BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
 # Known Logi Bolt receiver PID.
 # Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
 BOLT_RECEIVER_PID = 0xC548
+# G502 X / Lightspeed gaming receiver (USB dongle PID, not the mouse WPID).
+LIGHTSPEED_RECEIVER_PID = 0xC547
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
@@ -896,6 +1056,29 @@ FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 FEAT_HAPTIC         = 0x19B0      # Haptic Feedback (MX Master 4)
 FEAT_FORCE_SENSING  = 0x19C0      # Force Sensing Button (MX Master 4)
+FEAT_ONBOARD_PROFILES = 0x8100    # Onboard Profiles / Host vs Onboard mode
+FEAT_MOUSE_BUTTON_SPY = 0x8110    # Mouse Button Spy (G502 sniper / DPI±)
+FEAT_REPORT_RATE = 0x8060         # Adjustable report rate (ms interval)
+
+# ONBOARD_PROFILES mode bytes (Solaar OnboardMode). Host can make software
+# DPI stickier across wake, but has reset LEDs / link on some G502 paths.
+ONBOARD_MODE_ONBOARD = 0x01
+ONBOARD_MODE_HOST = 0x02
+
+# G502 X Lightspeed MouseButtonSpy bitmap → Mouser buttons.
+# Measured via tools/spy_guided.py (not HERO/nibble G6=bit5):
+#   bit0 L, bit1 R, bit2 M, bit3 back, bit4 sniper, bit5 forward,
+#   bit6 tilt L, bit7 tilt R, bit8 DPI-behind-wheel,
+#   bit9 DPI-down (G8 edge), bit10 DPI-up (G7 edge).
+# Protocol (nibble): fn3 getRemapping, fn4 setRemapping (0=divert),
+# fn1 Start, fn2 Stop — then unsolicited bitmaps arrive.
+G502_SPY_BIT_BUTTONS = (
+    (4, "sniper"),       # thumb DPI-shift / sniper (params 00 10)
+    (8, "dpi_switch"),   # DPI button behind the scroll wheel (params 01 00)
+    (9, "dpi_down"),     # edge DPI- (params 02 00)
+    (10, "dpi_up"),      # edge DPI+ (params 04 00)
+)
+G502_SPY_BUTTONS = tuple(button for _bit, button in G502_SPY_BIT_BUTTONS)
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
 # REPROG_V4 ``setCidReporting`` control flags (fn 3 byte 2). The
@@ -1036,7 +1219,8 @@ class HidGestureListener:
                  on_connect=None, on_disconnect=None, extra_diverts=None,
                  on_wheel=None, on_thumbwheel=None,
                  on_thumb_button_down=None, on_thumb_button_up=None,
-                 on_thumb_button_move=None, on_battery=None):
+                 on_thumb_button_move=None, on_battery=None, on_status=None,
+                 on_spy_button=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
@@ -1046,6 +1230,12 @@ class HidGestureListener:
         # unsolicited HID++ battery status broadcast (e.g. USB plugged in),
         # so the UI updates instantly instead of waiting for the next poll.
         self._on_battery    = on_battery
+        # UI status toast callback (optional). Used for user-facing connect
+        # diagnostics such as "need Lightspeed HID++, not VHF".
+        self._on_status     = on_status
+        self._user_status_until = {}
+        # G502 MouseButtonSpy: ``on_spy_button(button_key, is_down)``.
+        self._on_spy_button = on_spy_button
         # Accepted for divert+inject-era callers; native-invert never
         # sees wheelMovement / thumbwheelEvent notifications.
         self._on_wheel = on_wheel
@@ -1084,6 +1274,29 @@ class HidGestureListener:
         self._running   = False
         self._feat_idx  = None          # feature index of REPROG_V4
         self._dpi_idx   = None          # feature index of ADJUSTABLE_DPI
+        self._onboard_profiles_idx = None  # feature index of ONBOARD_PROFILES
+        self._mouse_button_spy_idx = None  # feature index of MOUSE_BUTTON_SPY
+        self._report_rate_idx = None       # feature index of REPORT_RATE
+        self._report_rate_hz = None
+        self._report_rate_hz_list = []
+        self._pending_report_rate = None
+        self._report_rate_result = None
+        self._report_rate_event = threading.Event()
+        self._spy_button_count = None
+        self._spy_bitmap = 0
+        self._spy_held = {button: False for _bit, button in G502_SPY_BIT_BUTTONS}
+        self._spy_remap_original = None  # fn3 table before we zero remapped bits
+        self._spy_remap_patched = None   # table we write (reapplied after wake)
+        self._spy_started = False
+        self._pending_spy_reapply = False
+        self._onboard_mode = None
+        self._onboard_desc = None
+        self._onboard_active_dpi = None
+        self._prefer_host_mode = False
+        self._host_mode_applied = False
+        self._pending_host_mode = False
+        self._host_mode_result = None
+        self._host_mode_event = threading.Event()
         self._battery_idx = None
         self._battery_feature_id = None
         self._dev_idx   = BT_DEV_IDX
@@ -1203,6 +1416,10 @@ class HidGestureListener:
             except Exception as exc:  # noqa: BLE001 - teardown must complete
                 print(f"[HidGesture] stop: horizontal invert revert failed: {exc}")
             self._wheel_divert_state = False
+        try:
+            self._disable_mouse_button_spy()
+        except Exception as exc:  # noqa: BLE001 - teardown must complete
+            print(f"[HidGesture] stop: MouseButtonSpy revert failed: {exc}")
         self._running = False
         d = self._dev
         if d:
@@ -1218,6 +1435,26 @@ class HidGestureListener:
     @property
     def connected_device(self):
         return self._connected_device_info
+
+    def _emit_user_status(self, message, *, key=None, cooldown_s=None):
+        """Toast-worthy status for the UI; rate-limited to avoid reconnect spam."""
+        if self._on_status is None or not message:
+            return
+        now = time.monotonic()
+        status_key = key or message
+        until = self._user_status_until.get(status_key, 0.0)
+        if now < until:
+            return
+        cool = (
+            _STATUS_NEED_HIDPP_COOLDOWN_S
+            if cooldown_s is None
+            else float(cooldown_s)
+        )
+        self._user_status_until[status_key] = now + cool
+        try:
+            self._on_status(message)
+        except Exception:
+            pass
 
     def _discovered_feature_ids(self):
         feature_ids = []
@@ -1242,6 +1479,21 @@ class HidGestureListener:
             features.append({"feature_id": FEAT_REPROG_V4, "index": self._feat_idx})
         if self._dpi_idx is not None:
             features.append({"feature_id": FEAT_ADJ_DPI, "index": self._dpi_idx})
+        if self._onboard_profiles_idx is not None:
+            features.append({
+                "feature_id": FEAT_ONBOARD_PROFILES,
+                "index": self._onboard_profiles_idx,
+            })
+        if self._mouse_button_spy_idx is not None:
+            features.append({
+                "feature_id": FEAT_MOUSE_BUTTON_SPY,
+                "index": self._mouse_button_spy_idx,
+            })
+        if self._report_rate_idx is not None:
+            features.append({
+                "feature_id": FEAT_REPORT_RATE,
+                "index": self._report_rate_idx,
+            })
         if self._smart_shift_idx is not None:
             features.append({
                 "feature_id": (
@@ -1288,6 +1540,26 @@ class HidGestureListener:
             features["HAPTIC (0x19B0)"] = f"index 0x{self._haptic_idx:02X}"
         if self._force_sensing_idx is not None:
             features["FORCE_SENSING (0x19C0)"] = f"index 0x{self._force_sensing_idx:02X}"
+        if self._onboard_profiles_idx is not None:
+            mode = self._onboard_mode
+            mode_name = {
+                ONBOARD_MODE_ONBOARD: "onboard",
+                ONBOARD_MODE_HOST: "host",
+            }.get(mode, f"0x{mode:02X}" if mode is not None else "?")
+            features["ONBOARD_PROFILES (0x8100)"] = (
+                f"index 0x{self._onboard_profiles_idx:02X} mode={mode_name}"
+            )
+        if self._mouse_button_spy_idx is not None:
+            features["MOUSE_BUTTON_SPY (0x8110)"] = (
+                f"index 0x{self._mouse_button_spy_idx:02X} "
+                f"buttons={self._spy_button_count if self._spy_button_count is not None else '?'}"
+            )
+        if self._report_rate_idx is not None:
+            features["REPORT_RATE (0x8060)"] = (
+                f"index 0x{self._report_rate_idx:02X} "
+                f"hz={self._report_rate_hz} "
+                f"supported={self._report_rate_hz_list}"
+            )
         for feature_id, index in sorted(self._wheel_feature_indexes.items()):
             features[f"WHEEL (0x{feature_id:04X})"] = f"index 0x{index:02X}"
         if self._hires_wheel_idx is not None:
@@ -1329,6 +1601,26 @@ class HidGestureListener:
             "reprog_controls": controls,
             "gesture_candidates": [f"0x{c:04X}" for c in self._gesture_candidates],
             "capability_inventory": dev.capability_inventory.to_dict(),
+            "mouse_button_spy": {
+                "supported": self._mouse_button_spy_idx is not None,
+                "button_count": self._spy_button_count,
+                "remappable": list(G502_SPY_BUTTONS)
+                if self._mouse_button_spy_idx is not None
+                else [],
+            },
+            "onboard_profiles": {
+                "supported": self._onboard_profiles_idx is not None,
+                "mode": self._onboard_mode,
+                "descriptors": self._onboard_desc,
+                "active_dpi": self._onboard_active_dpi,
+                "writes_enabled": False,
+            },
+            "report_rate": {
+                "supported": self._report_rate_idx is not None,
+                "hz": self._report_rate_hz,
+                "supported_hz": list(self._report_rate_hz_list),
+                "writes_need_host_opt_in": True,
+            },
         }
 
     # ── device discovery ──────────────────────────────────────────
@@ -1390,7 +1682,7 @@ class HidGestureListener:
                         add_info(dict(info, source="hidapi-enumerate"))
                         hidapi_candidates += 1
                         continue
-                    if resolve_device(product_id=pid, product_name=product):
+                    if _allow_known_device_fallback(info):
                         print(
                             "[HidGesture] Accepting known Logitech device "
                             "without vendor usage metadata for fallback probe "
@@ -1399,6 +1691,15 @@ class HidGestureListener:
                         )
                         add_info(dict(info, source="hidapi-enumerate-fallback"))
                         fallback_candidates += 1
+                    elif _is_windows_vhf_stub(info) or (
+                        0x4000 <= pid <= 0x4FFF and usage_page < 0xFF00
+                    ):
+                        print(
+                            "[HidGesture] Skipping non-HID++ interface "
+                            f"PID=0x{pid:04X} UP=0x{usage_page:04X} "
+                            f"product={product or '?'} "
+                            f"path={_hid_path_text(info) or '-'}"
+                        )
                 if raw_infos and not (hidapi_candidates or fallback_candidates):
                     print(
                         "[HidGesture] hidapi found Logitech interfaces, but none "
@@ -1421,6 +1722,60 @@ class HidGestureListener:
                 add_info(info)
 
         return out
+
+    @staticmethod
+    def _open_hidapi_path(path):
+        """Open one hidapi/hidraw path with the active HID backend."""
+        if _HID_API_STYLE == "hidapi":
+            d = _hid.device()
+            d.open_path(path)
+            return d
+        return _HidDeviceCompat(path)
+
+    def _wrap_win_hidpp_bundle(self, primary_dev, primary_info, all_infos):
+        """Open sibling short/long collections and multiplex reads on Windows."""
+        siblings = _win_hidpp_siblings(primary_info, all_infos)
+        if len(siblings) <= 1:
+            return primary_dev
+
+        opened = {
+            _device_path_display(primary_info.get("path")): (
+                primary_dev,
+                primary_info,
+            )
+        }
+        for info in siblings:
+            path_text = _device_path_display(info.get("path"))
+            if not path_text or path_text in opened:
+                continue
+            try:
+                sibling = self._open_hidapi_path(info.get("path"))
+                sibling.set_nonblocking(False)
+                opened[path_text] = (sibling, info)
+                print(
+                    "[HidGesture] Opened sibling HID++ collection "
+                    f"usage=0x{int(info.get('usage', 0) or 0):04X}"
+                )
+            except Exception as exc:
+                print(f"[HidGesture] Sibling HID++ open failed: {exc}")
+
+        if len(opened) <= 1:
+            return primary_dev
+
+        write_dev = primary_dev
+        write_usage = int(primary_info.get("usage", 0) or 0)
+        for dev, info in opened.values():
+            usage = int(info.get("usage", 0) or 0)
+            if usage >= 2 and (write_usage < 2 or usage > write_usage):
+                write_dev = dev
+                write_usage = usage
+
+        read_devs = tuple(dev for dev, _info in opened.values())
+        print(
+            f"[HidGesture] Windows HID++ bundle: {len(read_devs)} collections, "
+            f"write_usage=0x{write_usage:04X}"
+        )
+        return _WinHidppBundle(write_dev=write_dev, read_devs=read_devs)
 
     # ── low-level HID++ I/O ───────────────────────────────────────
 
@@ -1448,8 +1803,13 @@ class HidGestureListener:
         d = dev.read(64, timeout_ms)
         return list(d) if d else None
 
-    def _request(self, feat, func, params, timeout_ms=2000):
-        """Send a long HID++ request, wait for matching response."""
+    def _request(self, feat, func, params, timeout_ms=2000, *, count_timeout=True):
+        """Send a long HID++ request, wait for matching response.
+
+        ``count_timeout=False`` keeps optional probes (e.g. onboard Host
+        mode) from tripping the consecutive-timeout reconnect path that
+        marks the mouse disconnected in the UI.
+        """
         req_params = list(params)
         try:
             self._tx(LONG_ID, feat, func, req_params)
@@ -1496,10 +1856,12 @@ class HidGestureListener:
             # Forward non-matching reports (e.g. diverted button events) so
             # button held-state tracking stays in sync during command exchanges.
             self._on_report(raw)
-        self._consecutive_request_timeouts += 1
+        if count_timeout:
+            self._consecutive_request_timeouts += 1
         print(f"[HidGesture] request timeout feat=0x{feat:02X} func=0x{func:X} "
               f"devIdx=0x{self._dev_idx:02X} params=[{_hex_bytes(req_params)}] "
-              f"(consecutive={self._consecutive_request_timeouts})")
+              f"(consecutive={self._consecutive_request_timeouts}"
+              f"{'' if count_timeout else ', uncounted'})")
         return None
 
     # ── feature helpers ───────────────────────────────────────────
@@ -1892,6 +2254,63 @@ class HidGestureListener:
 
     # ── DPI control ───────────────────────────────────────────────
 
+    def _ensure_dpi_feature(self, timeout_ms=2000, idx_order=None):
+        """Resolve ADJUSTABLE_DPI, retrying device indexes when needed.
+
+        G502 OS-level connect often misses the feature on the tight 400 ms
+        probe. Re-query with a longer timeout before treating DPI as absent.
+        """
+        if self._dpi_idx is not None:
+            return self._dpi_idx
+        if self._dev is None:
+            return None
+
+        saved_idx = self._dev_idx
+        slots = []
+        seen = set()
+        for idx in (idx_order or ()):
+            if idx in seen:
+                continue
+            seen.add(idx)
+            slots.append(idx)
+        if saved_idx not in seen:
+            slots.insert(0, saved_idx)
+        if not slots:
+            slots = [saved_idx]
+
+        for idx in slots:
+            self._dev_idx = idx
+            fi = self._find_feature(FEAT_ADJ_DPI, timeout_ms=timeout_ms)
+            if fi is None:
+                continue
+            self._dpi_idx = fi
+            print(
+                f"[HidGesture] Found ADJUSTABLE_DPI @0x{fi:02X} "
+                f"(devIdx=0x{idx:02X})"
+            )
+            return fi
+
+        self._dev_idx = saved_idx
+        return None
+
+    def _read_sensor_dpi(self, *, count_timeout=True):
+        """getSensorDpi on the active ADJUSTABLE_DPI feature index."""
+        if self._dpi_idx is None or self._dev is None:
+            return None
+        resp = self._request(
+            self._dpi_idx, 2, [0x00], count_timeout=count_timeout
+        )
+        if not resp:
+            return None
+        _, _, _, _, p = resp
+        if not p or len(p) < 3:
+            return None
+        current = (p[1] << 8) | p[2]
+        # Spec: 0 means "use default DPI" carried in bytes 3-4.
+        if current == 0 and len(p) >= 5:
+            current = (p[3] << 8) | p[4]
+        return current
+
     def set_dpi(self, dpi_value):
         """Queue a DPI change -- will be applied on the listener thread.
         Can be called from any thread.  Returns True on success."""
@@ -1899,7 +2318,7 @@ class HidGestureListener:
         self._dpi_result = None
         self._dpi_event.clear()
         self._pending_dpi = dpi
-        if not self._dpi_event.wait(3.0):
+        if not self._dpi_event.wait(5.0):
             print("[HidGesture] DPI set timed out")
             self._pending_dpi = None
             return False
@@ -1910,25 +2329,30 @@ class HidGestureListener:
         dpi = self._pending_dpi
         if dpi is None:
             return
+        if self._dpi_idx is None:
+            self._ensure_dpi_feature(timeout_ms=2000)
         if self._dpi_idx is None or self._dev is None:
             print("[HidGesture] Cannot set DPI -- not connected")
             self._dpi_result = False
             self._pending_dpi = None
             self._dpi_event.set()
             return
+
         hi = (dpi >> 8) & 0xFF
         lo = dpi & 0xFF
         # setSensorDpi: function 3, params [sensorIdx=0, dpi_hi, dpi_lo]
-        # (function 2 = getSensorDpi, function 3 = setSensorDpi)
         resp = self._request(self._dpi_idx, 3, [0x00, hi, lo])
-        if resp:
-            _, _, _, _, p = resp
-            actual = (p[1] << 8 | p[2]) if len(p) >= 3 else dpi
-            print(f"[HidGesture] DPI set to {actual}")
-            self._dpi_result = True
-        else:
+        if not resp:
             print("[HidGesture] DPI set FAILED")
             self._dpi_result = False
+            self._pending_dpi = None
+            self._dpi_event.set()
+            return
+
+        _, _, _, _, p = resp
+        acked = (p[1] << 8 | p[2]) if len(p) >= 3 else dpi
+        print(f"[HidGesture] DPI set to {acked}")
+        self._dpi_result = True
         self._pending_dpi = None
         self._dpi_event.set()
 
@@ -1938,7 +2362,7 @@ class HidGestureListener:
         self._dpi_result = None
         self._dpi_event.clear()
         self._pending_dpi = "read"
-        if not self._dpi_event.wait(3.0):
+        if not self._dpi_event.wait(5.0):
             print("[HidGesture] DPI read timed out")
             self._pending_dpi = None
             return None
@@ -1946,21 +2370,19 @@ class HidGestureListener:
 
     def _apply_pending_read_dpi(self):
         """Called from the listener thread to read current DPI."""
+        if self._dpi_idx is None:
+            self._ensure_dpi_feature(timeout_ms=2000)
         if self._dpi_idx is None or self._dev is None:
             self._dpi_result = None
             self._pending_dpi = None
             self._dpi_event.set()
             return
-        # getSensorDpi: function 2, params [sensorIdx=0]
-        resp = self._request(self._dpi_idx, 2, [0x00])
-        if resp:
-            _, _, _, _, p = resp
-            current = (p[1] << 8 | p[2]) if len(p) >= 3 else None
+        current = self._read_sensor_dpi()
+        if current is not None:
             print(f"[HidGesture] Current DPI = {current}")
-            self._dpi_result = current
         else:
             print("[HidGesture] DPI read FAILED")
-            self._dpi_result = None
+        self._dpi_result = current
         self._pending_dpi = None
         self._dpi_event.set()
 
@@ -1977,6 +2399,438 @@ class HidGestureListener:
     @property
     def smart_shift_supported(self):
         return self._smart_shift_idx is not None
+
+    @property
+    def dpi_supported(self):
+        """True when ADJUSTABLE_DPI (0x2201) was resolved on this connection."""
+        return self._dpi_idx is not None
+
+    @property
+    def report_rate_supported(self):
+        return self._report_rate_idx is not None
+
+    @staticmethod
+    def _report_hz_from_ms(ms):
+        if ms is None or int(ms) <= 0:
+            return None
+        return 1000 // int(ms)
+
+    @staticmethod
+    def _report_ms_from_hz(hz):
+        if hz is None or int(hz) <= 0:
+            return None
+        return max(1, min(8, 1000 // int(hz)))
+
+    def _probe_report_rate(self, timeout_ms=800):
+        """Discover 0x8060, list supported Hz, read current rate."""
+        if self._report_rate_idx is not None:
+            return self._report_rate_idx
+        fi = self._find_feature(FEAT_REPORT_RATE, timeout_ms=timeout_ms)
+        if fi is None:
+            return None
+        self._report_rate_idx = fi
+
+        # fn0 = supported intervals bitfield (bit n = n+1 ms).
+        supp = self._request(
+            fi, 0, [], timeout_ms=timeout_ms, count_timeout=False
+        )
+        hz_list = []
+        if supp and supp[4]:
+            bits = int(supp[4][0])
+            for bit in range(8):
+                if bits & (1 << bit):
+                    hz_list.append(1000 // (bit + 1))
+        self._report_rate_hz_list = hz_list
+
+        cur = self._request(
+            fi, 1, [], timeout_ms=timeout_ms, count_timeout=False
+        )
+        if cur and cur[4]:
+            self._report_rate_hz = self._report_hz_from_ms(cur[4][0])
+        print(
+            f"[HidGesture] REPORT_RATE @0x{fi:02X} "
+            f"hz={self._report_rate_hz} supported={hz_list}"
+        )
+        return fi
+
+    def set_report_rate(self, hz):
+        """Queue report-rate write (Host opt-in required). Any-thread safe."""
+        self._report_rate_result = None
+        self._report_rate_event.clear()
+        self._pending_report_rate = int(hz)
+        if not self._report_rate_event.wait(5.0):
+            print("[HidGesture] Report rate set timed out")
+            self._pending_report_rate = None
+            return False
+        return self._report_rate_result is True
+
+    def _apply_pending_report_rate(self):
+        """Listener-thread: set 0x8060 only when Host opt-in is on."""
+        hz = self._pending_report_rate
+        if hz is None:
+            return
+        if not self._prefer_host_mode:
+            print("[HidGesture] Report rate set blocked — Host opt-in off")
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            self._report_rate_event.set()
+            return
+        if self._report_rate_idx is None or self._dev is None:
+            print("[HidGesture] Cannot set report rate — not connected")
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            self._report_rate_event.set()
+            return
+        if not self._apply_host_mode_once():
+            print("[HidGesture] Report rate set FAILED — Host mode")
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            self._report_rate_event.set()
+            return
+
+        ms = self._report_ms_from_hz(hz)
+        if ms is None:
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            self._report_rate_event.set()
+            return
+        # fn2 setReportRate(interval_ms)
+        resp = self._request(
+            self._report_rate_idx,
+            2,
+            [ms],
+            timeout_ms=800,
+            count_timeout=False,
+        )
+        if not resp:
+            print("[HidGesture] Report rate set FAILED")
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            self._report_rate_event.set()
+            return
+        self._report_rate_hz = self._report_hz_from_ms(ms)
+        print(f"[HidGesture] Report rate set to {self._report_rate_hz} Hz")
+        self._report_rate_result = True
+        self._pending_report_rate = None
+        self._report_rate_event.set()
+
+    @property
+    def os_level_connect(self):
+        """True when connected without REPROG_V4 (e.g. G502 OS-level remap)."""
+        return (
+            self._connected_device_info is not None
+            and self._feat_idx is None
+        )
+
+    def set_prefer_host_mode(self, enabled):
+        """Opt-in Host mode for DPI persistence (G502). Default off."""
+        self._prefer_host_mode = bool(enabled)
+
+    def ensure_host_mode(self):
+        """Queue a one-shot Host switch when prefer is on. Any-thread safe."""
+        if not self._prefer_host_mode:
+            return True
+        if self._host_mode_applied:
+            return True
+        self._host_mode_result = None
+        self._host_mode_event.clear()
+        self._pending_host_mode = True
+        if not self._host_mode_event.wait(5.0):
+            print("[HidGesture] Host mode switch timed out")
+            self._pending_host_mode = False
+            return False
+        return self._host_mode_result is True
+
+    def _apply_host_mode_once(self):
+        """Listener-thread: switch ONBOARD_PROFILES to Host at most once."""
+        if not self._prefer_host_mode:
+            return True
+        if self._host_mode_applied:
+            return True
+        if self._dev is None:
+            return False
+
+        if self._onboard_profiles_idx is None:
+            fi = self._find_feature(
+                FEAT_ONBOARD_PROFILES, timeout_ms=800
+            )
+            if fi is None:
+                print("[HidGesture] ONBOARD_PROFILES not found — Host skipped")
+                self._host_mode_applied = True
+                return False
+            self._onboard_profiles_idx = fi
+
+        # getOnboardMode (fn 2) then setOnboardMode (fn 1) — count_timeout off
+        # so a missing/slow gaming feature does not trip reconnect.
+        current = self._request(
+            self._onboard_profiles_idx,
+            2,
+            [],
+            timeout_ms=800,
+            count_timeout=False,
+        )
+        if current and current[4] and current[4][0] == ONBOARD_MODE_HOST:
+            print("[HidGesture] Already in Host mode")
+            self._host_mode_applied = True
+            return True
+
+        resp = self._request(
+            self._onboard_profiles_idx,
+            1,
+            [ONBOARD_MODE_HOST],
+            timeout_ms=800,
+            count_timeout=False,
+        )
+        if not resp:
+            print("[HidGesture] Host mode set FAILED")
+            return False
+
+        print("[HidGesture] Switched to Host mode (DPI persistence opt-in)")
+        self._host_mode_applied = True
+        return True
+
+    def _apply_pending_host_mode(self):
+        if not self._pending_host_mode:
+            return
+        ok = self._apply_host_mode_once()
+        self._host_mode_result = ok
+        self._pending_host_mode = False
+        self._host_mode_event.set()
+
+    def _probe_mouse_button_spy(self, timeout_ms=800):
+        """Discover MOUSE_BUTTON_SPY, read button count, enable notifications."""
+        if self._mouse_button_spy_idx is not None:
+            return self._mouse_button_spy_idx
+        fi = self._find_feature(FEAT_MOUSE_BUTTON_SPY, timeout_ms=timeout_ms)
+        if fi is None:
+            return None
+        self._mouse_button_spy_idx = fi
+        # fn 0 = getButtonCount (libratbag#1831 / G502 HERO).
+        resp = self._request(fi, 0, [], timeout_ms=timeout_ms, count_timeout=False)
+        if resp and resp[4]:
+            self._spy_button_count = int(resp[4][0])
+        print(
+            f"[HidGesture] MOUSE_BUTTON_SPY @0x{fi:02X} "
+            f"buttons={self._spy_button_count if self._spy_button_count is not None else '?'}"
+        )
+        self._enable_mouse_button_spy(timeout_ms=timeout_ms)
+        return fi
+
+    def _enable_mouse_button_spy(self, timeout_ms=800):
+        """Arm MouseButtonSpy like nibble: zero remapped slots, then Start.
+
+        fn3 getRemapping / fn4 setRemapping / fn1 Start / fn2 Stop.
+        Writing 0 into a slot strips that button's firmware HID action so
+        presses only appear as spy bitmap notifications (runtime; power-cycle
+        or Stop+restore returns factory behaviour).
+        """
+        fi = self._mouse_button_spy_idx
+        if fi is None:
+            return False
+
+        resp = self._request(
+            fi, 3, [], timeout_ms=timeout_ms, count_timeout=False
+        )
+        table = list(resp[4][:16]) if resp and resp[4] else []
+        while len(table) < 16:
+            table.append(0)
+        self._spy_remap_original = list(table)
+
+        patched = list(table)
+        for bit, _button in G502_SPY_BIT_BUTTONS:
+            if bit < 16:
+                patched[bit] = 0
+        self._spy_remap_patched = list(patched)
+
+        self._request(
+            fi, 4, patched, timeout_ms=timeout_ms, count_timeout=False
+        )
+        # fn1 Start — empty params (nibble buttonSpyStart).
+        self._request(fi, 1, [], timeout_ms=timeout_ms, count_timeout=False)
+        self._spy_started = True
+        print(
+            "[HidGesture] MouseButtonSpy started; zeroed slots "
+            f"{[bit for bit, _ in G502_SPY_BIT_BUTTONS]}"
+        )
+        return True
+
+    def _reapply_mouse_button_spy(self, timeout_ms=800):
+        """Rewrite patched remapping + Start after sleep/wake (nibble).
+
+        Firmware drops the runtime spy table on link reset; do not re-read
+        the table here or we would treat zeros as the factory original.
+        """
+        fi = self._mouse_button_spy_idx
+        if fi is None or not self._spy_started:
+            return False
+        patched = self._spy_remap_patched
+        if not patched:
+            return False
+        table = list(patched)
+        while len(table) < 16:
+            table.append(0)
+        self._request(
+            fi, 4, table, timeout_ms=timeout_ms, count_timeout=False
+        )
+        self._request(fi, 1, [], timeout_ms=timeout_ms, count_timeout=False)
+        self._spy_bitmap = 0
+        self._spy_held = {button: False for _bit, button in G502_SPY_BIT_BUTTONS}
+        print("[HidGesture] MouseButtonSpy reapplied after wake")
+        return True
+
+    def _apply_pending_spy_reapply(self):
+        if not self._pending_spy_reapply:
+            return
+        self._pending_spy_reapply = False
+        try:
+            self._reapply_mouse_button_spy()
+        except Exception as exc:
+            print(f"[HidGesture] spy reapply failed: {exc}")
+
+    def _disable_mouse_button_spy(self, timeout_ms=800):
+        """Stop spy notifications and restore the remapping table."""
+        fi = self._mouse_button_spy_idx
+        if fi is None or not self._spy_started:
+            return
+        self._request(fi, 2, [], timeout_ms=timeout_ms, count_timeout=False)
+        if self._spy_remap_original is not None:
+            table = list(self._spy_remap_original)
+            while len(table) < 16:
+                table.append(0)
+            self._request(
+                fi, 4, table, timeout_ms=timeout_ms, count_timeout=False
+            )
+        self._spy_started = False
+        self._spy_remap_original = None
+        self._spy_remap_patched = None
+        self._pending_spy_reapply = False
+        print("[HidGesture] MouseButtonSpy stopped; remapping restored")
+
+    def _probe_onboard_profiles_readonly(self, timeout_ms=800):
+        """Read ONBOARD_PROFILES mode + descriptors; never write sectors."""
+        if self._onboard_profiles_idx is None:
+            fi = self._find_feature(FEAT_ONBOARD_PROFILES, timeout_ms=timeout_ms)
+            if fi is None:
+                return None
+            self._onboard_profiles_idx = fi
+
+        fi = self._onboard_profiles_idx
+        mode_resp = self._request(
+            fi, 2, [], timeout_ms=timeout_ms, count_timeout=False
+        )
+        if mode_resp and mode_resp[4]:
+            self._onboard_mode = int(mode_resp[4][0])
+
+        # fn 0 = get descriptors (memory type, profile layout, button count…).
+        desc = self._request(fi, 0, [], timeout_ms=timeout_ms, count_timeout=False)
+        if desc and desc[4] and len(desc[4]) >= 10:
+            p = desc[4]
+            self._onboard_desc = {
+                "memory": int(p[0]),
+                "profile": int(p[1]),
+                "count": int(p[3]),
+                "buttons": int(p[5]),
+                "sectors": int(p[6]),
+                "size": (int(p[7]) << 8) | int(p[8]),
+            }
+        self._read_active_profile_dpi(timeout_ms=timeout_ms)
+        return fi
+
+    def _read_active_profile_dpi(self, timeout_ms=800):
+        """Read-only: active profile DPI stages (Solaar OnboardProfile layout).
+
+        fn4 getCurrentProfile → sector; fn5 memoryRead 16 bytes at offset 0.
+        Never writes flash.
+        """
+        fi = self._onboard_profiles_idx
+        if fi is None:
+            return None
+
+        cur = self._request(
+            fi, 4, [], timeout_ms=timeout_ms, count_timeout=False
+        )
+        if not cur or not cur[4] or len(cur[4]) < 2:
+            return None
+        sector = (int(cur[4][0]) << 8) | int(cur[4][1])
+        if sector == 0 or sector == 0xFFFF:
+            return None
+
+        chunk = self._request(
+            fi,
+            5,
+            [
+                (sector >> 8) & 0xFF,
+                sector & 0xFF,
+                0x00,
+                0x00,
+            ],
+            timeout_ms=timeout_ms,
+            count_timeout=False,
+        )
+        if not chunk or not chunk[4] or len(chunk[4]) < 13:
+            return None
+
+        raw = chunk[4]
+        resolutions = []
+        for i in range(5):
+            lo = int(raw[3 + i * 2])
+            hi = int(raw[4 + i * 2])
+            resolutions.append(lo | (hi << 8))
+
+        info = {
+            "sector": sector,
+            "report_rate_ms": int(raw[0]),
+            "default_index": int(raw[1]),
+            "shift_index": int(raw[2]),
+            "resolutions": resolutions,
+        }
+        self._onboard_active_dpi = info
+        print(
+            f"[HidGesture] Onboard profile sector=0x{sector:04X} "
+            f"DPI={resolutions} default={info['default_index']} "
+            f"shift={info['shift_index']}"
+        )
+        return info
+
+    def _handle_spy_notification(self, params):
+        """Diff MouseButtonSpy bitmap and fire remappable button callbacks."""
+        if not params or len(params) < 2:
+            return
+        current = (int(params[0]) << 8) | int(params[1])
+        previous = self._spy_bitmap
+        if current == previous:
+            return
+        self._spy_bitmap = current
+        changed = current ^ previous
+        if changed:
+            bits = [
+                bit for bit in range(16) if changed & (1 << bit)
+            ]
+            print(
+                f"[HidGesture] Spy bitmap "
+                f"0x{previous:04X}->0x{current:04X} changed_bits={bits}"
+            )
+
+        for bit, button in G502_SPY_BIT_BUTTONS:
+            mask = 1 << bit
+            now = bool(current & mask)
+            was = self._spy_held.get(button, False)
+            if now == was:
+                continue
+            self._spy_held[button] = now
+            print(
+                f"[HidGesture] Spy {button} "
+                f"{'DOWN' if now else 'UP'} bitmap=0x{current:04X}"
+            )
+            if self._on_spy_button:
+                try:
+                    self._on_spy_button(button, now)
+                except Exception as exc:
+                    print(f"[HidGesture] spy callback error: {exc}")
+
+    @property
+    def mouse_button_spy_supported(self):
+        return self._mouse_button_spy_idx is not None
 
     @property
     def hires_wheel_supported(self):
@@ -2693,6 +3547,12 @@ class HidGestureListener:
         self._pending_dpi = None
         self._dpi_result = None
         self._dpi_event.set()
+        self._pending_report_rate = None
+        self._report_rate_result = None
+        self._report_rate_event.set()
+        self._pending_host_mode = False
+        self._host_mode_result = None
+        self._host_mode_event.set()
         self._abort_pending_smart_shift()
         self._abort_pending_wheel_divert()
         self._pending_haptic = None
@@ -2733,6 +3593,14 @@ class HidGestureListener:
             return
         _, feat, func, _sw, params = msg
 
+        # Receiver device-link notification (HID++ 1.0 style). Link-up
+        # clears runtime spy remapping — queue reapply on the main loop.
+        if feat == 0x41:
+            link_byte = int(params[0]) if params else 0
+            if (link_byte & 0x40) == 0 and self._spy_started:
+                self._pending_spy_reapply = True
+            return
+
         # Unsolicited battery status broadcast (feature 0x1004 / 0x1000,
         # event func 0) — pushed to the UI so charging shows instantly.
         # `_sw != MY_SW` excludes our own polled getStatus responses (which
@@ -2743,7 +3611,17 @@ class HidGestureListener:
             self._handle_battery_notification(params)
             return
 
-        if feat != self._feat_idx:
+        # G502 MouseButtonSpy: unsolicited bitmap notifications (swid 0).
+        if (
+            self._mouse_button_spy_idx is not None
+            and feat == self._mouse_button_spy_idx
+            and func == 0
+            and _sw != MY_SW
+        ):
+            self._handle_spy_notification(params)
+            return
+
+        if self._feat_idx is None or feat != self._feat_idx:
             return
 
         if func == 1:
@@ -2855,7 +3733,10 @@ class HidGestureListener:
 
         def _default_priority(info):
             name = (info.get("product_string") or "").lower()
-            return (1 if "receiver" in name else 0, name)
+            return _candidate_probe_priority(info) + (
+                1 if "receiver" in name else 0,
+                name,
+            )
 
         # Negate the score so higher match (cached interface) sorts first.
         def _priority(info):
@@ -2942,6 +3823,24 @@ class HidGestureListener:
             ar_cid = getattr(device_spec, "thumb_button_cid", None)
             if ar_cid is not None:
                 self._button_only_cids.add(int(ar_cid))
+            self._onboard_profiles_idx = None
+            self._host_mode_applied = False
+            self._pending_host_mode = False
+            self._mouse_button_spy_idx = None
+            self._spy_button_count = None
+            self._spy_bitmap = 0
+            self._spy_held = {button: False for _bit, button in G502_SPY_BIT_BUTTONS}
+            self._spy_remap_original = None
+            self._spy_remap_patched = None
+            self._spy_started = False
+            self._pending_spy_reapply = False
+            self._report_rate_idx = None
+            self._report_rate_hz = None
+            self._report_rate_hz_list = []
+            self._pending_report_rate = None
+            self._onboard_mode = None
+            self._onboard_desc = None
+            self._onboard_active_dpi = None
             self._rawxy_enabled = False
             self._hires_wheel_idx = None
             self._hires_wheel_multiplier = None
@@ -2953,6 +3852,7 @@ class HidGestureListener:
             opened_up = int(up or 0)
             opened_usage = int(usage or 0)
             opened_path = ""
+            opened_info = info
             open_attempts = []
             candidate_transport = (info.get("transport") or "").lower()
             is_bt_candidate = "bluetooth" in candidate_transport
@@ -2995,13 +3895,10 @@ class HidGestureListener:
                                 "[HidGesture] HID path access before open: "
                                 f"{_format_linux_device_access(path)}",
                             )
-                        if _HID_API_STYLE == "hidapi":
-                            d = _hid.device()
-                            d.open_path(open_info["path"])
-                        else:
-                            d = _HidDeviceCompat(open_info["path"])
+                        d = self._open_hidapi_path(open_info["path"])
                         d.set_nonblocking(False)
                     self._dev = d
+                    opened_info = open_info
                     opened_transport = open_info.get("transport") or transport
                     opened_up = int(open_info.get("usage_page", up) or 0)
                     opened_usage = int(open_info.get("usage", usage) or 0)
@@ -3017,14 +3914,21 @@ class HidGestureListener:
             if self._dev is None:
                 continue
 
+            # Windows: also read the sibling short/long HID++ collection so
+            # MouseButtonSpy (long) notifications are not dropped.
+            if sys.platform == "win32":
+                self._dev = self._wrap_win_hidpp_bundle(
+                    self._dev, opened_info, infos
+                )
+
             # Narrow the device-index search based on transport:
             #  - BT candidates only use BT_DEV_IDX (0xFF)
-            #  - Bolt receivers only use slots 1-6
+            #  - Bolt / Lightspeed receivers only use slots 1-6
             #  - Unknown: try all (BT first, then receiver slots)
             bt_opened = "bluetooth" in (opened_transport or "").lower()
             if bt_opened:
                 default_idx_order = (BT_DEV_IDX,)
-            elif pid == BOLT_RECEIVER_PID:
+            elif pid in (BOLT_RECEIVER_PID, LIGHTSPEED_RECEIVER_PID):
                 default_idx_order = (1, 2, 3, 4, 5, 6)
             else:
                 default_idx_order = (BT_DEV_IDX, 1, 2, 3, 4, 5, 6)
@@ -3270,6 +4174,146 @@ class HidGestureListener:
                         return True
                     continue     # divert failed -- try next receiver slot
             if not reprog_found:
+                # G502 and similar catalog devices have no REPROG_V4. Connect
+                # only when HID++ is actually alive (ADJUSTABLE_DPI found).
+                # Catalog PID alone on a Windows VHF stub used to claim
+                # "connected" with zero features — DPI then cannot work.
+                os_spec = device_spec
+                hidpp_name = None
+                may_os_connect = bool(
+                    (os_spec is not None and os_spec.connect_without_reprog)
+                    or int(pid or 0) in (
+                        LIGHTSPEED_RECEIVER_PID,
+                        BOLT_RECEIVER_PID,
+                    )
+                )
+                if may_os_connect:
+                    for idx in idx_order:
+                        self._dev_idx = idx
+                        dpi_fi = self._find_feature(FEAT_ADJ_DPI, timeout_ms=400)
+                        if dpi_fi is not None:
+                            self._dpi_idx = dpi_fi
+                            print(
+                                f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}"
+                            )
+                        name = self._query_device_name()
+                        if name:
+                            hidpp_name = name
+                            print(f"[HidGesture] HID++ device name: '{hidpp_name}'")
+                            os_spec = resolve_device(
+                                product_id=pid, product_name=name,
+                            ) or os_spec
+                        if dpi_fi is not None:
+                            break
+
+                if self._dpi_idx is None and may_os_connect:
+                    self._ensure_dpi_feature(
+                        timeout_ms=2000, idx_order=idx_order
+                    )
+
+                if (
+                    os_spec is not None
+                    and os_spec.connect_without_reprog
+                    and self._dpi_idx is not None
+                ):
+                    print(
+                        "[HidGesture] OS-level connect without REPROG_V4 "
+                        f"PID=0x{int(pid or 0):04X} "
+                        f"name='{hidpp_name or product}' "
+                        f"dpiIdx=0x{self._dpi_idx:02X}"
+                    )
+                    batt_fi = self._find_feature(FEAT_UNIFIED_BATT, timeout_ms=400)
+                    if batt_fi:
+                        self._battery_idx = batt_fi
+                        self._battery_feature_id = FEAT_UNIFIED_BATT
+                    else:
+                        batt_fi = self._find_feature(
+                            FEAT_BATTERY_STATUS, timeout_ms=400
+                        )
+                        if batt_fi:
+                            self._battery_idx = batt_fi
+                            self._battery_feature_id = FEAT_BATTERY_STATUS
+                    if self._dev_idx == BT_DEV_IDX:
+                        actual_transport = "Bluetooth"
+                    elif int(pid or 0) == BOLT_RECEIVER_PID:
+                        actual_transport = "Logi Bolt"
+                    elif int(pid or 0) == LIGHTSPEED_RECEIVER_PID:
+                        actual_transport = "LIGHTSPEED"
+                    else:
+                        actual_transport = "USB Receiver"
+                    self._feat_idx = None
+                    self._last_controls = []
+                    self._gesture_candidates = []
+                    self._gesture_cid = DEFAULT_GESTURE_CID
+                    self._rawxy_enabled = False
+                    self._connected_device_info = build_connected_device_info(
+                        product_id=pid,
+                        product_name=hidpp_name or product,
+                        transport=actual_transport,
+                        source=source,
+                        gesture_cids=(),
+                        reprog_controls=[],
+                        active_gesture_cid=None,
+                        gesture_rawxy_enabled=False,
+                        discovered_features=self._discovered_feature_inventory(),
+                        device_identity={
+                            "device_index": self._dev_idx,
+                            "usage_page": opened_up,
+                            "usage": opened_usage,
+                            "backend": opened_transport or "hidapi",
+                            "hid_module": _HID_MODULE_NAME or "",
+                            "device_path": opened_path,
+                        },
+                        has_hires_wheel=False,
+                        has_thumbwheel=False,
+                        hires_wheel_active=False,
+                        thumbwheel_active=False,
+                        thumb_button_via_hid=False,
+                    )
+                    # Phase C: MouseButtonSpy — zero remapped slots + Start so
+                    # sniper / DPI notify; expose them in supported_buttons.
+                    self._probe_mouse_button_spy(timeout_ms=800)
+                    self._probe_onboard_profiles_readonly(timeout_ms=800)
+                    self._probe_report_rate(timeout_ms=800)
+                    if self._mouse_button_spy_idx is not None:
+                        base = self._connected_device_info.supported_buttons
+                        merged = tuple(
+                            dict.fromkeys(tuple(base) + G502_SPY_BUTTONS)
+                        )
+                        self._connected_device_info = _dataclass_replace(
+                            self._connected_device_info,
+                            supported_buttons=merged,
+                        )
+                    try:
+                        _save_last_device_cache(
+                            candidate=candidate_signature,
+                            device={
+                                "name": hidpp_name or product,
+                                "dev_idx": int(self._dev_idx),
+                                "transport": actual_transport,
+                                "feat_idx_reprog": None,
+                            },
+                        )
+                    except Exception as exc:
+                        print(f"[HidGesture] Cache write skipped: {exc}")
+                    self._reprog_absent_until.pop(cand_key, None)
+                    if self._prefer_host_mode:
+                        self._apply_host_mode_once()
+                    return True
+
+                if may_os_connect:
+                    print(
+                        "[HidGesture] Skipping OS-level connect — "
+                        "ADJUSTABLE_DPI not found "
+                        f"PID=0x{int(pid or 0):04X} UP=0x{opened_up:04X} "
+                        f"product={product or '?'} "
+                        "(need Lightspeed/vendor HID++ interface, not VHF stub)"
+                    )
+                    self._emit_user_status(
+                        STATUS_NEED_LIGHTSPEED_HIDPP,
+                        key="need-lightspeed-hidpp",
+                    )
+
                 print(
                     "[HidGesture] Opened candidate but REPROG_V4 was not found "
                     f"on tested devIdx values PID=0x{int(pid or 0):04X} "
@@ -3345,6 +4389,14 @@ class HidGestureListener:
                         raise IOError("reconnect requested")
 
                     if self._consecutive_request_timeouts >= _CONSECUTIVE_TIMEOUT_RECONNECT:
+                        # OS-level G502 sessions talk on the vendor HID++
+                        # interface; movement stays on the boot mouse
+                        # collection. Waiting for a wake report here leaves
+                        # the UI stuck on "not connected" for minutes.
+                        if self.os_level_connect:
+                            raise IOError(
+                                "os-level request timeouts — reconnect"
+                            )
                         if not _device_asleep:
                             _device_asleep = True
                             _device_sleep_time = time.monotonic()
@@ -3381,8 +4433,22 @@ class HidGestureListener:
                                 except Exception:
                                     pass
                             print("[HidGesture] Device woke from sleep")
+                            try:
+                                self._reapply_mouse_button_spy()
+                            except Exception as exc:
+                                print(f"[HidGesture] spy reapply on wake: {exc}")
                             self._on_report(raw)
                         continue
+
+                    # Opt-in Host mode before DPI so replay writes stickier.
+                    if self._pending_host_mode:
+                        self._apply_pending_host_mode()
+
+                    if self._pending_spy_reapply:
+                        self._apply_pending_spy_reapply()
+
+                    if self._pending_report_rate is not None:
+                        self._apply_pending_report_rate()
 
                     # Apply any queued DPI command
                     if self._pending_dpi is not None:
@@ -3416,6 +4482,10 @@ class HidGestureListener:
             # Cleanup before potential reconnect
             self._undivert()
             try:
+                self._disable_mouse_button_spy()
+            except Exception:
+                pass
+            try:
                 if self._dev:
                     self._dev.close()
             except Exception:
@@ -3440,6 +4510,24 @@ class HidGestureListener:
             self._force_sensing_idx = None
             self._force_sensing_range = None
             self._haptic_capabilities = None
+            self._onboard_profiles_idx = None
+            self._host_mode_applied = False
+            self._pending_host_mode = False
+            self._mouse_button_spy_idx = None
+            self._spy_button_count = None
+            self._spy_bitmap = 0
+            self._spy_held = {button: False for _bit, button in G502_SPY_BIT_BUTTONS}
+            self._spy_remap_original = None
+            self._spy_remap_patched = None
+            self._spy_started = False
+            self._pending_spy_reapply = False
+            self._report_rate_idx = None
+            self._report_rate_hz = None
+            self._report_rate_hz_list = []
+            self._pending_report_rate = None
+            self._onboard_mode = None
+            self._onboard_desc = None
+            self._onboard_active_dpi = None
             if self._held:
                 self._held = False
                 print("[HidGesture] Gesture force-released on disconnect")

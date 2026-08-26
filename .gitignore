@@ -40,3 +40,6 @@ build_icon.py
 
 # Shortcuts (user-specific paths)
 *.lnk
+
+# Local rebuild helper (not for upstream)
+fl4pj4ck.cmd

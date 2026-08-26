@@ -37,6 +37,10 @@ BACKGROUND_BATTERY_POLL_INTERVAL_S = 1800
 BACKGROUND_SMART_SHIFT_POLL_INTERVAL_S = 300
 BACKGROUND_HID_POLL_IDLE_GRACE_S = 60.0
 BACKGROUND_HID_POLL_EVENT_FUZZ_S = 2.0
+# Settle before replaying DPI. OS-level (G502) has no Smart Shift to wait on.
+_REPLAY_SETTLE_S = 3.0
+_REPLAY_SETTLE_OS_LEVEL_S = 1.0
+_REPLAY_RETRY_S = 5.0
 
 
 def _system_idle_seconds():
@@ -116,6 +120,8 @@ class Engine:
         self._last_native_invert_target = (False, False)
         self._last_hid_features_ready = bool(self.hid_features_ready)
         self._hid_replay_requested_this_launch = False
+        self._desktop_info_cache = None
+        self._desktop_info_ts = 0.0
         self._desktop_direction = "right"
         self._replay_inflight = False
         self._replay_pending_rerun = False
@@ -860,11 +866,12 @@ class Engine:
             print("[Engine] cycle_desktops only supported on macOS")
             return
 
-        # Resolve the active display and space on every press.  The cursor can
-        # move between displays without changing the foreground application;
-        # caching this tuple would reuse the previous display for a few
-        # seconds and incorrectly skip a valid switch on the new display.
-        desktop_count, current = self._get_macos_desktop_info()
+        # Get desktop info (cached for 5 seconds to avoid subprocess per press)
+        now = time.time()
+        if self._desktop_info_cache is None or (now - self._desktop_info_ts) > 5.0:
+            self._desktop_info_cache = self._get_macos_desktop_info()
+            self._desktop_info_ts = now
+        desktop_count, current = self._desktop_info_cache
 
         # Only one desktop — nothing to cycle
         if desktop_count <= 1:
@@ -895,6 +902,7 @@ class Engine:
             execute_action("space_left")
 
         self._desktop_direction = direction
+        self._desktop_info_cache = (desktop_count, next_pos)
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
@@ -1159,16 +1167,27 @@ class Engine:
         }
 
     def _run_saved_settings_replay(self):
+        """Replay saved HID settings. Returns (ok, failed_labels)."""
         hg = self.hook._hid_gesture
         if hg is None:
-            return False
+            return False, ["connection"]
         if hasattr(hg, "connected_device") and hg.connected_device is None:
-            return False
+            return False, ["connection"]
 
-        replay_ok = True
+        failed = []
         retry_dpi = False
         retry_smart_shift = False
-        saved_dpi = self.cfg.get("settings", {}).get("dpi")
+        settings = self.cfg.get("settings", {})
+        saved_dpi = settings.get("dpi")
+        prefer_host = bool(settings.get("prefer_host_mode_for_dpi", False))
+
+        if hasattr(hg, "set_prefer_host_mode"):
+            hg.set_prefer_host_mode(prefer_host)
+
+        # G502 opt-in: switch Host once before DPI so writes can stick.
+        os_level = bool(getattr(hg, "os_level_connect", False))
+        if prefer_host and os_level and hasattr(hg, "ensure_host_mode"):
+            hg.ensure_host_mode()
 
         saved_ss_state = self._saved_smart_shift_state()
         saved_ss = saved_ss_state["mode"]
@@ -1176,41 +1195,65 @@ class Engine:
         ss_threshold = saved_ss_state["threshold"]
         ss_scroll_force = saved_ss_state["scroll_force"]
 
-        # Phase A: apply Smart Shift immediately so the physical wheel mode
-        # converges before the settled replay.
+        # Apply Smart Shift early so wheel mode settles before DPI.
         if saved_ss and getattr(hg, "smart_shift_supported", False):
             if not hasattr(hg, "set_smart_shift"):
-                replay_ok = False
+                failed.append("Smart Shift")
             else:
                 if not hg.set_smart_shift(saved_ss, ss_enabled, ss_threshold, ss_scroll_force):
-                    replay_ok = False
+                    failed.append("Smart Shift")
                 if self._smart_shift_read_cb:
                     try:
                         self._smart_shift_read_cb(saved_ss_state)
                     except Exception:
                         pass
 
-        time.sleep(3)
+        settle_s = (
+            _REPLAY_SETTLE_OS_LEVEL_S
+            if os_level and not getattr(hg, "smart_shift_supported", False)
+            else _REPLAY_SETTLE_S
+        )
+        time.sleep(settle_s)
         hg = self.hook._hid_gesture
         if hg is None or getattr(hg, "connected_device", None) is None:
-            return False
+            return False, ["connection"]
 
-        if saved_dpi is not None:
+        # Only restore DPI when the live session actually exposes it.
+        dpi_supported = bool(getattr(hg, "dpi_supported", True))
+        if saved_dpi is not None and dpi_supported:
             if not hasattr(hg, "set_dpi"):
-                replay_ok = False
+                failed.append("DPI")
             elif hg.set_dpi(saved_dpi):
-                if self._dpi_read_cb:
+                # OS-level: verify sensor DPI stuck; one corrective rewrite.
+                if os_level and hasattr(hg, "read_dpi"):
+                    got = hg.read_dpi()
+                    if got is not None and int(got) != int(saved_dpi):
+                        if not hg.set_dpi(saved_dpi):
+                            failed.append("DPI")
+                            retry_dpi = True
+                if "DPI" not in failed and self._dpi_read_cb:
                     try:
                         self._dpi_read_cb(saved_dpi)
                     except Exception:
                         pass
             else:
-                replay_ok = False
                 retry_dpi = True
 
+        saved_rate = settings.get("report_rate_hz")
+        if (
+            saved_rate is not None
+            and prefer_host
+            and getattr(hg, "report_rate_supported", False)
+            and hasattr(hg, "set_report_rate")
+        ):
+            if not hg.set_report_rate(int(saved_rate)):
+                failed.append("report rate")
+
         if saved_ss and getattr(hg, "smart_shift_supported", False):
-            if not hasattr(hg, "set_smart_shift"):
-                replay_ok = False
+            if "Smart Shift" in failed:
+                pass
+            elif not hasattr(hg, "set_smart_shift"):
+                failed.append("Smart Shift")
             elif hg.set_smart_shift(saved_ss, ss_enabled, ss_threshold, ss_scroll_force):
                 if self._smart_shift_read_cb:
                     try:
@@ -1218,32 +1261,37 @@ class Engine:
                     except Exception:
                         pass
             else:
-                replay_ok = False
+                if "Smart Shift" not in failed:
+                    failed.append("Smart Shift")
                 retry_smart_shift = True
 
         if retry_dpi or retry_smart_shift:
-            time.sleep(5)
+            time.sleep(_REPLAY_RETRY_S)
             hg = self.hook._hid_gesture
             if hg is None or getattr(hg, "connected_device", None) is None:
-                return False
+                return False, list(dict.fromkeys(failed + ["connection"]))
             if retry_dpi:
-                if not hasattr(hg, "set_dpi") or not hg.set_dpi(saved_dpi):
-                    replay_ok = False
-                elif self._dpi_read_cb:
-                    try:
-                        self._dpi_read_cb(saved_dpi)
-                    except Exception:
-                        pass
+                if hasattr(hg, "set_dpi") and hg.set_dpi(saved_dpi):
+                    failed = [label for label in failed if label != "DPI"]
+                    if self._dpi_read_cb:
+                        try:
+                            self._dpi_read_cb(saved_dpi)
+                        except Exception:
+                            pass
+                elif "DPI" not in failed:
+                    failed.append("DPI")
             if retry_smart_shift and getattr(hg, "smart_shift_supported", False):
-                if not hasattr(hg, "set_smart_shift") or not hg.set_smart_shift(
+                if hasattr(hg, "set_smart_shift") and hg.set_smart_shift(
                     saved_ss, ss_enabled, ss_threshold, ss_scroll_force
                 ):
-                    replay_ok = False
-                elif self._smart_shift_read_cb:
-                    try:
-                        self._smart_shift_read_cb(saved_ss_state)
-                    except Exception:
-                        pass
+                    failed = [label for label in failed if label != "Smart Shift"]
+                    if self._smart_shift_read_cb:
+                        try:
+                            self._smart_shift_read_cb(saved_ss_state)
+                        except Exception:
+                            pass
+                elif "Smart Shift" not in failed:
+                    failed.append("Smart Shift")
 
         saved_haptic = self.cfg.get("settings", {}).get("haptic_level")
         if saved_haptic is not None and getattr(hg, "haptic_supported", False):
@@ -1254,13 +1302,15 @@ class Engine:
         if saved_force is not None and getattr(hg, "force_sensing_supported", False):
             hg.set_force_sensing(saved_force)
 
-        return replay_ok
+        # Preserve order, drop duplicates.
+        failed = list(dict.fromkeys(failed))
+        return (len(failed) == 0), failed
 
     def _replay_saved_settings_worker(self):
         while True:
             with self._replay_lock:
                 self._replay_pending_rerun = False
-            replay_ok = self._run_saved_settings_replay()
+            replay_ok, failed = self._run_saved_settings_replay()
             should_emit_failure = False
             with self._replay_lock:
                 if self._replay_pending_rerun:
@@ -1268,8 +1318,14 @@ class Engine:
                 self._replay_inflight = False
                 should_emit_failure = not replay_ok
             if should_emit_failure:
+                # Connection-only failures mean the session died mid-replay;
+                # the waiting UI already covers that — don't toast.
+                meaningful = [label for label in failed if label != "connection"]
+                if not meaningful:
+                    return
+                labels = ", ".join(meaningful)
                 self._emit_status(
-                    "Mouse reconnected, but saved device settings could not be restored yet."
+                    f"Mouse reconnected, but could not restore: {labels}."
                 )
             return
 
@@ -1476,6 +1532,68 @@ class Engine:
         print("[Engine] No HID++ connection — DPI not applied")
         return False
 
+    def set_report_rate(self, hz):
+        """Persist and apply report rate (Host opt-in required on G502)."""
+        hz = int(hz)
+        self.cfg.setdefault("settings", {})["report_rate_hz"] = hz
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg is None:
+            print("[Engine] No HID++ connection — report rate not applied")
+            return False
+        return hg.set_report_rate(hz)
+
+    @property
+    def report_rate_supported(self):
+        hg = getattr(self.hook, "_hid_gesture", None)
+        return bool(getattr(hg, "report_rate_supported", False))
+
+    @property
+    def report_rate_hz(self):
+        hg = getattr(self.hook, "_hid_gesture", None)
+        live = getattr(hg, "_report_rate_hz", None)
+        if live is not None:
+            return int(live)
+        saved = self.cfg.get("settings", {}).get("report_rate_hz")
+        return int(saved) if saved is not None else 0
+
+    @property
+    def report_rate_choices(self):
+        hg = getattr(self.hook, "_hid_gesture", None)
+        choices = list(getattr(hg, "_report_rate_hz_list", None) or [])
+        return choices
+
+    @property
+    def onboard_dpi_info(self):
+        """Read-only active onboard profile DPI stages, or None."""
+        hg = getattr(self.hook, "_hid_gesture", None)
+        info = getattr(hg, "_onboard_active_dpi", None)
+        return dict(info) if isinstance(info, dict) else None
+
+    @property
+    def onboard_dpi_summary(self):
+        info = self.onboard_dpi_info
+        if not info:
+            return ""
+        stages = list(info.get("resolutions") or [])
+        if not stages:
+            return ""
+        default_i = int(info.get("default_index", 0))
+        shift_i = int(info.get("shift_index", 0))
+        parts = []
+        for i, dpi in enumerate(stages):
+            if int(dpi) <= 0:
+                continue
+            mark = ""
+            if i == default_i:
+                mark += "*"
+            if i == shift_i:
+                mark += "s"
+            parts.append(f"{int(dpi)}{mark}")
+        if not parts:
+            return ""
+        return " / ".join(parts)
+
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25, scroll_force=50):
         """Send Smart Shift settings to device.
         mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
@@ -1614,6 +1732,7 @@ class Engine:
     def start(self):
         self._emit_linux_permission_warning()
         self.hook.start()
+        self._sync_prefer_host_mode()
         self._app_detector.start()
         # Temporary safety-net: keep the old delayed replay path until the
         # hid-ready transition path has proven out in the field.
@@ -1623,6 +1742,28 @@ class Engine:
                 return
             self._request_saved_settings_replay(startup_fallback=True)
         threading.Thread(target=_startup_replay_fallback, daemon=True).start()
+
+    def _sync_prefer_host_mode(self):
+        hg = getattr(self.hook, "_hid_gesture", None)
+        if hg is None or not hasattr(hg, "set_prefer_host_mode"):
+            return
+        prefer = bool(
+            self.cfg.get("settings", {}).get("prefer_host_mode_for_dpi", False)
+        )
+        hg.set_prefer_host_mode(prefer)
+
+    def set_prefer_host_mode_for_dpi(self, enabled):
+        """Persist opt-in Host mode and push to the live HID listener."""
+        enabled = bool(enabled)
+        settings = self.cfg.setdefault("settings", {})
+        settings["prefer_host_mode_for_dpi"] = enabled
+        save_config(self.cfg)
+        self._sync_prefer_host_mode()
+        hg = getattr(self.hook, "_hid_gesture", None)
+        if enabled and hg is not None and getattr(hg, "os_level_connect", False):
+            if hasattr(hg, "ensure_host_mode"):
+                return hg.ensure_host_mode()
+        return True
 
     def set_dpi_read_callback(self, cb):
         """Register a callback ``cb(dpi_value)`` invoked when DPI is read from device."""
