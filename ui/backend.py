@@ -2515,6 +2515,10 @@ class Backend(QObject):
         timestamp = time.strftime("%H:%M:%S")
         self._debug_lines.append(f"[{timestamp}] {message}")
         self._debug_lines = self._debug_lines[-200:]
+        # Debug mode is most useful when its event-routing breadcrumbs survive
+        # after the UI closes. ``print`` is redirected to Mouser's rotating
+        # log in packaged builds, while source runs still mirror it to stdout.
+        print(f"[Debug] {message}")
         self.debugLogChanged.emit()
 
     def _new_attempt(self):

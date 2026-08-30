@@ -82,6 +82,19 @@ def execute_screenshot_shortcut(action_id):
     if not is_screenshot_action(action_id):
         return False
     action = globals().get("ACTIONS", {}).get(action_id)
+    symbolic_hotkey = action.get("mac_symbolic_hotkey") if action else None
+    symbolic_sender = globals().get("_post_symbolic_hotkey")
+    if symbolic_hotkey is not None and symbolic_sender is not None:
+        if symbolic_sender(symbolic_hotkey):
+            print(
+                "[KeySimulator] macOS screenshot symbolic hotkey "
+                f"{symbolic_hotkey}: OK ({action_id})"
+            )
+            return True
+        print(
+            "[KeySimulator] macOS screenshot symbolic hotkey "
+            f"{symbolic_hotkey}: FAILED; using default key fallback ({action_id})"
+        )
     keys = action.get("keys") if action else None
     if not keys:
         return False
@@ -1309,21 +1322,28 @@ elif sys.platform == "darwin":
         "screenshot_region_clip": {
             "label": "Screenshot Region → Clipboard",
             "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_4],
+            # AppleSymbolicHotKeys: copy a selected area to the clipboard.
+            # Resolve this ID at execution time so user-customized macOS
+            # screenshot shortcuts keep working.
+            "mac_symbolic_hotkey": 31,
             "category": "Screenshot",
         },
         "screenshot_region_file": {
             "label": "Screenshot Region → File",
             "keys": [kVK_Command, kVK_Shift, kVK_ANSI_4],
+            "mac_symbolic_hotkey": 30,
             "category": "Screenshot",
         },
         "screenshot_full_clip": {
             "label": "Screenshot Full Screen → Clipboard",
             "keys": [kVK_Command, kVK_Shift, kVK_Control, kVK_ANSI_3],
+            "mac_symbolic_hotkey": 29,
             "category": "Screenshot",
         },
         "screenshot_full_file": {
             "label": "Screenshot Full Screen → File",
             "keys": [kVK_Command, kVK_Shift, kVK_ANSI_3],
+            "mac_symbolic_hotkey": 28,
             "category": "Screenshot",
         },
         "none": {
@@ -1358,6 +1378,7 @@ elif sys.platform == "darwin":
 
     @_autoreleased
     def execute_action(action_id):
+        print(f"[KeySimulator] execute_action({action_id})")
         if action_id.startswith("custom:"):
             keys = _parse_custom_combo(action_id, _KEY_NAME_TO_CODE)
             if keys:
@@ -1367,7 +1388,10 @@ elif sys.platform == "darwin":
             inject_mouse_down(action_id)
             inject_mouse_up(action_id)
             return
-        if request_screenshot_action(action_id):
+        if is_screenshot_action(action_id):
+            if request_screenshot_action(action_id):
+                return
+            execute_screenshot_shortcut(action_id)
             return
         action = ACTIONS.get(action_id)
         if not action:

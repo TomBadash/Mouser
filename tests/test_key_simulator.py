@@ -274,22 +274,57 @@ class MacOSZoomActionTests(unittest.TestCase):
     def test_macos_screenshot_action_without_handler_falls_back_to_shortcut(self):
         module = self._reload_for_macos()
 
-        with patch.object(module, "send_key_combo") as send_key_combo:
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=True) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
             module.execute_action("screenshot_full_file")
 
-        send_key_combo.assert_called_once_with(
-            [module.kVK_Command, module.kVK_Shift, module.kVK_ANSI_3]
-        )
+        post_hotkey.assert_called_once_with(28)
+        send_key_combo.assert_not_called()
 
-    def test_macos_screenshot_helper_sends_existing_shortcut(self):
+    def test_macos_screenshot_helper_uses_configured_symbolic_hotkey(self):
         module = self._reload_for_macos()
 
-        with patch.object(module, "send_key_combo") as send_key_combo:
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=True) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
             handled = module.execute_screenshot_shortcut("screenshot_region_clip")
 
         self.assertTrue(handled)
+        post_hotkey.assert_called_once_with(31)
+        send_key_combo.assert_not_called()
+
+    def test_macos_screenshot_helper_keeps_default_key_fallback(self):
+        module = self._reload_for_macos()
+
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=False) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
+            handled = module.execute_screenshot_shortcut("screenshot_region_clip")
+
+        self.assertTrue(handled)
+        post_hotkey.assert_called_once_with(31)
         send_key_combo.assert_called_once_with(
             [module.kVK_Command, module.kVK_Shift, module.kVK_Control, module.kVK_ANSI_4]
+        )
+
+    def test_macos_screenshot_actions_use_system_symbolic_hotkey_ids(self):
+        module = self._reload_for_macos()
+
+        self.assertEqual(
+            {
+                action_id: module.ACTIONS[action_id]["mac_symbolic_hotkey"]
+                for action_id in self._SCREENSHOT_ACTIONS
+            },
+            {
+                "screenshot_region_clip": 31,
+                "screenshot_region_file": 30,
+                "screenshot_full_clip": 29,
+                "screenshot_full_file": 28,
+            },
         )
 
     def test_macos_screenshot_action_dispatches_to_registered_handler(self):

@@ -62,6 +62,23 @@ class _FakeMouseHook:
         self.stop_called = True
 
 
+class _RecordingMouseHook(_FakeMouseHook):
+    def __init__(self):
+        super().__init__()
+        self.callbacks = {}
+        self.blocked_events = set()
+
+    def block(self, event_type):
+        self.blocked_events.add(event_type)
+
+    def register(self, event_type, callback):
+        self.callbacks.setdefault(event_type, []).append(callback)
+
+    def reset_bindings(self):
+        self.callbacks.clear()
+        self.blocked_events.clear()
+
+
 class _FakeAppDetector:
     def __init__(self, callback):
         self.callback = callback
@@ -118,6 +135,29 @@ class EngineHorizontalScrollTests(unittest.TestCase):
             patch("core.engine.load_config", return_value=cfg),
         ):
             return Engine()
+
+    def test_mode_shift_dispatches_region_clipboard_screenshot(self):
+        from core.engine import Engine
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["default"]["mappings"]["mode_shift"] = (
+            "screenshot_region_clip"
+        )
+        with (
+            patch("core.engine.MouseHook", _RecordingMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            engine = Engine()
+
+        self.assertIn(MouseEvent.MODE_SHIFT_DOWN, engine.hook.blocked_events)
+        callbacks = engine.hook.callbacks[MouseEvent.MODE_SHIFT_DOWN]
+        self.assertEqual(len(callbacks), 1)
+
+        with patch("core.engine.execute_action") as execute_action_mock:
+            callbacks[0](SimpleNamespace(event_type=MouseEvent.MODE_SHIFT_DOWN))
+
+        execute_action_mock.assert_called_once_with("screenshot_region_clip")
 
     def test_hscroll_desktop_action_uses_cooldown(self):
         engine = self._make_engine()
