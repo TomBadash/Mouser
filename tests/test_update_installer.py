@@ -138,11 +138,18 @@ class UpdateInstallerTests(unittest.TestCase):
     def test_build_number_from_version_uses_semver_digits(self):
         self.assertEqual(build_number_from_version("v3.7.0"), 30700)
         self.assertEqual(build_number_from_version("3.7.12"), 30712)
+        self.assertEqual(build_number_from_version("3.7.3.2"), 3070302)
         with self.assertRaises(UpdateInstallError):
             build_number_from_version("3.7")
+        with self.assertRaises(UpdateInstallError):
+            build_number_from_version("3.7.3.100")
 
     def test_manifest_name_matches_release_url_contract(self):
         self.assertEqual(manifest_name_for_version("v3.7.0"), "mouser-v3.7.0-update.json")
+        self.assertEqual(
+            manifest_name_for_version("v3.7.3.2"),
+            "mouser-v3.7.3.2-update.json",
+        )
         self.assertTrue(
             manifest_url_for_release("v3.7.0").endswith(
                 "/v3.7.0/mouser-v3.7.0-update.json"

@@ -180,7 +180,7 @@ Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS
 
 | Category | Actions |
 |---|---|
-| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control / App Exposé / Launchpad (macOS), Page Up / Page Down / Home / End |
+| **Navigation** | Alt+Tab, Alt+Shift+Tab, Show Desktop, Previous Desktop, Next Desktop, Task View (Windows), Mission Control / App Exposé / Launchpad / Smart Zoom (macOS), Zoom In / Zoom Out, Page Up / Page Down / Home / End |
 | **Browser** | Back, Forward, Close Tab (Ctrl+W), New Tab (Ctrl+T), Next Tab (Ctrl+Tab), Previous Tab (Ctrl+Shift+Tab) |
 | **Editing** | Copy, Paste, Cut, Undo, Select All, Save, Find |
 | **Media** | Volume Up, Volume Down, Volume Mute, Play / Pause, Next Track, Previous Track |

@@ -908,6 +908,7 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         "End":                                      "\u884c\u5c3e (End)",
         "Zoom In":                                  "\u653e\u5927",
         "Zoom Out":                                 "\u7f29\u5c0f",
+        "Smart Zoom":                               "\u667a\u80fd\u7f29\u653e",
 
         # ── Navigation (macOS) ────────────────────────────────────────
         "Cmd + Tab (Switch Windows)":               "Cmd + Tab\uff08\u5207\u6362\u7a97\u53e3\uff09",
@@ -991,6 +992,7 @@ _ACTION_TR: dict[str, dict[str, str]] = {
         "End":                                      "\u884c\u5c3e (End)",
         "Zoom In":                                  "\u653e\u5927",
         "Zoom Out":                                 "\u7e2e\u5c0f",
+        "Smart Zoom":                               "\u667a\u6167\u578b\u7e2e\u653e",
 
         # ── Navigation (macOS) ────────────────────────────────────────
         "Cmd + Tab (Switch Windows)":               "Cmd + Tab\uff08\u5207\u63db\u8996\u7a97\uff09",

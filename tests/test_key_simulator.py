@@ -224,6 +224,35 @@ class MacOSZoomActionTests(unittest.TestCase):
         self.assertEqual(module.ACTIONS["zoom_out"]["label"], "Zoom Out")
         self.assertEqual(module.ACTIONS["zoom_out"]["category"], "Navigation")
         self.assertEqual(module.ACTIONS["zoom_out"]["keys"], [])
+        self.assertEqual(module.ACTIONS["smart_zoom"]["label"], "Smart Zoom")
+        self.assertEqual(module.ACTIONS["smart_zoom"]["category"], "Navigation")
+        self.assertEqual(module.ACTIONS["smart_zoom"]["keys"], [])
+
+    def test_smart_zoom_posts_native_gesture(self):
+        module = self._reload_for_macos()
+
+        with patch.object(module, "_post_smart_magnify", return_value=True) as post_gesture:
+            module.execute_action("smart_zoom")
+
+        post_gesture.assert_called_once_with()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit")
+    def test_smart_zoom_event_is_recognized_by_appkit(self):
+        module = self._reload_for_macos()
+
+        event = module._create_smart_magnify_event()
+        appkit_event = module._AppKit.NSEvent.eventWithCGEvent_(event)
+
+        self.assertIsNotNone(appkit_event)
+        self.assertEqual(
+            appkit_event.type(),
+            module._AppKit.NSEventTypeSmartMagnify,
+        )
+        self.assertEqual(module.Quartz.CGEventGetType(event), 29)
+        self.assertEqual(
+            module.Quartz.CGEventGetIntegerValueField(event, 110),
+            0x16,
+        )
 
     def test_zoom_in_sends_three_command_equal_presses(self):
         module = self._reload_for_macos()

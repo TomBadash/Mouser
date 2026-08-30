@@ -38,6 +38,8 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse(is_newer("3.7.0", "3.7.0"))
         self.assertFalse(is_newer("3.7.0", "3.6.9"))
         self.assertTrue(is_newer("3.7.0", "4.0.0"))
+        self.assertTrue(is_newer("3.7.3", "3.7.3.2"))
+        self.assertFalse(is_newer("3.7.3.2", "3.7.3"))
 
     def test_is_newer_ignores_prerelease_tags(self):
         self.assertFalse(is_newer("3.7.0", "3.7.0-rc1"))

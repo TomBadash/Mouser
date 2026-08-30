@@ -982,6 +982,12 @@ elif sys.platform == "darwin":
     }
     _SYMBOLIC_HOTKEY_SPACE_LEFT = 79
     _SYMBOLIC_HOTKEY_SPACE_RIGHT = 81
+    # macOS represents Smart Zoom as a generic gesture CGEvent whose HID
+    # subtype is ZoomToggle. AppKit promotes this pair to SmartMagnify.
+    _CG_EVENT_GESTURE = 29
+    _CG_EVENT_GESTURE_HID_TYPE_FIELD = 110
+    _IOHID_EVENT_TYPE_ZOOM_TOGGLE = 0x16
+    _GESTURE_EVENT_FLAGS = 0x100
 
     try:
         _APP_SERVICES = ctypes.CDLL(
@@ -1062,9 +1068,52 @@ elif sys.platform == "darwin":
             if not was_enabled:
                 _APP_SERVICES.CGSSetSymbolicHotKeyEnabled(hotkey, False)
 
+    def _create_smart_magnify_event():
+        """Create the native event emitted by macOS for a Smart Zoom gesture."""
+        if not _QUARTZ_OK:
+            return None
+        event = Quartz.CGEventCreate(None)
+        if not event:
+            return None
+        Quartz.CGEventSetType(event, _CG_EVENT_GESTURE)
+        Quartz.CGEventSetFlags(event, _GESTURE_EVENT_FLAGS)
+        Quartz.CGEventSetIntegerValueField(
+            event,
+            _CG_EVENT_GESTURE_HID_TYPE_FIELD,
+            _IOHID_EVENT_TYPE_ZOOM_TOGGLE,
+        )
+        try:
+            pointer_event = Quartz.CGEventCreate(None)
+            if pointer_event:
+                Quartz.CGEventSetLocation(
+                    event,
+                    Quartz.CGEventGetLocation(pointer_event),
+                )
+        except Exception:
+            pass
+        try:
+            Quartz.CGEventSetIntegerValueField(
+                event, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+            )
+        except Exception:
+            pass
+        return event
+
+    @_autoreleased
+    def _post_smart_magnify():
+        event = _create_smart_magnify_event()
+        if event is None:
+            print("[KeySimulator] Smart Zoom unavailable: could not create gesture event")
+            return False
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        print("[KeySimulator] Smart Zoom gesture posted")
+        return True
+
     _ZOOM_REPEAT = 3  # key presses per gesture trigger
 
     def _execute_mac_action(action_id):
+        if action_id == "smart_zoom":
+            return _post_smart_magnify()
         if action_id == "zoom_in":
             for _ in range(_ZOOM_REPEAT):
                 send_key_combo([kVK_Command, kVK_ANSI_Equal], hold_ms=0)
@@ -1251,6 +1300,11 @@ elif sys.platform == "darwin":
         },
         "zoom_out": {
             "label": "Zoom Out",
+            "keys": [],
+            "category": "Navigation",
+        },
+        "smart_zoom": {
+            "label": "Smart Zoom",
             "keys": [],
             "category": "Navigation",
         },
