@@ -1,9 +1,13 @@
 import unittest
 
-from ui.locale_manager import _TRANSLATIONS
+from ui.locale_manager import _ACTION_TR, _TRANSLATIONS
 
 
 class LocaleManagerTranslationTests(unittest.TestCase):
+    def test_smart_zoom_action_is_localized(self):
+        self.assertEqual(_ACTION_TR["zh_CN"]["Smart Zoom"], "智能缩放")
+        self.assertEqual(_ACTION_TR["zh_TW"]["Smart Zoom"], "智慧型縮放")
+
     def test_key_capture_error_messages_exist_in_all_locales(self):
         required = {
             "key_capture.error.unsupported_key",

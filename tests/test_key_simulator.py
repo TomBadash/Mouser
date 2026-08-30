@@ -224,6 +224,35 @@ class MacOSZoomActionTests(unittest.TestCase):
         self.assertEqual(module.ACTIONS["zoom_out"]["label"], "Zoom Out")
         self.assertEqual(module.ACTIONS["zoom_out"]["category"], "Navigation")
         self.assertEqual(module.ACTIONS["zoom_out"]["keys"], [])
+        self.assertEqual(module.ACTIONS["smart_zoom"]["label"], "Smart Zoom")
+        self.assertEqual(module.ACTIONS["smart_zoom"]["category"], "Navigation")
+        self.assertEqual(module.ACTIONS["smart_zoom"]["keys"], [])
+
+    def test_smart_zoom_posts_native_gesture(self):
+        module = self._reload_for_macos()
+
+        with patch.object(module, "_post_smart_magnify", return_value=True) as post_gesture:
+            module.execute_action("smart_zoom")
+
+        post_gesture.assert_called_once_with()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit")
+    def test_smart_zoom_event_is_recognized_by_appkit(self):
+        module = self._reload_for_macos()
+
+        event = module._create_smart_magnify_event()
+        appkit_event = module._AppKit.NSEvent.eventWithCGEvent_(event)
+
+        self.assertIsNotNone(appkit_event)
+        self.assertEqual(
+            appkit_event.type(),
+            module._AppKit.NSEventTypeSmartMagnify,
+        )
+        self.assertEqual(module.Quartz.CGEventGetType(event), 29)
+        self.assertEqual(
+            module.Quartz.CGEventGetIntegerValueField(event, 110),
+            0x16,
+        )
 
     def test_zoom_in_sends_three_command_equal_presses(self):
         module = self._reload_for_macos()
@@ -274,22 +303,57 @@ class MacOSZoomActionTests(unittest.TestCase):
     def test_macos_screenshot_action_without_handler_falls_back_to_shortcut(self):
         module = self._reload_for_macos()
 
-        with patch.object(module, "send_key_combo") as send_key_combo:
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=True) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
             module.execute_action("screenshot_full_file")
 
-        send_key_combo.assert_called_once_with(
-            [module.kVK_Command, module.kVK_Shift, module.kVK_ANSI_3]
-        )
+        post_hotkey.assert_called_once_with(28)
+        send_key_combo.assert_not_called()
 
-    def test_macos_screenshot_helper_sends_existing_shortcut(self):
+    def test_macos_screenshot_helper_uses_configured_symbolic_hotkey(self):
         module = self._reload_for_macos()
 
-        with patch.object(module, "send_key_combo") as send_key_combo:
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=True) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
             handled = module.execute_screenshot_shortcut("screenshot_region_clip")
 
         self.assertTrue(handled)
+        post_hotkey.assert_called_once_with(31)
+        send_key_combo.assert_not_called()
+
+    def test_macos_screenshot_helper_keeps_default_key_fallback(self):
+        module = self._reload_for_macos()
+
+        with (
+            patch.object(module, "_post_symbolic_hotkey", return_value=False) as post_hotkey,
+            patch.object(module, "send_key_combo") as send_key_combo,
+        ):
+            handled = module.execute_screenshot_shortcut("screenshot_region_clip")
+
+        self.assertTrue(handled)
+        post_hotkey.assert_called_once_with(31)
         send_key_combo.assert_called_once_with(
             [module.kVK_Command, module.kVK_Shift, module.kVK_Control, module.kVK_ANSI_4]
+        )
+
+    def test_macos_screenshot_actions_use_system_symbolic_hotkey_ids(self):
+        module = self._reload_for_macos()
+
+        self.assertEqual(
+            {
+                action_id: module.ACTIONS[action_id]["mac_symbolic_hotkey"]
+                for action_id in self._SCREENSHOT_ACTIONS
+            },
+            {
+                "screenshot_region_clip": 31,
+                "screenshot_region_file": 30,
+                "screenshot_full_clip": 29,
+                "screenshot_full_file": 28,
+            },
         )
 
     def test_macos_screenshot_action_dispatches_to_registered_handler(self):
