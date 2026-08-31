@@ -77,10 +77,12 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Logitech Options+ must not be running.** Both apps fight over HID++ access; quit Options+ before launching Mouser.
 - **macOS** asks for **Accessibility** permission so the event tap can intercept mouse events. See [readme_mac_osx.md](readme_mac_osx.md) for the full setup walkthrough.
 - **Linux** needs read access to `/dev/hidraw*`, `/dev/input/event*`, and write access to `/dev/uinput`. Run the bundled helper once after extracting:
+
   ```bash
   cd /path/to/extracted/Mouser
   ./install-linux-permissions.sh
   ```
+
   Reconnect the mouse, then relaunch.
 - Config is saved automatically to:
   - `%APPDATA%\Mouser\config.json` (Windows)
@@ -197,7 +199,7 @@ You only need this if you want to hack on Mouser or run a development build. Mos
 
 ### Common prerequisites
 
-- **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux** (X11; KDE Wayland for app detection)
+- **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux** (X11; KDE Wayland and GNOME/Wayland for app detection)
 - **Python 3.10+** (tested up to 3.14)
 - A supported Logitech HID++ mouse paired via Bluetooth or a USB receiver
 - **Logitech Options+ must NOT be running** — it conflicts with HID++ access
@@ -300,7 +302,7 @@ The generated launcher uses absolute paths for the current portable app or sourc
 
 That Linux autostart entry includes a short GNOME startup delay so Mouser does not race Bluetooth / HID initialization immediately after login.
 
-`xdotool` enables per-app profile switching on X11; `kdotool` adds KDE Wayland support. Other Wayland compositors fall back to the default profile.
+`xdotool` enables per-app profile switching on X11; `kdotool` adds KDE Wayland support. On GNOME (45+), Mouser ships the `focus-watcher@mouser.app` GNOME Shell extension — install it (or **Reinstall** to overwrite it after an update) from **Settings → General** to get focused-app detection on GNOME/Wayland. Installing always fully overwrites any previous copy, so re-running it after a Mouser update cleanly replaces the old extension. Other Wayland compositors fall back to the default profile.
 
 </details>
 
@@ -316,7 +318,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access. Quit Options+ before running Mouser.
 - **Scroll inversion** uses coalesced post-injection on Windows to avoid LL-hook deadlocks; it's stable in mainstream apps but may misbehave in some games or low-level drivers.
 - **Admin not required** — but injected keystrokes may not reach elevated windows or some games. Run Mouser elevated if you need that path.
-- **Linux app detection is partial** — X11 works via `xdotool`, KDE Wayland works via `kdotool`, GNOME / other Wayland compositors still fall back to the default profile.
+- **Linux app detection is partial** — X11 works via `xdotool`, KDE Wayland via `kdotool`; GNOME/Wayland works once the bundled `focus-watcher@mouser.app` GNOME Shell extension is installed (Settings → General). Other Wayland compositors still fall back to the default profile.
 - **Linux device permissions** — Mouser needs access to `/dev/hidraw*`, `/dev/input/event*`, and `/dev/uinput`. Use [`install-linux-permissions.sh`](packaging/linux/install-linux-permissions.sh) once instead of running as root.
 
 ---
@@ -331,7 +333,7 @@ For project layout, the architecture diagram, the HID++ gesture detector, the En
 - [ ] **Per-app profile auto-creation** — detect new apps and prompt to create a profile
 - [ ] **Export / import config** — share configurations between machines
 - [ ] **Tray icon badge** — show the active profile name in the tray tooltip
-- [ ] **Broader Wayland support** — extend app detection beyond X11 / KDE and validate across more distros
+- [ ] **Broader Wayland support** — GNOME/Wayland app detection ships via the bundled `focus-watcher@mouser.app` extension; still to validate across more distros and add any remaining compositors
 - [ ] **Plugin system** — allow third-party action providers
 
 ---

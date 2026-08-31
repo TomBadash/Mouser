@@ -25,6 +25,7 @@ from core.config import (
     GESTURE_SWIPE_ACTION, SWIPE_CAPABLE_BUTTONS, GESTURE_SWIPE_DIRECTIONS,
 )
 from core import app_catalog
+from core import gnome_focus as gnome_focus_module
 from core.device_layouts import get_device_layout, get_manual_layout_choices
 from core.key_capture import create_super_key_guard
 from core.key_registry import (
@@ -248,6 +249,7 @@ class Backend(QObject):
     forceSensingChanged = Signal()
     knownAppsChanged = Signal()
     updateAvailable = Signal(str, str)
+    gnomeFocusExtensionChanged = Signal()
     updateInstallChanged = Signal()
     superKeyHeldChanged = Signal()
 
@@ -316,6 +318,8 @@ class Backend(QObject):
         self._update_state = UpdateCheckState.from_dict(
             self._cfg.get("settings", {}).get("update_check_state", {})
         )
+        self._gnome_focus_installed = bool(gnome_focus_module.extension_installed())
+        self._gnome_focus_active = False
         self._super_key_guard = None    # created on first shortcut recording
         self._super_key_held = False
         self._update_timer = QTimer(self)
@@ -885,6 +889,20 @@ class Backend(QObject):
     @Property(bool, constant=True)
     def isLinux(self):
         return sys.platform.startswith("linux")
+
+    @Property(bool, constant=True)
+    def gnomeFocusWatcherSupported(self):
+        """Only GNOME desktops with a supported shell version can use the
+        bundled focus-watcher extension."""
+        return gnome_focus_module.gnome_focus_watcher_supported()
+
+    @Property(bool, notify=gnomeFocusExtensionChanged)
+    def gnomeFocusExtensionInstalled(self):
+        return self._gnome_focus_installed
+
+    @Property(bool, notify=gnomeFocusExtensionChanged)
+    def gnomeFocusExtensionActive(self):
+        return self._gnome_focus_active
 
     @Property(str, notify=updateInstallChanged)
     def latestUpdateVersion(self):
@@ -1831,6 +1849,55 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
         self.settingsChanged.emit()
+
+    def _emitGnomeFocusChanged(self):
+        """Re-read extension state and notify QML bindings."""
+        self._gnome_focus_installed = bool(
+            gnome_focus_module.extension_installed()
+        )
+        self._gnome_focus_active = bool(gnome_focus_module.extension_active())
+        self.gnomeFocusExtensionChanged.emit()
+
+    @Slot()
+    def refreshGnomeFocusExtensionStatus(self):
+        """Re-evaluate installed / active state in response to a shell restart
+        or manual install."""
+        if not self.gnomeFocusWatcherSupported:
+            return
+        self._emitGnomeFocusChanged()
+
+    @Slot()
+    def installGnomeFocusExtension(self):
+        """Copy the bundled extension into GNOME Shell and refresh status.
+
+        A shell restart (log out/in on Wayland, Alt+F2 ``r`` on X11) is still
+        required before the extension loads.
+        """
+        if not self.gnomeFocusWatcherSupported:
+            return
+        ok = gnome_focus_module.install_extension()
+        self._emitGnomeFocusChanged()
+        self.statusMessage.emit(
+            "Mouser Focus Watcher extension installed. "
+            "Log out and back in (or on X11 press Alt+F2 and type 'r') "
+            "to activate it."
+            if ok
+            else "Could not install the GNOME extension."
+        )
+
+    @Slot()
+    def enableGnomeFocusExtension(self):
+        """Ask GNOME Shell to enable the installed extension."""
+        if not self.gnomeFocusWatcherSupported:
+            return
+        ok = gnome_focus_module.enable_extension()
+        self._emitGnomeFocusChanged()
+        self.statusMessage.emit(
+            "Mouser Focus Watcher extension enabled."
+            if ok
+            else "Could not enable the GNOME extension. "
+                 "Restart GNOME Shell and try again."
+        )
 
     @Slot(int)
     def setGestureThreshold(self, value):

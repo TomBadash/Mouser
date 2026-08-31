@@ -11,6 +11,22 @@ Item {
     // Reactive shortcut — all s["key"] bindings update when lm.languageChanged fires
     property var s: lm.strings
 
+    function gnomeStatusTitle() {
+        if (backend.gnomeFocusExtensionActive)
+            return s["scroll.gnome_focus_active"]
+        if (backend.gnomeFocusExtensionInstalled)
+            return s["scroll.gnome_focus_restart"]
+        return s["scroll.gnome_focus_not_installed"]
+    }
+
+    function gnomeStatusDetail() {
+        if (backend.gnomeFocusExtensionActive)
+            return s["scroll.gnome_focus_active_desc"]
+        if (backend.gnomeFocusExtensionInstalled)
+            return s["scroll.gnome_focus_restart_desc"]
+        return s["scroll.gnome_focus_not_installed_desc"]
+    }
+
     function updateStatusText() {
         if (backend.updateInstallStatus === "checking")
             return s["scroll.update_checking"]
@@ -1024,6 +1040,118 @@ Item {
                 height: backend.supportsStartAtLogin ? 16 : 0
             }
 
+            // ── GNOME Focus Watcher (GNOME 45+ only) ─────────────
+            Rectangle {
+                visible: backend.gnomeFocusWatcherSupported
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: gnomeFocusContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: gnomeFocusContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.gnome_focus_watcher"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        width: parent.width
+                        text: s["scroll.gnome_focus_watcher_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 64
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 12
+                            }
+                            spacing: 12
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Text {
+                                    text: gnomeStatusTitle()
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                        bold: true
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: gnomeStatusDetail()
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+                    }
+
+                    Row {
+                        spacing: 10
+
+                        // Always visible: clicking Install both installs and,
+                        // if already present, fully overwrites/reinstalls the
+                        // bundled extension (reinstall for later updates).
+                        Button {
+                            text: backend.gnomeFocusExtensionInstalled
+                                  ? s["scroll.gnome_focus_reinstall"]
+                                  : s["scroll.gnome_focus_install"]
+                            onClicked: backend.installGnomeFocusExtension()
+                        }
+
+                        Button {
+                            text: s["scroll.gnome_focus_enable"]
+                            visible: backend.gnomeFocusExtensionInstalled
+                                     && !backend.gnomeFocusExtensionActive
+                            onClicked: backend.enableGnomeFocusExtension()
+                        }
+                    }
+                }
+            }
+
+            Item {
+                width: 1
+                height: backend.gnomeFocusWatcherSupported ? 16 : 0
+            }
+
             // ── Screenshots ───────────────────────────────────────
             Rectangle {
                 width: parent.width - 72
@@ -1413,5 +1541,12 @@ Item {
                 smartShiftLabel.text = Math.round(backend.smartShiftThreshold * 2) + "%"
             }
         }
+    }
+
+    // Re-check the extension's live (D-Bus) state once when this page is first
+    // shown, so a pre-existing active extension renders as active immediately.
+    Component.onCompleted: {
+        if (backend.gnomeFocusWatcherSupported)
+            backend.refreshGnomeFocusExtensionStatus()
     }
 }

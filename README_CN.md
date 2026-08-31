@@ -74,10 +74,12 @@
 - **必须退出 Logitech Options+**。两者都会争夺 HID++ 访问权，请先退出 Options+ 再启动 Mouser。
 - **macOS** 会请求 **辅助功能（Accessibility）** 权限，以便事件流（CGEventTap）能拦截鼠标事件。完整步骤请见 [readme_mac_osx.md](readme_mac_osx.md)。
 - **Linux** 需要读取 `/dev/hidraw*`、`/dev/input/event*` 以及写入 `/dev/uinput`。解压后请运行一次随包附带的辅助脚本：
+
   ```bash
   cd /path/to/extracted/Mouser
   ./install-linux-permissions.sh
   ```
+
   之后重新插拔鼠标并重启 Mouser。
 - 配置文件自动保存到：
   - `%APPDATA%\Mouser\config.json`（Windows）
@@ -194,7 +196,7 @@
 
 ### 共同前置条件
 
-- **Windows 10/11**、**macOS 12+（Monterey）** 或 **Linux**（X11；KDE Wayland 用于应用检测）
+- **Windows 10/11**、**macOS 12+（Monterey）** 或 **Linux**（X11；KDE Wayland 和 GNOME/Wayland 用于应用检测）
 - **Python 3.10+**（已在 3.14 上测试）
 - 一只支持的罗技 HID++ 鼠标（蓝牙或 USB 接收器）
 - **必须退出 Logitech Options+** — 它会与 HID++ 访问冲突
@@ -278,7 +280,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 
 辅助脚本会安装 `69-mouser-logitech.rules`、重新加载 `udev`，并尝试 `modprobe uinput`。运行成功后，请重新插拔鼠标，完全退出 Mouser，然后以普通用户方式启动 — 无需 `sudo`。在不支持 logind / `uaccess` 的发行版上，将用户加入 `input` 组是兜底方案。
 
-`xdotool` 用于 X11 的按应用 Profile 切换；`kdotool` 提供 KDE Wayland 支持。其他 Wayland 桌面环境会回退到默认 Profile。
+`xdotool` 用于 X11 的按应用 Profile 切换；`kdotool` 提供 KDE Wayland 支持。在 GNOME（45+）下，Mouser 随包附带 `focus-watcher@mouser.app` GNOME Shell 扩展——从**设置 → 通用**中安装（Mouser 更新后可用“**重新安装扩展**”覆盖旧版本）即可在 GNOME/Wayland 下获得前台应用检测。安装始终会完整覆盖之前的旧文件，因此 Mouser 更新后重新安装可干净地替换旧扩展。其他 Wayland 桌面环境会回退到默认 Profile。
 
 </details>
 
@@ -294,7 +296,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 - **与 Logitech Options+ 冲突** — 两者会争夺 HID++ 访问权，运行 Mouser 前请先退出 Options+。
 - **滚动反转** 在 Windows 上使用合并后的事件注入，避免 LL hook 死锁；在主流应用中表现稳定，但在某些游戏或低级驱动中可能不正常。
 - **不需要管理员权限** — 但被注入的按键事件可能无法到达提权窗口或某些游戏；如有需要可以以提权方式运行 Mouser。
-- **Linux 应用检测有限** — X11 通过 `xdotool` 工作，KDE Wayland 通过 `kdotool` 工作；GNOME / 其他 Wayland 桌面环境仍回退到默认 Profile。
+- **Linux 应用检测有限** — X11 通过 `xdotool` 工作，KDE Wayland 通过 `kdotool` 工作；GNOME/Wayland 在安装随包附带的 `focus-watcher@mouser.app` GNOME Shell 扩展后即可工作（设置 → 通用）。其他 Wayland 桌面环境仍回退到默认 Profile。
 - **Linux 设备权限** — Mouser 需要访问 `/dev/hidraw*`、`/dev/input/event*` 与 `/dev/uinput`。请使用 [`install-linux-permissions.sh`](packaging/linux/install-linux-permissions.sh) 脚本配置一次，而不是长期以 root 运行。
 
 ---
@@ -309,7 +311,7 @@ pyinstaller Mouser-linux.spec --noconfirm
 - [ ] **按应用 Profile 自动创建** — 检测新应用并提示创建 Profile
 - [ ] **配置导入 / 导出** — 在多台机器间共享配置
 - [ ] **托盘图标徽标** — 在托盘 tooltip 中显示当前 Profile 名
-- [ ] **更广的 Wayland 支持** — 把应用检测扩展到 X11 / KDE 之外，并在更多发行版上验证
+- [ ] **更广的 Wayland 支持** — GNOME/Wayland 应用检测已随附 `focus-watcher@mouser.app` 扩展落地；仍需在更多发行版上验证并补充其余合成器
 - [ ] **插件系统** — 允许第三方动作提供者
 
 ---

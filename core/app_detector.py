@@ -1,16 +1,29 @@
 """
-Foreground application detector — polls the active window and fires
-a callback when the foreground app changes.
+Foreground application detector — fires a callback when the foreground app
+changes.
+
+Two modes:
+* **Event-driven** (GNOME/Wayland with the bundled focus-watcher extension):
+  a background asyncio thread subscribes to the extension's ``FocusChanged``
+  D-Bus signal via dbus-fast, so no polling is needed. Reconnects with a
+  backoff while the extension is unavailable (e.g. not yet enabled).
+* **Polling** (every other platform): polls the active window every
+  ``interval`` seconds.
+
 Windows: GetForegroundWindow + QueryFullProcessImageNameW (with UWP resolution).
 macOS:   NSWorkspace.sharedWorkspace().frontmostApplication().
 """
 
+import asyncio
 import functools
+import json
 import os
 import plistlib
 import sys
 import threading
 import time
+
+import core.gnome_focus as _gnome_focus
 
 
 # ── Windows explorer.exe window triage (platform-independent policy) ─────────
@@ -362,12 +375,25 @@ elif sys.platform == "linux":
 
     _WAYLAND = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
     _KDE = "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    _GNOME = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
 
     def _pid_to_exe(pid: int) -> str | None:
         try:
             return os.readlink(f"/proc/{pid}/exe")
         except OSError:
             return None
+
+    def _get_foreground_gnome_watcher() -> str | None:
+        """GNOME: use the Mouser focus-watcher extension via D-Bus.
+
+        The extension (shipped in packaging/linux/gnome-focus-watcher/) is the
+        only way to see the focused window on GNOME/Wayland. Only attempted when
+        the desktop is GNOME and the shell version is supported, since the
+        extension simply does not exist on other setups.
+        """
+        if not _GNOME or not _gnome_focus.gnome_focus_watcher_supported():
+            return None
+        return _gnome_focus.focus_app_executable()
 
     def _get_foreground_xdotool() -> str | None:
         """X11: use xdotool."""
@@ -406,7 +432,11 @@ elif sys.platform == "linux":
                 # kdotool is unavailable or cannot resolve the active window.
                 exe = _get_foreground_xdotool()
                 return _single_identity(exe)
-            # GNOME / other Wayland compositors: not yet supported
+            if _GNOME:
+                # GNOME Wayland: use the Mouser focus-watcher extension.
+                exe = _get_foreground_gnome_watcher()
+                return _single_identity(exe)
+            # Other Wayland compositors: not yet supported
             return ()
         exe = _get_foreground_xdotool()
         return _single_identity(exe)
@@ -416,10 +446,40 @@ else:
         return ()
 
 
+def _use_gnome_event_mode() -> bool:
+    """True when the event-driven GNOME focus-watcher path should be used.
+
+    Requires GNOME/Wayland, a supported shell version, and dbus-fast being
+    importable. On any other setup we keep the polling loop.
+    """
+    if sys.platform != "linux":
+        return False
+    if not _WAYLAND or not _GNOME:
+        return False
+    if not _gnome_focus.gnome_focus_watcher_supported():
+        return False
+    try:
+        import dbus_fast  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class AppDetector:
     """
-    Polls the foreground window every *interval* seconds.
-    Calls ``on_change(app_identity)`` when the foreground app changes.
+    Detects foreground-app changes and fires ``on_change(app_identity)``.
+
+    Two modes:
+
+    * **Event-driven** (GNOME/Wayland with the bundled focus-watcher
+      extension): a background asyncio thread subscribes to the extension's
+      ``FocusChanged`` D-Bus signal through dbus-fast. There is no polling —
+      the shell pushes each focus change to us. If the extension is not yet
+      reachable (e.g. freshly installed, shell not restarted) the thread
+      retries in the background, so enabling the extension later is picked up
+      without restarting Mouser.
+    * **Polling** (every other platform): polls the foreground window every
+      *interval* seconds.
     """
 
     def __init__(self, on_change, interval: float = 0.3):
@@ -427,20 +487,180 @@ class AppDetector:
         self._interval = interval
         self._last_app_identity: tuple[str, ...] | None = None
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._thread: threading.Thread | None = None        # polling thread
+        self._event_thread: threading.Thread | None = None  # asyncio/DBus thread
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._bus = None                                   # live DBus connection
 
     def start(self):
-        if self._thread and self._thread.is_alive():
+        if self._running():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._poll, daemon=True, name="AppDetector")
-        self._thread.start()
+        if _use_gnome_event_mode():
+            # The loop is created here (not inside the thread) so that stop()
+            # always has a handle to interrupt a blocking wait_for_disconnect.
+            self._loop = asyncio.new_event_loop()
+            self._event_thread = threading.Thread(
+                target=self._event_loop_thread,
+                daemon=True,
+                name="AppDetectorEvent",
+            )
+            self._event_thread.start()
+        else:
+            self._start_poll_thread()
 
     def stop(self):
         self._stop.set()
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._request_event_shutdown)
+            except RuntimeError:
+                pass
+        if self._event_thread:
+            self._event_thread.join(timeout=2)
         if self._thread:
             self._thread.join(timeout=2)
 
+    def _running(self) -> bool:
+        return bool(
+            (self._event_thread and self._event_thread.is_alive())
+            or (self._thread and self._thread.is_alive())
+        )
+
+    def _start_poll_thread(self):
+        self._thread = threading.Thread(target=self._poll, daemon=True, name="AppDetector")
+        self._thread.start()
+
+    # ------------------------------------------------------------------
+    # Event-driven mode (GNOME/Wayland, dbus-fast + FocusChanged signal)
+    # ------------------------------------------------------------------
+    def _event_loop_thread(self):
+        """Run the asyncio event loop for the DBus watcher in this thread."""
+        loop = self._loop
+        if loop is None:
+            # Defensive: start() always creates the loop, but never crash the
+            # thread if stop() raced ahead of it.
+            return
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._event_main())
+        except Exception:
+            # The loop thread must never die with an unhandled traceback;
+            # _event_main already contains its own error handling.
+            pass
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                # Best effort: loop teardown must not raise on shutdown.
+                pass
+            self._loop = None
+
+    async def _event_main(self):
+        """Keep a watcher connection alive until stopped, reconnecting on loss."""
+        while not self._stop.is_set():
+            try:
+                bus = await asyncio.wait_for(
+                    _gnome_focus._connect_watcher_bus(), timeout=5
+                )
+            except Exception:
+                # Extension not reachable yet (not installed, or the shell has
+                # not restarted since install): back off and retry rather than
+                # falling back to polling, which yields nothing on Wayland
+                # anyway. Enabling the extension later is picked up here.
+                await self._sleep_until_stop(5.0)
+                continue
+            self._bus = bus
+            try:
+                await self._run_watcher_session(bus)
+            except Exception:
+                # Session errored (service vanished, introspection failed):
+                # fall through to reconnect instead of killing the thread.
+                pass
+            finally:
+                try:
+                    bus.disconnect()
+                except Exception:
+                    # Best effort cleanup — closing is idempotent.
+                    pass
+                self._bus = None
+            if self._stop.is_set():
+                return
+            # Connection dropped — pause briefly so the extension/shell has
+            # time to come back before reconnecting.
+            await self._sleep_until_stop(5.0)
+
+    async def _run_watcher_session(self, bus):
+        """Seed the current focus, then listen for ``FocusChanged`` signals."""
+        try:
+            payload = await asyncio.wait_for(
+                _gnome_focus._get_focus_app_payload_from_bus(bus), timeout=5
+            )
+        except Exception:
+            payload = None
+        if payload is not None:
+            self._notify_payload(payload)
+
+        proxy = bus.get_proxy_object(
+            _gnome_focus.DBUS_SERVICE,
+            _gnome_focus.DBUS_PATH,
+            _gnome_focus.WATCHER_INTROSPECTION,
+        )
+        interface = proxy.get_interface(_gnome_focus.DBUS_INTERFACE)
+
+        def _on_focus_changed(window_payload):
+            self._on_focus_changed_payload(window_payload)
+
+        interface.on_focus_changed(_on_focus_changed)
+        await bus.wait_for_disconnect()
+
+    def _request_event_shutdown(self):
+        """Runs on the event loop thread: close the bus so ``wait_for_disconnect``
+        returns and the thread unwinds."""
+        asyncio.ensure_future(self._shutdown_bus())
+
+    async def _shutdown_bus(self):
+        bus = self._bus
+        self._bus = None
+        if bus is not None:
+            try:
+                bus.disconnect()
+            except Exception:
+                # Best effort: the bus may already be closing.
+                pass
+
+    async def _sleep_until_stop(self, seconds: float):
+        """Sleep in small steps so stop() is honored promptly."""
+        remaining = seconds
+        while remaining > 0 and not self._stop.is_set():
+            step = min(0.25, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+
+    def _on_focus_changed_payload(self, payload):
+        parsed = payload
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload)
+            except (ValueError, TypeError):
+                parsed = None
+        self._notify_payload(parsed)
+
+    def _notify_payload(self, payload):
+        if not isinstance(payload, dict):
+            return
+        exe = payload.get("executable") or ""
+        identity = _single_identity(str(exe)) if exe else ()
+        if identity and identity != self._last_app_identity:
+            self._last_app_identity = identity
+            try:
+                self._on_change(identity)
+            except Exception:
+                # A consumer callback failure must not kill the detector.
+                pass
+
+    # ------------------------------------------------------------------
+    # Polling mode (all other platforms)
     # ------------------------------------------------------------------
     def _poll(self):
         while not self._stop.is_set():
