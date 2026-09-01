@@ -47,8 +47,8 @@ os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "#00d4aa"
 
 _t1 = _time.perf_counter()
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileIconProvider, QMessageBox
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap, QWindow
-from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, QFileInfo, QEvent, QTimer
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter, QPixmap, QWindow
+from PySide6.QtCore import QObject, Property, QCoreApplication, QRectF, Qt, QUrl, Signal, Slot, QFileInfo, QEvent, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtSvg import QSvgRenderer
@@ -62,14 +62,16 @@ os.environ.setdefault("QML2_IMPORT_PATH", os.path.join(_pyside_dir, "qml"))
 os.environ.setdefault("QT_PLUGIN_PATH", os.path.join(_pyside_dir, "plugins"))
 
 _t3 = _time.perf_counter()
-from core.config import load_config, save_config
+from core.config import load_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
 from core.startup import linux_runtime_icon_path, sync_linux_icon_theme
+from core.locales import SYSTEM_LANGUAGE
 from core.version import APP_BUILD_MODE, APP_COMMIT_DISPLAY, APP_VERSION
 from ui.backend import Backend
 from ui.locale_manager import LocaleManager
+from ui.font_manager import preferred_ui_font_family
 _t4 = _time.perf_counter()
 
 def _print_startup_times():
@@ -908,19 +910,21 @@ class UiState(QObject):
     appearanceModeChanged = Signal()
     systemAppearanceChanged = Signal()
     darkModeChanged = Signal()
+    fontFamilyChanged = Signal()
 
-    def __init__(self, app: QApplication, parent=None):
+    def __init__(self, app: QApplication, language="en", parent=None):
         super().__init__(parent)
         self._app = app
         self._appearance_mode = "system"
-        self._font_family = app.font().family()
-        if self._font_family in {"", "Sans Serif"}:
-            if sys.platform == "darwin":
-                self._font_family = ".AppleSystemUIFont"
-            elif sys.platform == "win32":
-                self._font_family = "Segoe UI"
-            else:
-                self._font_family = "Noto Sans"
+        self._base_font = QFont(app.font())
+        self._available_font_families = QFontDatabase.families()
+        self._font_family = preferred_ui_font_family(
+            sys.platform,
+            language,
+            self._available_font_families,
+            self._base_font.family(),
+        )
+        self._apply_font_family()
         self._system_dark_mode = False
         self._sync_system_appearance()
 
@@ -963,7 +967,26 @@ class UiState(QObject):
             return False
         return self._system_dark_mode
 
-    @Property(str, constant=True)
+    def _apply_font_family(self):
+        font = QFont(self._base_font)
+        font.setFamily(self._font_family)
+        self._app.setFont(font)
+
+    @Slot(str)
+    def setLanguage(self, language):
+        family = preferred_ui_font_family(
+            sys.platform,
+            language,
+            self._available_font_families,
+            self._base_font.family(),
+        )
+        if family == self._font_family:
+            return
+        self._font_family = family
+        self._apply_font_family()
+        self.fontFamilyChanged.emit()
+
+    @Property(str, notify=fontFamilyChanged)
     def fontFamily(self):
         return self._font_family
 
@@ -1135,15 +1158,16 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     _configure_macos_app_mode()
     _install_macos_dock_icon()
-    ui_state = UiState(app)
+    initial_lang = cfg_settings.get("language", SYSTEM_LANGUAGE)
+    locale_mgr = LocaleManager(language=initial_lang)
+    ui_state = UiState(app, language=locale_mgr.language)
+    locale_mgr.languageChanged.connect(
+        lambda: ui_state.setLanguage(locale_mgr.language)
+    )
 
     print(f"[Mouser] Version: {APP_VERSION} ({APP_BUILD_MODE})")
     print(f"[Mouser] Commit: {APP_COMMIT_DISPLAY}")
     print(f"[Mouser] Launch path: {_runtime_launch_path()}")
-
-    # ── Locale Manager ─────────────────────────────────────────
-    initial_lang = cfg_settings.get("language", "en")
-    locale_mgr = LocaleManager(language=initial_lang)
 
     # macOS: allow Ctrl+C in terminal to quit the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -1166,11 +1190,11 @@ def main():
 
     _t6 = _time.perf_counter()
     # ── Engine (created but started AFTER UI is visible) ───────
-    engine = Engine()
+    engine = Engine(config=cfg)
 
     _t7 = _time.perf_counter()
     # ── QML Backend ────────────────────────────────────────────
-    backend = Backend(engine, root_dir=ROOT)
+    backend = Backend(engine, root_dir=ROOT, config=cfg)
     ui_state.appearanceMode = backend.appearanceMode
     backend.settingsChanged.connect(
         lambda: setattr(ui_state, "appearanceMode", backend.appearanceMode)
@@ -1394,9 +1418,7 @@ def main():
     def _save_language():
         """Persist the selected language to config.json."""
         try:
-            saved_cfg = load_config()
-            saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
-            save_config(saved_cfg)
+            backend.setLanguagePreference(locale_mgr.languagePreference)
         except Exception as exc:
             print(f"[Mouser] Failed to save language preference: {exc}")
 

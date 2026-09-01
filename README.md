@@ -133,8 +133,9 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 
 ### Multi-language UI
 
-- **English / Simplified Chinese / Traditional Chinese** — switch instantly, no restart required.
-- Language preference is saved to `config.json` and restored on next launch.
+- **System default / English / Simplified Chinese / Traditional Chinese** — switch instantly, no restart required.
+- Explicit language preferences are saved to `config.json`; **System default** follows the OS UI language on launch.
+- Chinese text uses locale-appropriate installed fonts (for example Microsoft YaHei UI / Microsoft JhengHei UI on Windows) instead of relying on an English UI font's fallback glyphs.
 - Covers nav, mouse page, settings page, dialogs, system tray / menu bar, and permission prompts.
 
 ### Privacy first

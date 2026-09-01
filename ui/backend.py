@@ -24,6 +24,7 @@ from core.config import (
     set_button_haptic,
     GESTURE_SWIPE_ACTION, SWIPE_CAPABLE_BUTTONS, GESTURE_SWIPE_DIRECTIONS,
 )
+from core.locales import LANGUAGE_PREFERENCES
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
 from core.key_capture import create_super_key_guard
@@ -268,11 +269,16 @@ class Backend(QObject):
     _hideRingRequest = Signal()
     _superKeyHeldRequest = Signal(bool)
 
-    def __init__(self, engine=None, parent=None, root_dir=None):
+    def __init__(self, engine=None, parent=None, root_dir=None, config=None):
         super().__init__(parent)
         self._engine = engine
         self._root_dir = root_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self._cfg = load_config()
+        if config is not None:
+            self._cfg = config
+        elif engine is not None and isinstance(getattr(engine, "cfg", None), dict):
+            self._cfg = engine.cfg
+        else:
+            self._cfg = load_config()
         self._mouse_connected = False
         self._device_display_name = "Logitech mouse"
         self._connected_device_key = ""
@@ -1508,6 +1514,18 @@ class Backend(QObject):
         save_config(self._cfg)
         self.settingsChanged.emit()
         self.statusMessage.emit("Saved")
+
+    @Slot(str)
+    def setLanguagePreference(self, value):
+        if value not in LANGUAGE_PREFERENCES:
+            return
+        preference = value
+        settings = self._cfg.setdefault("settings", {})
+        if settings.get("language") == preference:
+            return
+        settings["language"] = preference
+        save_config(self._cfg)
+        self.settingsChanged.emit()
 
     @Slot(bool)
     def setCheckForUpdates(self, value):
