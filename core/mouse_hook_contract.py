@@ -14,6 +14,8 @@ class MouseHookLike(Protocol):
     invert_hscroll: bool
     divert_mode_shift: bool
     divert_dpi_switch: bool
+    divert_xbutton1: bool
+    divert_xbutton2: bool
     # When True, the connected Logitech device is performing scroll
     # inversion at the firmware level (HID++ 0x2121 / 0x2150). The OS-layer
     # inversion path must be skipped to avoid double flipping.

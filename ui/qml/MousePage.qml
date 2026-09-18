@@ -361,6 +361,23 @@ Item {
         ? selectedProfileMappingState[selectedButton].actionId : "none"
     readonly property bool isGestureSwipeMode:
         isGestureSwipeEligible && _selButtonActionId === "gesture_swipe"
+    // Pan is the other hold-and-move mode a button can be put into. Eligibility
+    // is a narrower set than Gesture Swipe (the native HID controls are not pan
+    // owners yet), so it gets its own list from the backend rather than reusing
+    // gestureSwipeButtons.
+    readonly property bool isPanEligible:
+        selectedButton !== ""
+        && backend.panButtons.indexOf(selectedButton) !== -1
+    readonly property bool isPanMode:
+        isPanEligible && _selButtonActionId === "pan"
+    // Labels for the five PAN_SPEED_PRESETS, indexed by backend.panSpeedIndex.
+    readonly property var panSpeedNames: [
+        s["mouse.pan_speed_slowest"] || "Slowest",
+        s["mouse.pan_speed_slow"] || "Slow",
+        s["mouse.pan_speed_normal"] || "Normal",
+        s["mouse.pan_speed_fast"] || "Fast",
+        s["mouse.pan_speed_fastest"] || "Fastest"
+    ]
     // Tap + direction bindings for a gesture-pad button ("<owner>_tap" and
     // "<owner>_left/right/up/down").
     readonly property var _gsTapMap: isGestureSwipeMode
@@ -1640,14 +1657,18 @@ Item {
                                          && !(isSwipeButton
                                               && backend.supportsGestureDirections)
                                          && !isGestureSwipeMode
+                                         && !isPanMode
 
                                 // Opt-in: turn an eligible button (back/forward/
-                                // middle the device advertises) into a gesture pad.
+                                // middle the device advertises) into a hold-and-
+                                // move pad -- Gesture Swipe resolves the slide
+                                // into a direction, Pan streams it out as scroll.
                                 Column {
                                     width: parent.width
                                     spacing: 8
-                                    visible: isGestureSwipeEligible
-                                             && backend.supportsGestureDirections
+                                    visible: (isGestureSwipeEligible
+                                              && backend.supportsGestureDirections)
+                                             || isPanEligible
 
                                     Text {
                                         text: s["mouse.gesture"] || "Gesture"
@@ -1659,6 +1680,8 @@ Item {
                                     Flow {
                                         width: parent.width; spacing: 8
                                         ActionChip {
+                                            visible: isGestureSwipeEligible
+                                                     && backend.supportsGestureDirections
                                             actionId: "gesture_swipe"
                                             actionLabel: s["mouse.gesture_swipe"] || "Gesture Swipe"
                                             isCurrent: selectedActionId === "gesture_swipe"
@@ -1666,6 +1689,17 @@ Item {
                                                 backend.setProfileMapping(
                                                     selectedProfile, selectedButton, "gesture_swipe")
                                                 selectedActionId = "gesture_swipe"
+                                            }
+                                        }
+                                        ActionChip {
+                                            visible: isPanEligible
+                                            actionId: "pan"
+                                            actionLabel: s["mouse.pan"] || "Pan"
+                                            isCurrent: selectedActionId === "pan"
+                                            onPicked: function(aid) {
+                                                backend.setProfileMapping(
+                                                    selectedProfile, selectedButton, "pan")
+                                                selectedActionId = "pan"
                                             }
                                         }
                                     }
@@ -1710,6 +1744,215 @@ Item {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Per-button Pan editor ────────────────────────
+                            // Shown when an eligible button's action is set to
+                            // "Pan". Pan has no per-direction actions to bind --
+                            // holding the button and moving scrolls whatever is
+                            // under the pointer -- so this is tuning only, and
+                            // the two settings are global rather than per-button.
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: isPanMode
+
+                                RowLayout {
+                                    width: parent.width
+                                    Text {
+                                        text: s["mouse.pan"] || "Pan"
+                                        Layout.fillWidth: true
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+                                    Text {
+                                        text: s["mouse.remove"] || "Remove"
+                                        font { family: uiState.fontFamily; pixelSize: 11; underline: true }
+                                        color: theme.accent
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                backend.setProfileMapping(
+                                                    selectedProfile, selectedButton, "none")
+                                                selectedActionId = "none"
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: s["mouse.pan_hint"]
+                                          || "Hold the button and move the mouse to scroll in any direction. The pointer stays put while you pan."
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    color: theme.textDim
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 6
+
+                                    RowLayout {
+                                        width: parent.width
+                                        Text {
+                                            text: s["mouse.pan_speed"] || "Pan speed"
+                                            Layout.fillWidth: true
+                                            font { family: uiState.fontFamily; pixelSize: 11;
+                                                   capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                            color: theme.textDim
+                                        }
+                                        Text {
+                                            id: panSpeedLabel
+                                            text: panSpeedNames[backend.panSpeedIndex]
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.text
+                                        }
+                                    }
+
+                                    WheelSafeSlider {
+                                        id: panSpeedSlider
+                                        width: parent.width
+                                        from: 0
+                                        to: 4
+                                        stepSize: 1
+                                        value: backend.panSpeedIndex
+                                        accentColor: theme.accent
+                                        accentDimColor: theme.accentDim
+                                        trackColor: theme.border
+                                        onMoved: {
+                                            panSpeedLabel.text = panSpeedNames[Math.round(value)]
+                                            backend.setPanSpeedIndex(Math.round(value))
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    Text {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        text: s["mouse.pan_natural"] || "Content follows mouse"
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.text
+                                    }
+                                    Switch {
+                                        checked: backend.panNatural
+                                        focusPolicy: Qt.StrongFocus
+                                        Material.accent: theme.accent
+                                        Accessible.name: s["mouse.pan_natural"] || "Content follows mouse"
+                                        onClicked: backend.setPanNatural(checked)
+                                    }
+                                }
+
+                                RowLayout {
+                                    width: parent.width
+                                    Column {
+                                        Layout.fillWidth: true
+                                        spacing: 2
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: s["mouse.pan_momentum"] || "Momentum"
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.text
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: s["mouse.pan_momentum_hint"]
+                                                  || "Flick and release to throw — scrolling keeps gliding, and pressing again catches it."
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.textDim
+                                        }
+                                    }
+                                    Switch {
+                                        checked: backend.panMomentum
+                                        focusPolicy: Qt.StrongFocus
+                                        Material.accent: theme.accent
+                                        Accessible.name: s["mouse.pan_momentum"] || "Momentum"
+                                        onClicked: backend.setPanMomentum(checked)
+                                    }
+                                }
+
+                                Column {
+                                    width: parent.width
+                                    spacing: 6
+                                    visible: backend.panMomentum
+
+                                    RowLayout {
+                                        width: parent.width
+                                        Text {
+                                            text: s["mouse.pan_glide"] || "Glide"
+                                            Layout.fillWidth: true
+                                            font { family: uiState.fontFamily; pixelSize: 11;
+                                                   capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                            color: theme.textDim
+                                        }
+                                        Text {
+                                            id: panGlideLabel
+                                            text: backend.panGlide.toFixed(2) + " s"
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            color: theme.text
+                                        }
+                                    }
+
+                                    // Save/reload is debounced so dragging the
+                                    // slider doesn't hammer config writes.
+                                    Timer {
+                                        id: panGlideDebounce
+                                        interval: 150
+                                        onTriggered: backend.setPanGlide(panGlideSlider.value)
+                                    }
+
+                                    WheelSafeSlider {
+                                        id: panGlideSlider
+                                        width: parent.width
+                                        from: backend.panGlideMin
+                                        to: backend.panGlideMax
+                                        stepSize: 0
+                                        value: backend.panGlide
+                                        accentColor: theme.accent
+                                        accentDimColor: theme.accentDim
+                                        trackColor: theme.border
+                                        onMoved: {
+                                            panGlideLabel.text = value.toFixed(2) + " s"
+                                            panGlideDebounce.restart()
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        width: parent.width
+                                        Column {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+                                            Text {
+                                                width: parent.width
+                                                wrapMode: Text.WordWrap
+                                                text: s["mouse.pan_glide_across_windows"] || "Glide across windows"
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.text
+                                            }
+                                            Text {
+                                                width: parent.width
+                                                wrapMode: Text.WordWrap
+                                                text: s["mouse.pan_glide_across_windows_hint"]
+                                                      || "Keep gliding wherever the pointer goes. Off: the glide stops when the pointer leaves the window it was thrown in."
+                                                font { family: uiState.fontFamily; pixelSize: 11 }
+                                                color: theme.textDim
+                                            }
+                                        }
+                                        Switch {
+                                            checked: backend.panGlideAcrossWindows
+                                            focusPolicy: Qt.StrongFocus
+                                            Material.accent: theme.accent
+                                            Accessible.name: s["mouse.pan_glide_across_windows"] || "Glide across windows"
+                                            onClicked: backend.setPanGlideAcrossWindows(checked)
                                         }
                                     }
                                 }

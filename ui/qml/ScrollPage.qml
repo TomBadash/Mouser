@@ -901,6 +901,56 @@ Item {
 
                     Rectangle {
                         width: parent.width
+                        height: 72
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Column {
+                                Layout.fillWidth: true
+                                spacing: 2
+
+                                Text {
+                                    width: parent.width
+                                    text: s["scroll.hide_tray_icon"] || "Hide menu bar icon"
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 13
+                                    }
+                                    color: scrollPage.theme.textPrimary
+                                }
+                                Text {
+                                    width: parent.width
+                                    wrapMode: Text.WordWrap
+                                    text: s["scroll.hide_tray_icon_hint"]
+                                          || "Mouser keeps running in the background. Reopen it from Spotlight or Applications to change settings."
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 11
+                                    }
+                                    color: scrollPage.theme.textDim
+                                }
+                            }
+
+                            Switch {
+                                id: hideTrayIconSwitch
+                                checked: backend.hideTrayIcon
+                                focusPolicy: Qt.StrongFocus
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.hide_tray_icon"] || "Hide menu bar icon"
+                                onClicked: backend.setHideTrayIcon(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
                         height: 118
                         radius: 10
                         color: scrollPage.theme.bgSubtle
