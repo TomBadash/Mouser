@@ -70,6 +70,9 @@ class BaseMouseHook:
         # (MX Master 4). Set on connect. Governs which event family the
         # primary control emits (sense_* vs gesture_*).
         self._gesture_via_sense_panel = False
+        # True between a native-button down and up of the primary control, i.e.
+        # only while its HID++ divert has lapsed. See `_set_native_gesture_hold`.
+        self._native_gesture_active = False
         # Secondary Gesture button (thumb) on the MX Master 4 — its own
         # movement-swipe recognizer, independent of the Sense Panel's.
         self._thumb_active = False
@@ -537,21 +540,24 @@ class BaseMouseHook:
     # where running a user action inline stalls the tap long enough for the
     # system to disable it.
     def _begin_primary_gesture(self, emit, source):
+        """Open a primary-gesture hold. Returns whether one actually opened."""
         if getattr(self, "_ui_passthrough", False):
-            return
+            return False
         if self._gesture_active:
-            return
+            return False
         self._gesture_recognizer.begin()
         self._gesture_active = True
         self._emit_debug(f"{source} gesture button down")
         self._emit_gesture_event({"type": "button_down"})
         emit(MouseEvent(self._primary_button_down_event()))
+        return True
 
     def _end_primary_gesture(self, emit, source):
+        """Close a primary-gesture hold. Returns whether one was open."""
         if getattr(self, "_ui_passthrough", False):
-            return
+            return False
         if not self._gesture_active:
-            return
+            return False
         self._gesture_active = False
         was_click = self._gesture_recognizer.end()
         hg = self._hid_gesture
@@ -567,12 +573,32 @@ class BaseMouseHook:
         emit(MouseEvent(self._primary_button_up_event()))
         if was_click:
             emit(MouseEvent(self._primary_click_event()))
+        return True
 
     def _on_hid_gesture_down(self):
         self._begin_primary_gesture(self._dispatch, "HID")
 
     def _on_hid_gesture_up(self):
         self._end_primary_gesture(self._dispatch, "HID")
+
+    def _set_native_gesture_hold(self, active):
+        """Record that the primary control is held via its *native* OS button.
+
+        Mirrored onto the HID listener because its own `_held` flag cannot
+        express this state: `_held` is set only from an incoming HID++ report,
+        which by definition never arrives while the control is undiverted. The
+        listener needs to know all the same, so that re-arming the divert
+        cannot land in the middle of a press whose release would then be
+        routed to a path that never saw the press begin.
+        """
+        self._native_gesture_active = bool(active)
+        hg = self._hid_gesture
+        if hg is None:
+            return
+        try:
+            hg.set_native_hold(active)
+        except Exception:
+            pass
 
     def _on_native_gesture_down(self):
         """Primary gesture control pressed as a *native* OS button.
@@ -581,9 +607,13 @@ class BaseMouseHook:
         diverted control never reaches the OS at all, so this and the HID path
         are mutually exclusive and cannot double-fire.
         """
-        self._begin_primary_gesture(self._enqueue_dispatch_event, "Native")
+        if self._begin_primary_gesture(self._enqueue_dispatch_event, "Native"):
+            self._set_native_gesture_hold(True)
 
     def _on_native_gesture_up(self):
+        # Cleared before the gesture resolves so that the re-arm requested off
+        # the back of this release is not immediately refused by its own guard.
+        self._set_native_gesture_hold(False)
         self._end_primary_gesture(self._enqueue_dispatch_event, "Native")
 
     def _on_hid_gesture_move(self, dx, dy):

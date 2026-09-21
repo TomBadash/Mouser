@@ -267,6 +267,40 @@ class MacOSWakeRecoveryTests(unittest.TestCase):
 
         self.assertEqual(len(workers), 2)
 
+    def test_wake_asks_the_listener_to_rearm_the_divert(self):
+        # A sleep deep enough to need the tap re-enabled is also deep enough
+        # for the mouse to have dropped its link and come back undiverted.
+        # Without this the control stays dead until the app is restarted, and
+        # nothing else on the wake path re-applies the diversion.
+        center, _ = self._register_observers()
+
+        with (
+            patch.object(
+                self.module.threading, "Thread",
+                self._capturing_thread_class([]),
+            ),
+            patch.object(self.module.time, "monotonic", return_value=100.0),
+        ):
+            center.callbacks[self._WAKE][1](None)
+
+        self.listener.request_divert_refresh.assert_called_once()
+
+    def test_wake_rearm_survives_a_listener_that_raises(self):
+        # Runs inside a workspace notification block, which may not raise.
+        self.listener.request_divert_refresh.side_effect = RuntimeError("boom")
+        center, _ = self._register_observers()
+
+        with (
+            patch.object(
+                self.module.threading, "Thread",
+                self._capturing_thread_class([]),
+            ),
+            patch.object(self.module.time, "monotonic", return_value=100.0),
+        ):
+            center.callbacks[self._WAKE][1](None)
+
+        self.listener.request_divert_refresh.assert_called_once()
+
     def test_resume_worker_does_not_reconnect_after_stop(self):
         self.hook._running = False
 
@@ -1376,13 +1410,55 @@ class MacOSUndivertedSensePressTests(unittest.TestCase):
             ],
         )
 
-    def test_press_asks_the_listener_to_rearm_the_divert(self):
+    def test_rearm_is_asked_for_on_release_never_mid_press(self):
+        # Asking on the way down let the divert come back while the button was
+        # still held, and the release then reached neither path: the firmware
+        # routed it to HID++, where the listener had no matching down. The
+        # gesture stayed open, the binding never fired, and with swipe
+        # directions enabled the stuck hold swallowed all cursor motion.
         hook = self._hook()
 
         self._press(
             hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._hid_gesture.request_divert_refresh.assert_not_called()
 
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
         hook._hid_gesture.request_divert_refresh.assert_called_once()
+
+    def test_listener_is_told_when_the_native_press_starts_and_ends(self):
+        # The listener cannot see this hold for itself -- an undiverted press
+        # never reaches HID++ -- so it has to be told, or its own re-arm guard
+        # is blind to exactly the state this feature creates.
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._hid_gesture.set_native_hold.assert_called_once_with(True)
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+        self.assertEqual(
+            [c.args[0] for c in hook._hid_gesture.set_native_hold.call_args_list],
+            [True, False],
+        )
+
+    def test_release_is_claimed_by_the_hold_not_by_re_testing_conditions(self):
+        # A down that opened a hold must always get its up, or both the
+        # gesture and the native-hold flag strand on. So the release branch
+        # keys on the hold itself; re-evaluating the down conditions would let
+        # the up escape whenever one of them changed under the press.
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._ui_passthrough = True
+        _, up = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        self.assertIsNone(up)
+        self.assertFalse(hook._native_gesture_active)
+        hook._hid_gesture.set_native_hold.assert_called_with(False)
 
     def test_action_is_queued_not_run_on_the_tap_thread(self):
         # Running a binding inline would stall the CGEventTap long enough for

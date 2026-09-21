@@ -1,5 +1,6 @@
 import contextlib
 import importlib
+import inspect
 import os
 import sys
 import tempfile
@@ -1404,6 +1405,38 @@ class DivertRefreshTests(unittest.TestCase):
 
         self.assertFalse(listener._redivert_current())
         listener._set_cid_reporting.assert_not_called()
+
+    def test_main_loop_consumes_requests_and_rearms_after_sleep(self):
+        # `_main_loop` is 300-odd lines of live HID I/O with no test seam, so
+        # these two call sites cannot be driven behaviourally. They are still
+        # the whole mechanism -- a request nothing consumes never re-arms
+        # anything -- so assert on the source, which at least catches a
+        # refactor dropping them. Same approach as test_main_qml_policy.
+        source = inspect.getsource(hid_gesture.HidGestureListener._main_loop)
+
+        # The wake branch re-arms unconditionally: a device that slept through
+        # a link teardown is undiverted whether or not anyone asked.
+        self.assertIn("Device woke from sleep", source)
+        # And the awake branch drains whatever the tap or an OS wake queued.
+        self.assertIn("_divert_refresh_requested", source)
+        self.assertEqual(source.count("_redivert_current()"), 2)
+
+    def test_redivert_skipped_while_a_native_press_is_in_flight(self):
+        # The press that triggers this feature arrives while the divert is
+        # *down*, so `_held` stays False all the way through it. Re-arming
+        # under such a press loses the release entirely: the firmware would
+        # route it to HID++, where `_on_report` drops an up edge for a control
+        # it never saw go down.
+        listener = self._armed_listener()
+        listener.set_native_hold(True)
+        listener._set_cid_reporting = Mock(return_value=("ok",))
+
+        self.assertFalse(listener._redivert_current())
+        listener._set_cid_reporting.assert_not_called()
+
+        # Released -- the deferred re-arm may now go ahead.
+        listener.set_native_hold(False)
+        self.assertTrue(listener._redivert_current())
 
     def test_redivert_is_a_noop_without_a_live_device(self):
         listener = self._armed_listener()

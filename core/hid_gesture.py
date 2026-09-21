@@ -910,7 +910,7 @@ DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 # re-driver round trip. The constants below name the four combinations
 # this module emits so call sites no longer read like bare magic bytes.
 # Floor between accepted divert-refresh requests. The event-tap caller fires
-# on any press of a button the hook does not handle, so this bounds a
+# on any release of a button the hook does not handle, so this bounds a
 # genuinely unmapped button to one setCidReporting round per interval.
 _DIVERT_REFRESH_MIN_INTERVAL_S = 10.0
 _DIVERT_BUTTON_ONLY = 0x03  # 0x01 | 0x02       -- divert as button click
@@ -1116,6 +1116,7 @@ class HidGestureListener:
         self._reconnect_requested = False
         self._divert_refresh_requested = False
         self._last_divert_refresh = 0.0
+        self._native_hold = False
         # signature -> monotonic deadline; see _REPROG_ABSENT_COOLDOWN_S.
         self._reprog_absent_until = {}
         self._pending_battery = None
@@ -1865,10 +1866,10 @@ class HidGestureListener:
         lapses go unseen and the control stays dead until the app restarts.
 
         Callers therefore signal it from the two points where it is
-        observable: an OS wake notification, and an undiverted press arriving
-        at the event tap.
+        observable: an OS wake notification, and the release of an undiverted
+        press at the event tap.
 
-        Rate-limited, because the event-tap caller fires on every press of a
+        Rate-limited, because the event-tap caller fires on every release of a
         button the hook does not otherwise handle -- a genuinely unmapped
         button must not become a stream of ``setCidReporting`` writes.
         Returns True when the request was accepted.
@@ -1880,6 +1881,18 @@ class HidGestureListener:
         print(f"[HidGesture] Divert refresh requested ({reason})")
         self._divert_refresh_requested = True
         return True
+
+    def set_native_hold(self, active):
+        """Record that a control is held via its *native* OS button.
+
+        Called by the event-tap hook, which is the only layer that can see
+        this: an undiverted press never reaches HID++ at all, so ``_held``
+        stays False throughout it. Re-arming the divert during such a press
+        would make the release land on neither path -- the firmware would send
+        it as a HID++ notification, and ``_on_report`` discards an up edge for
+        a control it never saw go down -- so ``_redivert_current`` waits.
+        """
+        self._native_hold = bool(active)
 
     def _redivert_current(self):
         """Re-apply the diversion negotiated at connect, on the listener thread.
@@ -1895,8 +1908,12 @@ class HidGestureListener:
             return False
         # A held control proves the device is still diverted and talking to
         # us, so there is nothing to repair -- and re-arming mid-hold would
-        # strip rawXY ownership from an in-flight swipe.
-        if self._held or any(i["held"] for i in self._extra_diverts.values()):
+        # strip rawXY ownership from an in-flight swipe. `_native_hold` is the
+        # converse case: a press in flight while the divert is *down*, which
+        # must finish before the divert comes back under it.
+        if (self._held
+                or self._native_hold
+                or any(i["held"] for i in self._extra_diverts.values())):
             return False
         flags = _DIVERT_RAW_XY if self._rawxy_enabled else _DIVERT_BUTTON_ONLY
         ok = self._set_cid_reporting(self._gesture_cid, flags) is not None
@@ -3535,8 +3552,11 @@ class HidGestureListener:
             self._connected_device_info = None
             self._reconnect_requested = False
             # A fresh connect runs _divert() anyway; drop any stale request so
-            # it cannot re-arm the defaults this teardown just reset.
+            # it cannot re-arm the defaults this teardown just reset. The hold
+            # goes with it: the tap may never deliver an up for a press that
+            # was in flight when the device vanished.
             self._divert_refresh_requested = False
+            self._native_hold = False
             if self._connected:
                 self._connected = False
                 if self._on_disconnect:

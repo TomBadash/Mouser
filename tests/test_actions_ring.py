@@ -2,7 +2,8 @@ import math
 import time
 import threading
 import unittest
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from core.actions_ring import ActionsRingController, angle_to_sector, DEAD_ZONE_RADIUS
 
@@ -608,6 +609,61 @@ class ControllerThreadingTests(unittest.TestCase):
         self.assertEqual(shutdown_errors, [])
         self.assertEqual(ctrl.state, ActionsRingController.IDLE)
         hide_ring_cb.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Overlay steering source (rawXY vs cursor)
+# ---------------------------------------------------------------------------
+
+class OverlaySteeringSourceTests(unittest.TestCase):
+    """A held ring steers on HID++ rawXY, which only arrives while the
+    control's divert is in force. When the divert has lapsed and the press is
+    being served from the event tap instead, no delta ever arrives -- the
+    offset stays at its (0, 0) seed, every sector resolves to the dead zone,
+    and the ring opens and closes having selected nothing. It has to fall back
+    to the cursor, which follows the same physical motion."""
+
+    def _steer(self, offset, seen, cursor_sector=3):
+        """Run `_steer_sector` against a stand-in for the overlay.
+
+        Called unbound, because a real ActionsRingOverlay needs a
+        QApplication and a window and neither takes any part in choosing the
+        motion source. Returns (sector, stub) so a test can check which source
+        was consulted.
+        """
+        from ui import actions_ring_overlay
+
+        stub = SimpleNamespace(
+            _rawxy_offset=offset,
+            _rawxy_seen=seen,
+            _slot_labels=["a", "b", "c", "d"],
+            _cursor_to_sector=Mock(return_value=cursor_sector),
+        )
+        with patch.object(actions_ring_overlay, "QCursor") as cursor:
+            cursor.pos.return_value = object()
+            sector = actions_ring_overlay.ActionsRingOverlay._steer_sector(stub)
+        return sector, stub
+
+    def test_rawxy_steers_once_a_delta_has_arrived(self):
+        sector, stub = self._steer(offset=(0, -200), seen=True)
+
+        # Straight up, four slots -> sector 0, and the cursor is not consulted.
+        self.assertEqual(sector, 0)
+        stub._cursor_to_sector.assert_not_called()
+
+    def test_cursor_steers_while_the_divert_is_down(self):
+        # The regression: seeded offset, no rawXY, so the accumulated value is
+        # a meaningless (0, 0) that would resolve to the dead zone forever.
+        sector, stub = self._steer(offset=(0, 0), seen=False)
+
+        self.assertEqual(sector, 3)
+        stub._cursor_to_sector.assert_called_once()
+
+    def test_interactive_mode_still_steers_on_the_cursor(self):
+        sector, stub = self._steer(offset=None, seen=False)
+
+        self.assertEqual(sector, 3)
+        stub._cursor_to_sector.assert_called_once()
 
 
 if __name__ == "__main__":

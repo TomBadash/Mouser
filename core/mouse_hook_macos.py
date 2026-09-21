@@ -232,6 +232,16 @@ class MouseHook(BaseMouseHook):
             and not getattr(self, "_ui_passthrough", False)
         )
 
+    def _is_undiverted_sense_release(self, btn):
+        """True when `btn` closes a native press this hook already opened.
+
+        Keyed on the hold itself rather than re-testing the conditions of
+        `_is_undiverted_sense_press`: `_ui_passthrough` can be switched on
+        between the down and the up, and re-testing it there would let the
+        release escape, stranding both the gesture and the native-hold flag.
+        """
+        return btn == _BTN_SENSE_PANEL and self._native_gesture_active
+
     def _emit_gesture_swipe(self, mouse_event):
         self._enqueue_dispatch_event(mouse_event)
 
@@ -358,10 +368,10 @@ class MouseHook(BaseMouseHook):
                     return None
                 if self._is_undiverted_sense_press(btn):
                     # The Actions Ring only reaches the tap as a native button
-                    # when its HID++ divert has lapsed -- ask the listener to
-                    # re-arm it, and serve this press from here meanwhile so
-                    # the user's binding still fires.
-                    self.request_divert_refresh("undiverted sense press")
+                    # when its HID++ divert has lapsed -- serve the press from
+                    # here so the user's binding still fires. The re-arm is
+                    # requested on release, not here: see the matching up
+                    # branch below.
                     self._on_native_gesture_down()
                     return None
                 if btn == _BTN_MIDDLE:
@@ -389,8 +399,13 @@ class MouseHook(BaseMouseHook):
                     # owner-button up while armed -> resolve and swallow.
                     self.release_button_gesture(owner)
                     return None
-                if self._is_undiverted_sense_press(btn):
+                if self._is_undiverted_sense_release(btn):
                     self._on_native_gesture_up()
+                    # Re-arm only now the button is up. Asking on the way down
+                    # let the divert come back mid-press, and the release then
+                    # reached neither path: the firmware routed it to HID++,
+                    # where the listener had never seen a down to pair it with.
+                    self.request_divert_refresh("undiverted sense press")
                     return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
