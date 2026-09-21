@@ -1541,6 +1541,39 @@ class MacOSUndivertedSensePressTests(unittest.TestCase):
         self.assertEqual(
             self._drain(hook), [mouse_hook.MouseEvent.SENSE_BUTTON_DOWN])
 
+    def test_the_synthesised_release_is_tagged_as_cancelled(self):
+        # Downstream has to let go of the hold either way, so the up event
+        # still goes out -- but the engine routes a cancelled one to the ring's
+        # cancel rather than its selection. An untagged up during the ring's
+        # hold delay reads as a quick tap and opens it in toggle mode.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        while not hook._dispatch_queue.empty():
+            hook._dispatch_queue.get_nowait()
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.SENSE_BUTTON_UP)
+        self.assertEqual(event.raw_data, {"cancelled": True})
+
+    def test_an_ordinary_release_is_not_tagged_as_cancelled(self):
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        while not hook._dispatch_queue.empty():
+            hook._dispatch_queue.get_nowait()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.SENSE_BUTTON_UP)
+        self.assertIsNone(event.raw_data)
+
     def test_tap_disabled_with_no_press_in_flight_resolves_nothing(self):
         # The tap is disabled far more often than it is disabled mid-press;
         # a stray SENSE_UP on every such event would fire the ring's selection.

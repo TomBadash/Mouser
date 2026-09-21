@@ -216,6 +216,18 @@ class ActionsRingController:
         self._current_sector = sector
         return sector
 
+    def cancel(self):
+        """Abandon a hold whose release will never arrive, selecting nothing.
+
+        The event tap can be disabled by the system mid-press, and the release
+        is then lost. Resolving that through `on_button_up` would read as a
+        deliberate one: from SHOWING_HELD it fires the highlighted sector, and
+        from WAITING -- any press shorter than the hold delay -- it looks like
+        a quick tap and leaves the ring open in toggle mode, waiting for a
+        dismissal the user never asked to give.
+        """
+        self.shutdown()
+
     def shutdown(self):
         """Cancel pending timer, reset state."""
         hide = False

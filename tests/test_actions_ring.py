@@ -154,6 +154,38 @@ class ControllerStateMachineTests(unittest.TestCase):
             get_cursor_pos_cb=self.get_cursor_pos_cb,
         )
 
+    # -- Cancelling a hold whose release was lost --------------------------
+
+    def test_cancel_during_the_hold_delay_does_not_open_the_ring(self):
+        # The event tap can be disabled by the system mid-press, losing the
+        # release. Routed through on_button_up this reads as a quick tap and
+        # leaves a ring on screen the user never asked for.
+        ctrl = self._make_controller()
+        ctrl.on_button_down()
+        self.assertEqual(ctrl.state, ActionsRingController.WAITING)
+
+        ctrl.cancel()
+
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+        self.show_ring_cb.assert_not_called()
+        self.execute_cb.assert_not_called()
+
+        # The hold timer went with it, so nothing opens a moment later either.
+        time.sleep(self.HOLD_MS / 1000.0 * 2)
+        self.show_ring_cb.assert_not_called()
+
+    def test_cancel_with_the_ring_held_selects_nothing(self):
+        ctrl = self._make_controller()
+        ctrl.on_button_down()
+        time.sleep(self.HOLD_MS / 1000.0 * 1.5)
+        self.assertEqual(ctrl.state, ActionsRingController.SHOWING_HELD)
+
+        ctrl.cancel()
+
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+        self.hide_ring_cb.assert_called()
+        self.execute_cb.assert_not_called()
+
     # -- T-2.1: Initial state ---------------------------------------------
 
     def test_initial_state_is_idle(self):
@@ -609,6 +641,40 @@ class ControllerThreadingTests(unittest.TestCase):
         self.assertEqual(shutdown_errors, [])
         self.assertEqual(ctrl.state, ActionsRingController.IDLE)
         hide_ring_cb.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Engine routing of a cancelled release
+# ---------------------------------------------------------------------------
+
+class EngineCancelledReleaseTests(unittest.TestCase):
+    """The hook synthesises a button-up when it loses the real one to a
+    disabled event tap. The engine has to tell that apart from a release the
+    user made, or a system hiccup selects a sector or opens the ring."""
+
+    def _route(self, raw_data):
+        """Run `_on_ring_button_up` unbound; a whole Engine is not needed."""
+        from core.engine import Engine
+
+        ring = Mock()
+        engine = SimpleNamespace(
+            _ring=ring, _ring_sector_cb=Mock(return_value=2)
+        )
+        event = SimpleNamespace(raw_data=raw_data)
+        Engine._on_ring_button_up(engine, ring, event)
+        return ring
+
+    def test_a_cancelled_release_selects_nothing(self):
+        ring = self._route({"cancelled": True})
+
+        ring.cancel.assert_called_once()
+        ring.on_button_up.assert_not_called()
+
+    def test_a_real_release_still_selects_the_overlay_sector(self):
+        ring = self._route(None)
+
+        ring.on_button_up.assert_called_once_with(sector_override=2)
+        ring.cancel.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

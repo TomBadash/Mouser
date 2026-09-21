@@ -552,19 +552,24 @@ class BaseMouseHook:
         emit(MouseEvent(self._primary_button_down_event()))
         return True
 
-    def _end_primary_gesture(self, emit, source, allow_click=True):
-        """Close a primary-gesture hold. Returns whether one was open."""
+    def _end_primary_gesture(self, emit, source, cancelled=False):
+        """Close a primary-gesture hold. Returns whether one was open.
+
+        `cancelled` closes a hold whose release was lost rather than made. The
+        up event still goes out -- downstream state has to be let go of either
+        way -- but it is tagged so consumers can tell the two apart. See
+        `_abort_native_gesture`.
+        """
         if getattr(self, "_ui_passthrough", False):
             return False
         if not self._gesture_active:
             return False
         self._gesture_active = False
         was_click = self._gesture_recognizer.end()
-        if not allow_click:
+        if cancelled:
             # Nobody let go, so a motionless hold is not a click -- and the
-            # recognizer calls every motionless hold one. See
-            # `_abort_native_gesture`, whose whole reason for existing is that
-            # firing the bound action here would be a press the user never made.
+            # recognizer calls every motionless hold one, so leaving this to
+            # the usual path fires the bound action on a press nobody made.
             was_click = False
         hg = self._hid_gesture
         if was_click and hg and getattr(hg, "extra_held_during_gesture", False):
@@ -576,7 +581,10 @@ class BaseMouseHook:
         self._emit_gesture_event(
             {"type": "button_up", "click_candidate": was_click}
         )
-        emit(MouseEvent(self._primary_button_up_event()))
+        emit(MouseEvent(
+            self._primary_button_up_event(),
+            {"cancelled": True} if cancelled else None,
+        ))
         if was_click:
             emit(MouseEvent(self._primary_click_event()))
         return True
@@ -630,14 +638,19 @@ class BaseMouseHook:
         has to close the hold rather than just forget it: `_gesture_active`
         gates the *next* press, so a stranded one kills the button outright
         until the app restarts -- the failure the native fallback exists to
-        prevent. The release is suppressed as a click, because the user never
-        let go and the recognizer scores every motionless hold as one.
+        prevent. The up event goes out tagged as cancelled, so the Actions Ring
+        neither selects a sector nor mistakes a short hold for a quick tap and
+        opens itself in toggle mode.
         """
+        # Inert on macOS -- `_ui_passthrough` is only ever set by the Linux
+        # hook -- but noted because `_end_primary_gesture` tests it before
+        # `_gesture_active`, so an abort under passthrough would strand the
+        # very flag this method exists to release.
         if not self._native_gesture_active:
             return False
         self._set_native_gesture_hold(False)
         self._end_primary_gesture(
-            self._enqueue_dispatch_event, "Native", allow_click=False
+            self._enqueue_dispatch_event, "Native", cancelled=True
         )
         self._emit_debug(f"Native gesture aborted reason={reason}")
         return True
