@@ -611,8 +611,9 @@ class BaseMouseHook:
             self._set_native_gesture_hold(True)
 
     def _on_native_gesture_up(self):
-        # Cleared before the gesture resolves so that the re-arm requested off
-        # the back of this release is not immediately refused by its own guard.
+        # The hold must be dropped somewhere in this release, or it blocks
+        # every later re-arm of the divert. Doing it first is not load-bearing:
+        # the caller only asks for the re-arm once both of these have returned.
         self._set_native_gesture_hold(False)
         self._end_primary_gesture(self._enqueue_dispatch_event, "Native")
 

@@ -1497,6 +1497,23 @@ class MacOSUndivertedSensePressTests(unittest.TestCase):
         self.assertIs(result, cg_event)
         self.assertTrue(hook._dispatch_queue.empty())
 
+    def test_tap_disabled_mid_press_clears_the_native_hold(self):
+        # The system can disable the tap while the button is down, and the
+        # release is then never delivered. The hold flag must not survive
+        # that: left set, it blocks every later re-arm of the divert for the
+        # rest of the session, which is worse than the lapse being repaired.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self.assertTrue(hook._native_gesture_active)
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        self.assertFalse(hook._native_gesture_active)
+        hook._hid_gesture.set_native_hold.assert_called_with(False)
+
     def test_ordinary_back_button_is_unaffected(self):
         hook = self._hook()
 

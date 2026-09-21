@@ -1406,20 +1406,60 @@ class DivertRefreshTests(unittest.TestCase):
         self.assertFalse(listener._redivert_current())
         listener._set_cid_reporting.assert_not_called()
 
-    def test_main_loop_consumes_requests_and_rearms_after_sleep(self):
-        # `_main_loop` is 300-odd lines of live HID I/O with no test seam, so
-        # these two call sites cannot be driven behaviourally. They are still
-        # the whole mechanism -- a request nothing consumes never re-arms
-        # anything -- so assert on the source, which at least catches a
-        # refactor dropping them. Same approach as test_main_qml_policy.
+    def test_nothing_is_rearmed_when_no_refresh_was_requested(self):
+        # The guard that matters most. `_main_loop` reaches this every ~1s, so
+        # a condition that wrongly passes does not just re-arm early -- it
+        # hammers the device with setCidReporting writes for as long as it
+        # stays connected, which is worse than the lapse being repaired.
+        listener = self._armed_listener()
+        listener._divert_refresh_requested = False
+        listener._set_cid_reporting = Mock(return_value=("ok",))
+
+        self.assertFalse(listener._consume_divert_refresh())
+        listener._set_cid_reporting.assert_not_called()
+
+    def test_a_pending_refresh_is_applied_and_cleared(self):
+        listener = self._armed_listener()
+        listener._divert_refresh_requested = True
+        listener._set_cid_reporting = Mock(return_value=("ok",))
+
+        self.assertTrue(listener._consume_divert_refresh())
+        listener._set_cid_reporting.assert_any_call(
+            0x01A0, hid_gesture._DIVERT_RAW_XY
+        )
+        # Cleared, so the next pass does not re-send it.
+        self.assertFalse(listener._divert_refresh_requested)
+
+    def test_a_refresh_is_deferred_not_dropped_during_a_native_press(self):
+        # Dropping it would burn the rate limit: the next release's request is
+        # then refused by the floor, stranding the device on the event-tap
+        # fallback for the rest of the interval.
+        listener = self._armed_listener()
+        listener._divert_refresh_requested = True
+        listener.set_native_hold(True)
+        listener._set_cid_reporting = Mock(return_value=("ok",))
+
+        self.assertFalse(listener._consume_divert_refresh())
+        listener._set_cid_reporting.assert_not_called()
+        self.assertTrue(listener._divert_refresh_requested)
+
+        # Released -- the still-pending request now goes through.
+        listener.set_native_hold(False)
+        self.assertTrue(listener._consume_divert_refresh())
+        self.assertFalse(listener._divert_refresh_requested)
+
+    def test_main_loop_still_wires_both_rearm_points(self):
+        # `_main_loop` is 300-odd lines of live HID I/O with no seam to drive
+        # it, so the two call sites themselves are asserted on its source.
+        # Their *logic* is covered behaviourally above; this only catches a
+        # refactor dropping the calls. Same approach as test_main_qml_policy.
         source = inspect.getsource(hid_gesture.HidGestureListener._main_loop)
 
+        self.assertIn("self._consume_divert_refresh()", source)
         # The wake branch re-arms unconditionally: a device that slept through
         # a link teardown is undiverted whether or not anyone asked.
         self.assertIn("Device woke from sleep", source)
-        # And the awake branch drains whatever the tap or an OS wake queued.
-        self.assertIn("_divert_refresh_requested", source)
-        self.assertEqual(source.count("_redivert_current()"), 2)
+        self.assertEqual(source.count("self._redivert_current()"), 1)
 
     def test_redivert_skipped_while_a_native_press_is_in_flight(self):
         # The press that triggers this feature arrives while the divert is

@@ -236,9 +236,10 @@ class MouseHook(BaseMouseHook):
         """True when `btn` closes a native press this hook already opened.
 
         Keyed on the hold itself rather than re-testing the conditions of
-        `_is_undiverted_sense_press`: `_ui_passthrough` can be switched on
-        between the down and the up, and re-testing it there would let the
-        release escape, stranding both the gesture and the native-hold flag.
+        `_is_undiverted_sense_press`, so that a down which opened a hold always
+        gets its up. Re-testing would let the release escape whenever one of
+        those conditions changed under the press, stranding the native-hold
+        flag on and blocking every later re-arm.
         """
         return btn == _BTN_SENSE_PANEL and self._native_gesture_active
 
@@ -277,6 +278,11 @@ class MouseHook(BaseMouseHook):
                 # A pending owner-gesture release may have been dropped while
                 # the tap was disabled -- abort it so the cursor can't freeze.
                 self.abort_button_gesture("tap_disabled")
+                # Same for a native primary-gesture hold: its release is gone
+                # too. Only the hold flag is dropped here, but that is the
+                # part that must not strand -- left set it blocks every later
+                # re-arm of the divert for the rest of the session.
+                self._set_native_gesture_hold(False)
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 

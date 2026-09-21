@@ -666,5 +666,139 @@ class OverlaySteeringSourceTests(unittest.TestCase):
         stub._cursor_to_sector.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# Overlay steering lifecycle (wiring and the per-ring reset)
+# ---------------------------------------------------------------------------
+
+class OverlaySteeringLifecycleTests(unittest.TestCase):
+    """`_steer_sector` only matters if the tick actually asks it, and if the
+    flag it keys on is cleared per ring. A flag left set from a ring that did
+    receive rawXY would send the next one back to steering on a stale offset,
+    which is the dead-zone bug again with an extra step."""
+
+    def _stub(self, cursor_sector=3, **overrides):
+        """A stand-in with just the attributes the tick and show path touch.
+
+        The real methods are called unbound against it: a live overlay needs a
+        QApplication and a window, and neither takes any part in choosing the
+        motion source or in resetting the flag.
+        """
+        stub = SimpleNamespace(
+            _rawxy_offset=(0, 0),
+            _rawxy_seen=False,
+            _slot_labels=["a", "b", "c", "d"],
+            _cursor_to_sector=Mock(return_value=cursor_sector),
+            _tick_count=0,
+            _target_sector=-1,
+            _highlighted_sector=-1,
+            _interactive=False,
+            _appear_progress=1.0,
+            _sector_reveal=[1.0] * 4,
+            _sector_alphas=[0.0] * 4,
+            _pulse_phase=0.0,
+            _dismiss_progress=-1.0,
+            _dismiss_step=0,
+            _ring_diameter=220,
+            _center=None,
+            _tick_timer=Mock(),
+            sector_changed=Mock(),
+            update=Mock(),
+            hide=Mock(),
+            show=Mock(),
+            raise_=Mock(),
+            setFixedSize=Mock(),
+            move=Mock(),
+        )
+        stub._steer_sector = lambda: self._overlay._steer_sector(stub)
+        for k, v in overrides.items():
+            setattr(stub, k, v)
+        return stub
+
+    @property
+    def _overlay(self):
+        from ui.actions_ring_overlay import ActionsRingOverlay
+
+        return ActionsRingOverlay
+
+    def _tick(self, stub):
+        from ui import actions_ring_overlay
+
+        with patch.object(actions_ring_overlay, "QCursor") as cursor:
+            cursor.pos.return_value = object()
+            actions_ring_overlay.ActionsRingOverlay._on_tick(stub)
+
+    def _show(self, stub, interactive=False):
+        from ui import actions_ring_overlay
+
+        # No screen, so the clamp falls through to the unclamped position --
+        # geometry is not what this is testing.
+        with patch.object(actions_ring_overlay, "QApplication") as app, \
+                patch.object(actions_ring_overlay, "QCursor"):
+            app.screenAt.return_value = None
+            app.screens.return_value = []
+            actions_ring_overlay.ActionsRingOverlay.show_ring(
+                stub, 100, 100, ["a", "b", "c", "d"], interactive=interactive
+            )
+
+    def test_the_tick_takes_its_sector_from_the_steering_source(self):
+        # Straight up on rawXY is sector 0; the cursor would say 3. Catches a
+        # revert to polling the cursor unconditionally.
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._tick(stub)
+
+        self.assertEqual(stub._target_sector, 0)
+        stub.sector_changed.emit.assert_called_once_with(0)
+        stub._cursor_to_sector.assert_not_called()
+
+    def test_the_tick_falls_back_to_the_cursor_with_no_rawxy(self):
+        stub = self._stub(_rawxy_offset=(0, 0), _rawxy_seen=False)
+
+        self._tick(stub)
+
+        self.assertEqual(stub._target_sector, 3)
+        stub.sector_changed.emit.assert_called_once_with(3)
+
+    def test_opening_a_ring_clears_a_flag_left_by_the_previous_one(self):
+        # Previous ring was diverted and steered fine; this one is being
+        # served from the event tap, so no delta will ever arrive.
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._show(stub)
+
+        self.assertEqual(stub._rawxy_offset, (0, 0))
+        self.assertFalse(stub._rawxy_seen)
+
+        self._tick(stub)
+        self.assertEqual(stub._target_sector, 3)
+
+    def test_an_interactive_ring_opens_with_no_rawxy_source_at_all(self):
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._show(stub, interactive=True)
+
+        self.assertIsNone(stub._rawxy_offset)
+        self.assertFalse(stub._rawxy_seen)
+
+    def test_the_flag_is_cleared_again_when_the_ring_finishes_dismissing(self):
+        # Belt and braces with the reset in show_ring: hide_ring is reachable
+        # on paths that never reopen through show_ring.
+        from ui import actions_ring_overlay
+
+        stub = self._stub(
+            _rawxy_offset=(0, -200),
+            _rawxy_seen=True,
+            _dismiss_progress=0.0,
+            _dismiss_step=actions_ring_overlay._DISMISS_FRAMES,
+        )
+
+        self._tick(stub)
+
+        self.assertIsNone(stub._rawxy_offset)
+        self.assertFalse(stub._rawxy_seen)
+        stub.hide.assert_called_once()
+        stub._tick_timer.stop.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

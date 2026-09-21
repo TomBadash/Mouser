@@ -448,12 +448,17 @@ class ActionsRingOverlay(QWidget):
     def _steer_sector(self) -> int:
         """Current sector, from whichever motion source is actually live.
 
-        A held ring prefers rawXY: it survives pointer acceleration and a
-        cursor stopped against a screen edge, which plain cursor tracking does
-        not. But rawXY only arrives while the control's HID++ divert is in
-        force, and the OS-button fallback runs precisely when it is not -- so
-        until a delta actually turns up, steer on the cursor. Nothing warps the
-        cursor here, so it follows the same physical motion either way.
+        A held ring steers on rawXY because the firmware pins the OS cursor
+        for the duration of a rawXY divert (see `_divert` in core/hid_gesture),
+        so there is no cursor movement left to read. But rawXY only arrives
+        while that divert is in force, and the OS-button fallback runs
+        precisely when it is not -- and with no divert there is no pinning
+        either, so the cursor tracks the hand again and is the right source.
+
+        Keying on "has a delta actually arrived" rather than on which path
+        opened the press keeps this self-correcting, and costs nothing while
+        diverted: until the first delta the cursor is pinned at the anchor,
+        which resolves to the dead zone exactly as a (0, 0) offset would.
         """
         off = self._rawxy_offset
         if off is not None and self._rawxy_seen:

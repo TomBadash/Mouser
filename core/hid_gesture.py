@@ -1894,6 +1894,23 @@ class HidGestureListener:
         """
         self._native_hold = bool(active)
 
+    def _consume_divert_refresh(self):
+        """Apply a queued re-arm, if one is pending. Listener thread only.
+
+        Split out of ``_main_loop`` so the gating can be tested: the loop runs
+        every ~1s, so a condition that wrongly passes here turns a rare repair
+        into a continuous stream of ``setCidReporting`` writes at the device.
+
+        A request is left pending, not dropped, while a native press is in
+        flight. Dropping it would burn the rate limit -- the next release's
+        request is then refused by the floor, stranding the device on the
+        event-tap fallback for the rest of the interval.
+        """
+        if not self._divert_refresh_requested or self._native_hold:
+            return False
+        self._divert_refresh_requested = False
+        return self._redivert_current()
+
     def _redivert_current(self):
         """Re-apply the diversion negotiated at connect, on the listener thread.
 
@@ -3485,9 +3502,7 @@ class HidGestureListener:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
-                    if self._divert_refresh_requested:
-                        self._divert_refresh_requested = False
-                        self._redivert_current()
+                    self._consume_divert_refresh()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
