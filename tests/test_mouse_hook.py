@@ -1307,6 +1307,131 @@ class MacOSPassthroughWhenNoDeviceTests(unittest.TestCase):
         self.assertTrue(hook._dispatch_queue.empty())
 
 
+class MacOSUndivertedSensePressTests(unittest.TestCase):
+    """The Actions Ring only ever reaches the CGEventTap as a native button
+    when its HID++ divert has lapsed -- a diverted control never reaches the
+    OS at all. Serving it from the tap keeps the binding alive in that window
+    instead of the button being dead until the app is restarted."""
+
+    _kCGEventOtherMouseDown = 25
+    _kCGEventOtherMouseUp = 26
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        self.mock_quartz.kCGEventOtherMouseUp = self._kCGEventOtherMouseUp
+        self.mock_quartz.kCGEventMouseMoved = 5
+        self.mock_quartz.kCGEventOtherMouseDragged = 27
+        self.mock_quartz.kCGEventScrollWheel = 22
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _hook(self, sense_panel=True):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        # A Logitech must look bound, or the KVM guard passes everything
+        # through before the button branch is reached.
+        hook._connected_device = object()
+        hook._gesture_via_sense_panel = sense_panel
+        hook._hid_gesture = MagicMock(name="hid_gesture")
+        # Real listeners report False here; a bare MagicMock attribute is
+        # truthy and would suppress the click that closes the gesture.
+        hook._hid_gesture.extra_held_during_gesture = False
+        return hook
+
+    def _press(self, hook, btn, event_type):
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = btn
+        cg_event = MagicMock(name="cg_event")
+        return cg_event, hook._event_tap_callback(
+            None, event_type, cg_event, None)
+
+    def _drain(self, hook):
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait().event_type)
+        return events
+
+    def test_press_is_swallowed_and_fires_the_sense_binding(self):
+        hook = self._hook()
+
+        _, down = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        _, up = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        # Swallowed, so the raw button cannot also reach the foreground app.
+        self.assertIsNone(down)
+        self.assertIsNone(up)
+        self.assertEqual(
+            self._drain(hook),
+            [
+                mouse_hook.MouseEvent.SENSE_BUTTON_DOWN,
+                mouse_hook.MouseEvent.SENSE_BUTTON_UP,
+                mouse_hook.MouseEvent.SENSE_CLICK,
+            ],
+        )
+
+    def test_press_asks_the_listener_to_rearm_the_divert(self):
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        hook._hid_gesture.request_divert_refresh.assert_called_once()
+
+    def test_action_is_queued_not_run_on_the_tap_thread(self):
+        # Running a binding inline would stall the CGEventTap long enough for
+        # macOS to disable it, which is the failure this whole path exists to
+        # avoid. Nothing may be dispatched synchronously.
+        hook = self._hook()
+        ran = []
+        hook.register(mouse_hook.MouseEvent.SENSE_CLICK, lambda _e: ran.append(1))
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        self.assertEqual(ran, [])
+        self.assertFalse(hook._dispatch_queue.empty())
+
+    def test_button_six_passes_through_on_a_non_sense_panel_device(self):
+        hook = self._hook(sense_panel=False)
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+        hook._hid_gesture.request_divert_refresh.assert_not_called()
+
+    def test_button_six_passes_through_while_the_ui_captures_input(self):
+        # The binding-capture UI must see the raw press itself.
+        hook = self._hook()
+        hook._ui_passthrough = True
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_ordinary_back_button_is_unaffected(self):
+        hook = self._hook()
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_BACK, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.XBUTTON1_DOWN])
+
+
 class LinuxShiftWheelHScrollTests(unittest.TestCase):
     """Verify Linux REL_WHEEL is translated to REL_HWHEEL when Shift is held."""
 

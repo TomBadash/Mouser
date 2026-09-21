@@ -508,6 +508,20 @@ class BaseMouseHook:
         self._connected_device = None
         self._set_device_connected(False)
 
+    def request_divert_refresh(self, reason):
+        """Ask the HID listener to re-apply a diversion that may have lapsed.
+
+        Swallows everything: the callers are an event-tap callback and a
+        workspace notification block, neither of which may raise.
+        """
+        hg = self._hid_gesture
+        if hg is None:
+            return False
+        try:
+            return bool(hg.request_divert_refresh(reason))
+        except Exception:
+            return False
+
     def _on_hid_battery(self, level, charging):
         cb = self._battery_notify_cb
         if cb:
@@ -516,18 +530,24 @@ class BaseMouseHook:
             except Exception:
                 pass
 
-    def _on_hid_gesture_down(self):
+    # `emit` is a parameter rather than always `_dispatch` because the primary
+    # gesture control has two entry points on different threads. The HID
+    # listener thread can dispatch synchronously, but the OS-button fallback
+    # (see `_on_native_gesture_down`) runs inside the CGEventTap callback,
+    # where running a user action inline stalls the tap long enough for the
+    # system to disable it.
+    def _begin_primary_gesture(self, emit, source):
         if getattr(self, "_ui_passthrough", False):
             return
         if self._gesture_active:
             return
         self._gesture_recognizer.begin()
         self._gesture_active = True
-        self._emit_debug("HID gesture button down")
+        self._emit_debug(f"{source} gesture button down")
         self._emit_gesture_event({"type": "button_down"})
-        self._dispatch(MouseEvent(self._primary_button_down_event()))
+        emit(MouseEvent(self._primary_button_down_event()))
 
-    def _on_hid_gesture_up(self):
+    def _end_primary_gesture(self, emit, source):
         if getattr(self, "_ui_passthrough", False):
             return
         if not self._gesture_active:
@@ -539,14 +559,32 @@ class BaseMouseHook:
             was_click = False
         self._log_gesture_summary()
         self._emit_debug(
-            f"HID gesture button up click_candidate={str(was_click).lower()}"
+            f"{source} gesture button up click_candidate={str(was_click).lower()}"
         )
         self._emit_gesture_event(
             {"type": "button_up", "click_candidate": was_click}
         )
-        self._dispatch(MouseEvent(self._primary_button_up_event()))
+        emit(MouseEvent(self._primary_button_up_event()))
         if was_click:
-            self._dispatch(MouseEvent(self._primary_click_event()))
+            emit(MouseEvent(self._primary_click_event()))
+
+    def _on_hid_gesture_down(self):
+        self._begin_primary_gesture(self._dispatch, "HID")
+
+    def _on_hid_gesture_up(self):
+        self._end_primary_gesture(self._dispatch, "HID")
+
+    def _on_native_gesture_down(self):
+        """Primary gesture control pressed as a *native* OS button.
+
+        Only reachable when the HID++ divert of that control has lapsed -- a
+        diverted control never reaches the OS at all, so this and the HID path
+        are mutually exclusive and cannot double-fire.
+        """
+        self._begin_primary_gesture(self._enqueue_dispatch_event, "Native")
+
+    def _on_native_gesture_up(self):
+        self._end_primary_gesture(self._enqueue_dispatch_event, "Native")
 
     def _on_hid_gesture_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):

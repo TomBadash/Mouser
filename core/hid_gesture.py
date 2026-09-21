@@ -909,6 +909,10 @@ DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 # replays our divert across power-saving wake events without needing a
 # re-driver round trip. The constants below name the four combinations
 # this module emits so call sites no longer read like bare magic bytes.
+# Floor between accepted divert-refresh requests. The event-tap caller fires
+# on any press of a button the hook does not handle, so this bounds a
+# genuinely unmapped button to one setCidReporting round per interval.
+_DIVERT_REFRESH_MIN_INTERVAL_S = 10.0
 _DIVERT_BUTTON_ONLY = 0x03  # 0x01 | 0x02       -- divert as button click
 _DIVERT_RAW_XY      = 0x33  # 0x01 | 0x02 | 0x10 | 0x20 -- divert + rawXY
 _UNDIVERT_BUTTON    = 0x02  # 0x02 only         -- revert button-only divert
@@ -1110,6 +1114,8 @@ class HidGestureListener:
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
         self._reconnect_requested = False
+        self._divert_refresh_requested = False
+        self._last_divert_refresh = 0.0
         # signature -> monotonic deadline; see _REPROG_ABSENT_COOLDOWN_S.
         self._reprog_absent_until = {}
         self._pending_battery = None
@@ -1678,8 +1684,10 @@ class HidGestureListener:
 
         Why per-CID? On MX Master 4 the sense panel (0x01A0) is the
         primary gesture CID and benefits from rawXY (the firmware then
-        delivers swipe motion over the vendor channel and pins the cursor
-        on its own). The small button (0x00C3) is the thumb_button CID and
+        reports whole-mouse displacement over the vendor channel while the
+        button is held, and pins the cursor on its own -- this control is a
+        haptic button, not a touch surface, so there is no finger movement
+        involved). The small button (0x00C3) is the thumb_button CID and
         gets diverted button-only as an extra elsewhere -- but if 0x01A0
         divert is rejected we fall back to 0x00C3 as the gesture CID, and
         then we want it button-only so the cursor doesn't freeze every
@@ -1844,6 +1852,61 @@ class HidGestureListener:
             if cid == self._thumb_button_cid:
                 self._thumb_button_cid = None
             self._extra_diverts.pop(cid, None)
+
+    def request_divert_refresh(self, reason="unspecified"):
+        """Ask the listener loop to re-apply the diversion it already chose.
+
+        ``setCidReporting`` is volatile device-side state: a mouse that sleeps
+        deeply and re-establishes its link comes back *undiverted*, and then
+        reports the Actions Ring as a plain OS button instead of a HID++
+        notification. The firmware announces none of this, and the sleep
+        branch in ``_main_loop`` only notices when a request happens to time
+        out -- the sole periodic request is a 30-minute battery poll, so most
+        lapses go unseen and the control stays dead until the app restarts.
+
+        Callers therefore signal it from the two points where it is
+        observable: an OS wake notification, and an undiverted press arriving
+        at the event tap.
+
+        Rate-limited, because the event-tap caller fires on every press of a
+        button the hook does not otherwise handle -- a genuinely unmapped
+        button must not become a stream of ``setCidReporting`` writes.
+        Returns True when the request was accepted.
+        """
+        now = time.monotonic()
+        if now - self._last_divert_refresh < _DIVERT_REFRESH_MIN_INTERVAL_S:
+            return False
+        self._last_divert_refresh = now
+        print(f"[HidGesture] Divert refresh requested ({reason})")
+        self._divert_refresh_requested = True
+        return True
+
+    def _redivert_current(self):
+        """Re-apply the diversion negotiated at connect, on the listener thread.
+
+        Deliberately *not* ``_divert()`` + ``_divert_extras()``: those pick the
+        gesture CID from ``_gesture_candidates`` and drop extras whose
+        ``setCidReporting`` fails. A single timeout is unremarkable on a
+        just-woken device, and it must not demote the gesture CID or discard a
+        user's binding for the rest of the session. Here the choices are
+        already made, so re-send exactly them.
+        """
+        if self._feat_idx is None or self._dev is None:
+            return False
+        # A held control proves the device is still diverted and talking to
+        # us, so there is nothing to repair -- and re-arming mid-hold would
+        # strip rawXY ownership from an in-flight swipe.
+        if self._held or any(i["held"] for i in self._extra_diverts.values()):
+            return False
+        flags = _DIVERT_RAW_XY if self._rawxy_enabled else _DIVERT_BUTTON_ONLY
+        ok = self._set_cid_reporting(self._gesture_cid, flags) is not None
+        print(f"[HidGesture] Re-divert {_format_cid(self._gesture_cid)}: "
+              f"{'OK' if ok else 'FAILED'}")
+        for cid in list(self._extra_diverts.keys()):
+            if self._set_cid_reporting(cid, _DIVERT_BUTTON_ONLY) is None:
+                ok = False
+                print(f"[HidGesture] Re-divert extra {_format_cid(cid)}: FAILED")
+        return ok
 
     def _undivert(self):
         """Restore default button behaviour (best-effort).
@@ -3382,6 +3445,11 @@ class HidGestureListener:
                                     pass
                             print("[HidGesture] Device woke from sleep")
                             self._on_report(raw)
+                            # A device that slept through a link teardown comes
+                            # back undiverted; re-arm before the user's next
+                            # press falls through as a native OS button.
+                            self._divert_refresh_requested = False
+                            self._redivert_current()
                         continue
 
                     # Apply any queued DPI command
@@ -3400,6 +3468,9 @@ class HidGestureListener:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
+                    if self._divert_refresh_requested:
+                        self._divert_refresh_requested = False
+                        self._redivert_current()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
@@ -3463,6 +3534,9 @@ class HidGestureListener:
             self._rawxy_enabled = False
             self._connected_device_info = None
             self._reconnect_requested = False
+            # A fresh connect runs _divert() anyway; drop any stale request so
+            # it cannot re-arm the defaults this teardown just reset.
+            self._divert_refresh_requested = False
             if self._connected:
                 self._connected = False
                 if self._on_disconnect:

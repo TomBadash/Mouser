@@ -42,6 +42,11 @@ def _autoreleased(fn):
 _BTN_MIDDLE = 2
 _BTN_BACK = 3
 _BTN_FORWARD = 4
+# Native button number the MX Master 4 reports for the Actions Ring when its
+# HID++ divert is not in force. Only ever observed on a device whose spec sets
+# `gesture_via_sense_panel`; see that field in core/logi_devices.py, which has
+# always promised this fallback.
+_BTN_SENSE_PANEL = 6
 # Quartz other-button number -> per-button slide-gesture owner name (the config
 # button keys back/forward/middle map to).
 _BTN_TO_GESTURE_OWNER = {
@@ -213,6 +218,20 @@ class MouseHook(BaseMouseHook):
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, inverted)
         return True
 
+    def _is_undiverted_sense_press(self, btn):
+        """True when `btn` is the Actions Ring arriving as a native OS button.
+
+        Gated on the connected device actually routing its primary gesture
+        through the Sense Panel, so no other mouse's button 6 is captured.
+        `_ui_passthrough` is excluded because the UI is then capturing raw
+        input for a binding and must see the press itself.
+        """
+        return (
+            btn == _BTN_SENSE_PANEL
+            and self._gesture_via_sense_panel
+            and not getattr(self, "_ui_passthrough", False)
+        )
+
     def _emit_gesture_swipe(self, mouse_event):
         self._enqueue_dispatch_event(mouse_event)
 
@@ -337,6 +356,14 @@ class MouseHook(BaseMouseHook):
                     # Armed as a gesture pad -- swallow the press; motion feeds
                     # the recognizer and the release resolves it.
                     return None
+                if self._is_undiverted_sense_press(btn):
+                    # The Actions Ring only reaches the tap as a native button
+                    # when its HID++ divert has lapsed -- ask the listener to
+                    # re-arm it, and serve this press from here meanwhile so
+                    # the user's binding still fires.
+                    self.request_divert_refresh("undiverted sense press")
+                    self._on_native_gesture_down()
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
                     should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
@@ -361,6 +388,9 @@ class MouseHook(BaseMouseHook):
                         and self._button_gesture_active_owner == owner):
                     # owner-button up while armed -> resolve and swallow.
                     self.release_button_gesture(owner)
+                    return None
+                if self._is_undiverted_sense_press(btn):
+                    self._on_native_gesture_up()
                     return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
@@ -506,6 +536,9 @@ class MouseHook(BaseMouseHook):
                     f"{'OK' if ok else 'FAILED — may need restart'}",
                     flush=True,
                 )
+            # A sleep long enough to re-enable the tap is also long enough for
+            # the mouse to have dropped its link and come back undiverted.
+            self.request_divert_refresh(reason)
             if hg and reconnect:
                 hg.force_reconnect()
 
