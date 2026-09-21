@@ -1,0 +1,28 @@
+"""Minimal process dispatcher that avoids importing Qt in the macOS daemon."""
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    if sys.platform == "darwin" and "--settings-process" not in sys.argv:
+        if "--ring-process" in sys.argv:
+            from ui.actions_ring_worker import main as worker_main
+
+            return worker_main()
+        if "--screenshot-process" in sys.argv:
+            from ui.screenshot_worker import main as worker_main
+
+            return worker_main()
+        if "--mouser-apply-update" not in sys.argv:
+            from core.macos_daemon import main as daemon_main
+
+            return daemon_main()
+
+    from main_qml import main as qt_main
+
+    return qt_main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

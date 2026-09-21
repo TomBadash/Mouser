@@ -279,15 +279,15 @@ ApplicationWindow {
                 id: mousePageView
             }
             Loader {
-                active: root.currentPage === 1 || item
+                active: root.currentPage === 1
                 source: "ScrollPage.qml"
             }
             Loader {
-                active: (root.currentPage === 2 || item) && backend.hapticSupported
+                active: root.currentPage === 2 && backend.hapticSupported
                 source: "HapticPage.qml"
             }
             Loader {
-                active: (root.currentPage === 3 || item) && backend.deviceHasActionsRing && backend.actionsRingActive
+                active: root.currentPage === 3 && backend.deviceHasActionsRing && backend.actionsRingActive
                 source: "ActionsRingConfig.qml"
             }
         }
@@ -663,12 +663,17 @@ ApplicationWindow {
         if (!root.visible) {
             return
         }
+        if (standaloneSettingsProcess) {
+            Qt.quit()
+            return
+        }
         root.hide()
     }
 
     onClosing: function(close) {
-        close.accepted = false
-        root.dismiss()
+        close.accepted = standaloneSettingsProcess
+        if (!standaloneSettingsProcess)
+            root.dismiss()
     }
 
     // LSUIElement apps have no platform menu bar binding StandardKey.Close to Cmd-W, and

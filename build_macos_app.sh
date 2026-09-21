@@ -153,6 +153,7 @@ run_pyinstaller() {
 
 sign_ad_hoc() {
   echo "Signing mode: ad-hoc"
+  xattr -cr "$ROOT_DIR/dist/Mouser.app"
   codesign --force --deep --sign - "$ROOT_DIR/dist/Mouser.app"
 }
 

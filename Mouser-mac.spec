@@ -11,6 +11,7 @@ environment supports it:
 
 import os
 import json
+import shutil
 import subprocess
 
 ROOT = os.path.abspath(".")
@@ -92,8 +93,8 @@ def _write_build_info(version: str) -> str:
 APP_VERSION = _load_app_version()
 BUILD_INFO_DATA = _write_build_info(APP_VERSION)
 
-a = Analysis(
-    ["main_qml.py"],
+ui_analysis = Analysis(
+    ["mouser_ui_launcher.py"],
     pathex=[ROOT],
     binaries=[],
     datas=[
@@ -265,18 +266,99 @@ def is_unwanted(path_or_toc_entry):
     return False
 
 # Filter Analysis.toc lists (binaries and datas)
-a.binaries = [b for b in a.binaries if not is_unwanted(b)]
-a.datas = [d for d in a.datas if not is_unwanted(d)]
+ui_analysis.binaries = [b for b in ui_analysis.binaries if not is_unwanted(b)]
+ui_analysis.datas = [d for d in ui_analysis.datas if not is_unwanted(d)]
 
-pyz = PYZ(a.pure)
+ui_pyz = PYZ(ui_analysis.pure)
 
 exe_kwargs = {}
 if TARGET_ARCH:
     exe_kwargs["target_arch"] = TARGET_ARCH
 
-exe = EXE(
-    pyz,
-    a.scripts,
+ui_exe = EXE(
+    ui_pyz,
+    ui_analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="MouserUI",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    icon=ICON_PATH,
+    **exe_kwargs,
+)
+
+ui_coll = COLLECT(
+    ui_exe,
+    ui_analysis.binaries,
+    ui_analysis.zipfiles,
+    ui_analysis.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="MouserUI",
+)
+
+ui_app = BUNDLE(
+    ui_coll,
+    name="MouserUI.app",
+    icon=ICON_PATH,
+    bundle_identifier=f"{BUNDLE_ID}.ui",
+    info_plist={
+        "CFBundleDisplayName": "Mouser UI",
+        "CFBundleName": "MouserUI",
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
+        "LSMinimumSystemVersion": "12.0",
+        "LSUIElement": True,
+        "NSHighResolutionCapable": True,
+    },
+)
+
+daemon_analysis = Analysis(
+    ["mouser_daemon_launcher.py"],
+    pathex=[ROOT],
+    binaries=[],
+    datas=[
+        (os.path.join(ROOT, "images"), "images"),
+        (BUILD_INFO_DATA, "."),
+    ],
+    hiddenimports=["hid", "logging.handlers"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        "PySide6",
+        "main_qml",
+        "ui.actions_ring_overlay",
+        "ui.actions_ring_worker",
+        "ui.screenshot_worker",
+        "unittest",
+        "xmlrpc",
+        "pydoc",
+        "doctest",
+        "tkinter",
+        "test",
+        "distutils",
+        "setuptools",
+        "ensurepip",
+        "lib2to3",
+        "idlelib",
+        "turtledemo",
+        "turtle",
+        "sqlite3",
+        "multiprocessing",
+    ],
+    noarchive=False,
+)
+
+daemon_pyz = PYZ(daemon_analysis.pure)
+
+daemon_exe = EXE(
+    daemon_pyz,
+    daemon_analysis.scripts,
     [],
     exclude_binaries=True,
     name="Mouser",
@@ -289,11 +371,11 @@ exe = EXE(
     **exe_kwargs,
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
+daemon_coll = COLLECT(
+    daemon_exe,
+    daemon_analysis.binaries,
+    daemon_analysis.zipfiles,
+    daemon_analysis.datas,
     strip=False,
     upx=False,
     upx_exclude=[],
@@ -301,7 +383,7 @@ coll = COLLECT(
 )
 
 app = BUNDLE(
-    coll,
+    daemon_coll,
     name="Mouser.app",
     icon=ICON_PATH,
     bundle_identifier=BUNDLE_ID,
@@ -314,4 +396,15 @@ app = BUNDLE(
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
     },
+)
+
+ui_helper_destination = os.path.join(
+    ROOT, "dist", "Mouser.app", "Contents", "Helpers", "MouserUI.app"
+)
+if os.path.exists(ui_helper_destination):
+    shutil.rmtree(ui_helper_destination)
+shutil.copytree(
+    os.path.join(ROOT, "dist", "MouserUI.app"),
+    ui_helper_destination,
+    symlinks=True,
 )
