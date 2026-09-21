@@ -1514,6 +1514,44 @@ class MacOSUndivertedSensePressTests(unittest.TestCase):
         self.assertFalse(hook._native_gesture_active)
         hook._hid_gesture.set_native_hold.assert_called_with(False)
 
+    def test_tap_disabled_mid_press_leaves_the_button_usable(self):
+        # Dropping the hold flag alone is not enough: `_gesture_active` is what
+        # gates the next press, so left set it kills the button outright until
+        # the app restarts -- the failure this whole fallback exists to fix.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self._drain(hook)
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        # The hold is resolved, not merely forgotten.
+        self.assertFalse(hook._gesture_active)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.SENSE_BUTTON_UP])
+
+        # And the next press opens a fresh one.
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertTrue(hook._gesture_active)
+        self.assertTrue(hook._native_gesture_active)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.SENSE_BUTTON_DOWN])
+
+    def test_tap_disabled_with_no_press_in_flight_resolves_nothing(self):
+        # The tap is disabled far more often than it is disabled mid-press;
+        # a stray SENSE_UP on every such event would fire the ring's selection.
+        hook = self._hook()
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        self.assertEqual(self._drain(hook), [])
+
     def test_ordinary_back_button_is_unaffected(self):
         hook = self._hook()
 

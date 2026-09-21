@@ -278,11 +278,11 @@ class MouseHook(BaseMouseHook):
                 # A pending owner-gesture release may have been dropped while
                 # the tap was disabled -- abort it so the cursor can't freeze.
                 self.abort_button_gesture("tap_disabled")
-                # Same for a native primary-gesture hold: its release is gone
-                # too. Only the hold flag is dropped here, but that is the
-                # part that must not strand -- left set it blocks every later
-                # re-arm of the divert for the rest of the session.
-                self._set_native_gesture_hold(False)
+                # Same for a native primary-gesture hold -- and it has to be a
+                # full abort, not just dropping the hold flag: `_gesture_active`
+                # gates the next press, so leaving it set kills the button
+                # outright, which is the failure this fallback exists to fix.
+                self._abort_native_gesture("tap_disabled")
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 

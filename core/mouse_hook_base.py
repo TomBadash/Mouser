@@ -552,7 +552,7 @@ class BaseMouseHook:
         emit(MouseEvent(self._primary_button_down_event()))
         return True
 
-    def _end_primary_gesture(self, emit, source):
+    def _end_primary_gesture(self, emit, source, allow_click=True):
         """Close a primary-gesture hold. Returns whether one was open."""
         if getattr(self, "_ui_passthrough", False):
             return False
@@ -560,6 +560,12 @@ class BaseMouseHook:
             return False
         self._gesture_active = False
         was_click = self._gesture_recognizer.end()
+        if not allow_click:
+            # Nobody let go, so a motionless hold is not a click -- and the
+            # recognizer calls every motionless hold one. See
+            # `_abort_native_gesture`, whose whole reason for existing is that
+            # firing the bound action here would be a press the user never made.
+            was_click = False
         hg = self._hid_gesture
         if was_click and hg and getattr(hg, "extra_held_during_gesture", False):
             was_click = False
@@ -616,6 +622,25 @@ class BaseMouseHook:
         # the caller only asks for the re-arm once both of these have returned.
         self._set_native_gesture_hold(False)
         self._end_primary_gesture(self._enqueue_dispatch_event, "Native")
+
+    def _abort_native_gesture(self, reason):
+        """Close a native hold whose release will never arrive.
+
+        The counterpart to `abort_button_gesture`, for the primary control. It
+        has to close the hold rather than just forget it: `_gesture_active`
+        gates the *next* press, so a stranded one kills the button outright
+        until the app restarts -- the failure the native fallback exists to
+        prevent. The release is suppressed as a click, because the user never
+        let go and the recognizer scores every motionless hold as one.
+        """
+        if not self._native_gesture_active:
+            return False
+        self._set_native_gesture_hold(False)
+        self._end_primary_gesture(
+            self._enqueue_dispatch_event, "Native", allow_click=False
+        )
+        self._emit_debug(f"Native gesture aborted reason={reason}")
+        return True
 
     def _on_hid_gesture_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):
