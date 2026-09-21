@@ -186,6 +186,71 @@ class ControllerStateMachineTests(unittest.TestCase):
         self.hide_ring_cb.assert_called()
         self.execute_cb.assert_not_called()
 
+    def test_a_cancel_racing_the_hold_timer_still_hides_the_ring(self):
+        # The hold timer sets SHOWING_HELD under the lock and then shows the
+        # ring outside it. A cancel landing in that gap used to hide a ring
+        # that had not been shown yet, and the show then ran anyway -- leaving
+        # it on screen with the controller IDLE, so nothing would ever take it
+        # down. The tap can be disabled at any instant, so the two really can
+        # coincide.
+        ctrl = self._make_controller()
+        calls = []
+        show_started = threading.Event()
+        release_show = threading.Event()
+
+        def blocking_show(slots, interactive):
+            show_started.set()
+            release_show.wait(2.0)
+            calls.append("show")
+
+        ctrl._show_ring_cb = blocking_show
+        ctrl._hide_ring_cb = lambda: calls.append("hide")
+
+        timer_thread = threading.Thread(target=ctrl._on_hold_triggered)
+        ctrl._state = ActionsRingController.WAITING
+        timer_thread.start()
+        self.assertTrue(show_started.wait(2.0), "show callback never ran")
+
+        # Let the show finish while the cancel is in flight, so the test fails
+        # rather than hangs if the two are not serialised.
+        threading.Timer(0.05, release_show.set).start()
+        ctrl.cancel()
+        timer_thread.join(2.0)
+
+        self.assertEqual(calls, ["show", "hide"])
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+
+    def test_a_slow_action_does_not_block_the_next_press(self):
+        # The selected action runs outside the ordering lock on purpose: it is
+        # the user's own binding and can take as long as it likes. Run it
+        # inside, and the press that follows waits for Mission Control to
+        # finish animating before the ring will even arm.
+        ctrl = self._make_controller()
+        executing = threading.Event()
+        release = threading.Event()
+        self.execute_cb.side_effect = lambda _a: (
+            executing.set(), release.wait(2.0)
+        )
+
+        ctrl._state = ActionsRingController.SHOWING_HELD
+        ctrl._current_sector = 1
+        selecting = threading.Thread(target=ctrl.on_button_up)
+        selecting.start()
+        try:
+            self.assertTrue(executing.wait(2.0), "action never started")
+            next_press = threading.Thread(target=ctrl.on_button_down)
+            next_press.start()
+            next_press.join(1.0)
+            self.assertFalse(
+                next_press.is_alive(),
+                "the next press blocked behind the running action",
+            )
+            self.assertEqual(ctrl.state, ActionsRingController.WAITING)
+        finally:
+            release.set()
+            selecting.join(2.0)
+            ctrl.shutdown()
+
     # -- T-2.1: Initial state ---------------------------------------------
 
     def test_initial_state_is_idle(self):
