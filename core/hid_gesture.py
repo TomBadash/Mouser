@@ -395,6 +395,13 @@ if sys.platform == "darwin":
         ]
         _iokit.IOHIDDeviceGetReport.argtypes = [c_void_p, c_int, c_long, POINTER(c_uint8), POINTER(c_long)]
         _iokit.IOHIDDeviceGetReport.restype = c_int
+        # IOHIDCallback: void (*)(void *context, IOReturn result, void *sender)
+        _IOHID_CALLBACK = ctypes.CFUNCTYPE(None, c_void_p, c_int, c_void_p)
+        _iokit.IOHIDDeviceRegisterRemovalCallback.argtypes = [
+            c_void_p,
+            _IOHID_CALLBACK,
+            c_void_p,
+        ]
 
         _K_CF_NUMBER_SINT32 = 3
         _K_CF_STRING_ENCODING_UTF8 = 0x08000100
@@ -497,6 +504,8 @@ if _MAC_NATIVE_OK:
             self._run_loop = None
             self._input_buffer = None
             self._report_callback = None
+            self._removal_callback = None
+            self._removed = False
             self._report_queue = queue.Queue()
 
         @staticmethod
@@ -696,6 +705,19 @@ if _MAC_NATIVE_OK:
                 self._report_callback,
                 None,
             )
+            # Without this, a BLE link drop leaves read() returning empty
+            # forever on a dead handle: the mouse comes back as a new
+            # IOHIDDevice and Mouser never notices until relaunched.
+            self._removed = False
+            self._removal_callback = _IOHID_CALLBACK(self._on_removed)
+            _iokit.IOHIDDeviceRegisterRemovalCallback(
+                self._device,
+                self._removal_callback,
+                None,
+            )
+
+        def _on_removed(self, _context, _result, _sender):
+            self._removed = True
 
         def _describe_match_failure(self):
             parts = [f"PID 0x{self._product_id:04X}"]
@@ -738,6 +760,7 @@ if _MAC_NATIVE_OK:
             self._run_loop = None
             self._input_buffer = None
             self._report_callback = None
+            self._removal_callback = None
             self._report_queue = queue.Queue()
 
         def set_nonblocking(self, _enabled):
@@ -768,11 +791,16 @@ if _MAC_NATIVE_OK:
             except Exception:
                 pass
 
+        def _raise_if_removed(self):
+            if self._removed:
+                raise OSError("IOHIDDevice removed")
+
         def read(self, _size, timeout_ms=0):
             try:
                 return self._report_queue.get_nowait()
             except queue.Empty:
                 pass
+            self._raise_if_removed()
 
             deadline = None
             if timeout_ms and timeout_ms > 0:
@@ -799,6 +827,7 @@ if _MAC_NATIVE_OK:
                 try:
                     return self._report_queue.get_nowait()
                 except queue.Empty:
+                    self._raise_if_removed()
                     if deadline is not None:
                         continue
                     return b""

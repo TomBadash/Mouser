@@ -1324,5 +1324,27 @@ class HidReconnectStormTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 0.5)
 
 
+@unittest.skipUnless(
+    hasattr(hid_gesture, "_MacNativeHidDevice"),
+    "native IOKit backend is macOS-only",
+)
+class MacNativeRemovalTests(unittest.TestCase):
+    def test_read_raises_once_device_is_removed(self):
+        dev = hid_gesture._MacNativeHidDevice(0xB042)
+        dev._on_removed(None, 0, None)
+
+        with self.assertRaises(OSError):
+            dev.read(64, 0)
+
+    def test_queued_reports_are_delivered_before_removal_error(self):
+        dev = hid_gesture._MacNativeHidDevice(0xB042)
+        dev._report_queue.put_nowait(b"\x11\xff")
+        dev._on_removed(None, 0, None)
+
+        self.assertEqual(dev.read(64, 0), b"\x11\xff")
+        with self.assertRaises(OSError):
+            dev.read(64, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
