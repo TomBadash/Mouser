@@ -340,7 +340,7 @@ class Engine:
                     self.hook.register(down_evt,
                                        lambda e, r=ring: r.on_button_down())
                     self.hook.register(up_evt,
-                                       lambda e, r=ring: self._on_ring_button_up(r))
+                                       lambda e, r=ring: self._on_ring_button_up(r, e))
                 else:
                     hold_events = BUTTON_HOLD_EVENTS.get(btn_key)
                     if hold_events:
@@ -350,7 +350,7 @@ class Engine:
                         self.hook.register(down_evt,
                                            lambda e, r=ring: r.on_button_down())
                         self.hook.register(up_evt,
-                                           lambda e, r=ring: self._on_ring_button_up(r))
+                                           lambda e, r=ring: self._on_ring_button_up(r, e))
                         for evt_type in events:
                             self.hook.block(evt_type)
                     else:
@@ -1017,10 +1017,16 @@ class Engine:
             except Exception as exc:
                 print(f"[Engine] ring hide callback error: {exc}")
 
-    def _on_ring_button_up(self, ring=None):
+    def _on_ring_button_up(self, ring=None, event=None):
         """Handle actions_ring_up — pass current sector from overlay to controller."""
         ring = ring or self._ring
         if not ring:
+            return
+        # A release the hook synthesised because it lost the real one is not a
+        # selection. See `MouseHook._abort_native_gesture`.
+        raw = getattr(event, "raw_data", None) or {}
+        if raw.get("cancelled"):
+            ring.cancel()
             return
         sector = None
         if self._ring_sector_cb:

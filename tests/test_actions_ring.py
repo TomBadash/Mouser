@@ -2,7 +2,8 @@ import math
 import time
 import threading
 import unittest
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from core.actions_ring import ActionsRingController, angle_to_sector, DEAD_ZONE_RADIUS
 
@@ -152,6 +153,103 @@ class ControllerStateMachineTests(unittest.TestCase):
             hide_ring_cb=self.hide_ring_cb,
             get_cursor_pos_cb=self.get_cursor_pos_cb,
         )
+
+    # -- Cancelling a hold whose release was lost --------------------------
+
+    def test_cancel_during_the_hold_delay_does_not_open_the_ring(self):
+        # The event tap can be disabled by the system mid-press, losing the
+        # release. Routed through on_button_up this reads as a quick tap and
+        # leaves a ring on screen the user never asked for.
+        ctrl = self._make_controller()
+        ctrl.on_button_down()
+        self.assertEqual(ctrl.state, ActionsRingController.WAITING)
+
+        ctrl.cancel()
+
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+        self.show_ring_cb.assert_not_called()
+        self.execute_cb.assert_not_called()
+
+        # The hold timer went with it, so nothing opens a moment later either.
+        time.sleep(self.HOLD_MS / 1000.0 * 2)
+        self.show_ring_cb.assert_not_called()
+
+    def test_cancel_with_the_ring_held_selects_nothing(self):
+        ctrl = self._make_controller()
+        ctrl.on_button_down()
+        time.sleep(self.HOLD_MS / 1000.0 * 1.5)
+        self.assertEqual(ctrl.state, ActionsRingController.SHOWING_HELD)
+
+        ctrl.cancel()
+
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+        self.hide_ring_cb.assert_called()
+        self.execute_cb.assert_not_called()
+
+    def test_a_cancel_racing_the_hold_timer_still_hides_the_ring(self):
+        # The hold timer sets SHOWING_HELD under the lock and then shows the
+        # ring outside it. A cancel landing in that gap used to hide a ring
+        # that had not been shown yet, and the show then ran anyway -- leaving
+        # it on screen with the controller IDLE, so nothing would ever take it
+        # down. The tap can be disabled at any instant, so the two really can
+        # coincide.
+        ctrl = self._make_controller()
+        calls = []
+        show_started = threading.Event()
+        release_show = threading.Event()
+
+        def blocking_show(slots, interactive):
+            show_started.set()
+            release_show.wait(2.0)
+            calls.append("show")
+
+        ctrl._show_ring_cb = blocking_show
+        ctrl._hide_ring_cb = lambda: calls.append("hide")
+
+        timer_thread = threading.Thread(target=ctrl._on_hold_triggered)
+        ctrl._state = ActionsRingController.WAITING
+        timer_thread.start()
+        self.assertTrue(show_started.wait(2.0), "show callback never ran")
+
+        # Let the show finish while the cancel is in flight, so the test fails
+        # rather than hangs if the two are not serialised.
+        threading.Timer(0.05, release_show.set).start()
+        ctrl.cancel()
+        timer_thread.join(2.0)
+
+        self.assertEqual(calls, ["show", "hide"])
+        self.assertEqual(ctrl.state, ActionsRingController.IDLE)
+
+    def test_a_slow_action_does_not_block_the_next_press(self):
+        # The selected action runs outside the ordering lock on purpose: it is
+        # the user's own binding and can take as long as it likes. Run it
+        # inside, and the press that follows waits for Mission Control to
+        # finish animating before the ring will even arm.
+        ctrl = self._make_controller()
+        executing = threading.Event()
+        release = threading.Event()
+        self.execute_cb.side_effect = lambda _a: (
+            executing.set(), release.wait(2.0)
+        )
+
+        ctrl._state = ActionsRingController.SHOWING_HELD
+        ctrl._current_sector = 1
+        selecting = threading.Thread(target=ctrl.on_button_up)
+        selecting.start()
+        try:
+            self.assertTrue(executing.wait(2.0), "action never started")
+            next_press = threading.Thread(target=ctrl.on_button_down)
+            next_press.start()
+            next_press.join(1.0)
+            self.assertFalse(
+                next_press.is_alive(),
+                "the next press blocked behind the running action",
+            )
+            self.assertEqual(ctrl.state, ActionsRingController.WAITING)
+        finally:
+            release.set()
+            selecting.join(2.0)
+            ctrl.shutdown()
 
     # -- T-2.1: Initial state ---------------------------------------------
 
@@ -608,6 +706,229 @@ class ControllerThreadingTests(unittest.TestCase):
         self.assertEqual(shutdown_errors, [])
         self.assertEqual(ctrl.state, ActionsRingController.IDLE)
         hide_ring_cb.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Engine routing of a cancelled release
+# ---------------------------------------------------------------------------
+
+class EngineCancelledReleaseTests(unittest.TestCase):
+    """The hook synthesises a button-up when it loses the real one to a
+    disabled event tap. The engine has to tell that apart from a release the
+    user made, or a system hiccup selects a sector or opens the ring."""
+
+    def _route(self, raw_data):
+        """Run `_on_ring_button_up` unbound; a whole Engine is not needed."""
+        from core.engine import Engine
+
+        ring = Mock()
+        engine = SimpleNamespace(
+            _ring=ring, _ring_sector_cb=Mock(return_value=2)
+        )
+        event = SimpleNamespace(raw_data=raw_data)
+        Engine._on_ring_button_up(engine, ring, event)
+        return ring
+
+    def test_a_cancelled_release_selects_nothing(self):
+        ring = self._route({"cancelled": True})
+
+        ring.cancel.assert_called_once()
+        ring.on_button_up.assert_not_called()
+
+    def test_a_real_release_still_selects_the_overlay_sector(self):
+        ring = self._route(None)
+
+        ring.on_button_up.assert_called_once_with(sector_override=2)
+        ring.cancel.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Overlay steering source (rawXY vs cursor)
+# ---------------------------------------------------------------------------
+
+class OverlaySteeringSourceTests(unittest.TestCase):
+    """A held ring steers on HID++ rawXY, which only arrives while the
+    control's divert is in force. When the divert has lapsed and the press is
+    being served from the event tap instead, no delta ever arrives -- the
+    offset stays at its (0, 0) seed, every sector resolves to the dead zone,
+    and the ring opens and closes having selected nothing. It has to fall back
+    to the cursor, which follows the same physical motion."""
+
+    def _steer(self, offset, seen, cursor_sector=3):
+        """Run `_steer_sector` against a stand-in for the overlay.
+
+        Called unbound, because a real ActionsRingOverlay needs a
+        QApplication and a window and neither takes any part in choosing the
+        motion source. Returns (sector, stub) so a test can check which source
+        was consulted.
+        """
+        from ui import actions_ring_overlay
+
+        stub = SimpleNamespace(
+            _rawxy_offset=offset,
+            _rawxy_seen=seen,
+            _slot_labels=["a", "b", "c", "d"],
+            _cursor_to_sector=Mock(return_value=cursor_sector),
+        )
+        with patch.object(actions_ring_overlay, "QCursor") as cursor:
+            cursor.pos.return_value = object()
+            sector = actions_ring_overlay.ActionsRingOverlay._steer_sector(stub)
+        return sector, stub
+
+    def test_rawxy_steers_once_a_delta_has_arrived(self):
+        sector, stub = self._steer(offset=(0, -200), seen=True)
+
+        # Straight up, four slots -> sector 0, and the cursor is not consulted.
+        self.assertEqual(sector, 0)
+        stub._cursor_to_sector.assert_not_called()
+
+    def test_cursor_steers_while_the_divert_is_down(self):
+        # The regression: seeded offset, no rawXY, so the accumulated value is
+        # a meaningless (0, 0) that would resolve to the dead zone forever.
+        sector, stub = self._steer(offset=(0, 0), seen=False)
+
+        self.assertEqual(sector, 3)
+        stub._cursor_to_sector.assert_called_once()
+
+    def test_interactive_mode_still_steers_on_the_cursor(self):
+        sector, stub = self._steer(offset=None, seen=False)
+
+        self.assertEqual(sector, 3)
+        stub._cursor_to_sector.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Overlay steering lifecycle (wiring and the per-ring reset)
+# ---------------------------------------------------------------------------
+
+class OverlaySteeringLifecycleTests(unittest.TestCase):
+    """`_steer_sector` only matters if the tick actually asks it, and if the
+    flag it keys on is cleared per ring. A flag left set from a ring that did
+    receive rawXY would send the next one back to steering on a stale offset,
+    which is the dead-zone bug again with an extra step."""
+
+    def _stub(self, cursor_sector=3, **overrides):
+        """A stand-in with just the attributes the tick and show path touch.
+
+        The real methods are called unbound against it: a live overlay needs a
+        QApplication and a window, and neither takes any part in choosing the
+        motion source or in resetting the flag.
+        """
+        stub = SimpleNamespace(
+            _rawxy_offset=(0, 0),
+            _rawxy_seen=False,
+            _slot_labels=["a", "b", "c", "d"],
+            _cursor_to_sector=Mock(return_value=cursor_sector),
+            _tick_count=0,
+            _target_sector=-1,
+            _highlighted_sector=-1,
+            _interactive=False,
+            _appear_progress=1.0,
+            _sector_reveal=[1.0] * 4,
+            _sector_alphas=[0.0] * 4,
+            _pulse_phase=0.0,
+            _dismiss_progress=-1.0,
+            _dismiss_step=0,
+            _ring_diameter=220,
+            _center=None,
+            _tick_timer=Mock(),
+            sector_changed=Mock(),
+            update=Mock(),
+            hide=Mock(),
+            show=Mock(),
+            raise_=Mock(),
+            setFixedSize=Mock(),
+            move=Mock(),
+        )
+        stub._steer_sector = lambda: self._overlay._steer_sector(stub)
+        for k, v in overrides.items():
+            setattr(stub, k, v)
+        return stub
+
+    @property
+    def _overlay(self):
+        from ui.actions_ring_overlay import ActionsRingOverlay
+
+        return ActionsRingOverlay
+
+    def _tick(self, stub):
+        from ui import actions_ring_overlay
+
+        with patch.object(actions_ring_overlay, "QCursor") as cursor:
+            cursor.pos.return_value = object()
+            actions_ring_overlay.ActionsRingOverlay._on_tick(stub)
+
+    def _show(self, stub, interactive=False):
+        from ui import actions_ring_overlay
+
+        # No screen, so the clamp falls through to the unclamped position --
+        # geometry is not what this is testing.
+        with patch.object(actions_ring_overlay, "QApplication") as app, \
+                patch.object(actions_ring_overlay, "QCursor"):
+            app.screenAt.return_value = None
+            app.screens.return_value = []
+            actions_ring_overlay.ActionsRingOverlay.show_ring(
+                stub, 100, 100, ["a", "b", "c", "d"], interactive=interactive
+            )
+
+    def test_the_tick_takes_its_sector_from_the_steering_source(self):
+        # Straight up on rawXY is sector 0; the cursor would say 3. Catches a
+        # revert to polling the cursor unconditionally.
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._tick(stub)
+
+        self.assertEqual(stub._target_sector, 0)
+        stub.sector_changed.emit.assert_called_once_with(0)
+        stub._cursor_to_sector.assert_not_called()
+
+    def test_the_tick_falls_back_to_the_cursor_with_no_rawxy(self):
+        stub = self._stub(_rawxy_offset=(0, 0), _rawxy_seen=False)
+
+        self._tick(stub)
+
+        self.assertEqual(stub._target_sector, 3)
+        stub.sector_changed.emit.assert_called_once_with(3)
+
+    def test_opening_a_ring_clears_a_flag_left_by_the_previous_one(self):
+        # Previous ring was diverted and steered fine; this one is being
+        # served from the event tap, so no delta will ever arrive.
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._show(stub)
+
+        self.assertEqual(stub._rawxy_offset, (0, 0))
+        self.assertFalse(stub._rawxy_seen)
+
+        self._tick(stub)
+        self.assertEqual(stub._target_sector, 3)
+
+    def test_an_interactive_ring_opens_with_no_rawxy_source_at_all(self):
+        stub = self._stub(_rawxy_offset=(0, -200), _rawxy_seen=True)
+
+        self._show(stub, interactive=True)
+
+        self.assertIsNone(stub._rawxy_offset)
+        self.assertFalse(stub._rawxy_seen)
+
+    def test_the_flag_is_cleared_again_when_the_ring_finishes_dismissing(self):
+        # Belt and braces with the reset in show_ring: hide_ring is reachable
+        # on paths that never reopen through show_ring.
+        from ui import actions_ring_overlay
+
+        stub = self._stub(
+            _rawxy_offset=(0, -200),
+            _rawxy_seen=True,
+            _dismiss_progress=0.0,
+            _dismiss_step=actions_ring_overlay._DISMISS_FRAMES,
+        )
+
+        self._tick(stub)
+
+        self.assertIsNone(stub._rawxy_offset)
+        self.assertFalse(stub._rawxy_seen)
+        stub.hide.assert_called_once()
+        stub._tick_timer.stop.assert_called_once()
 
 
 if __name__ == "__main__":

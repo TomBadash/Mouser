@@ -267,6 +267,40 @@ class MacOSWakeRecoveryTests(unittest.TestCase):
 
         self.assertEqual(len(workers), 2)
 
+    def test_wake_asks_the_listener_to_rearm_the_divert(self):
+        # A sleep deep enough to need the tap re-enabled is also deep enough
+        # for the mouse to have dropped its link and come back undiverted.
+        # Without this the control stays dead until the app is restarted, and
+        # nothing else on the wake path re-applies the diversion.
+        center, _ = self._register_observers()
+
+        with (
+            patch.object(
+                self.module.threading, "Thread",
+                self._capturing_thread_class([]),
+            ),
+            patch.object(self.module.time, "monotonic", return_value=100.0),
+        ):
+            center.callbacks[self._WAKE][1](None)
+
+        self.listener.request_divert_refresh.assert_called_once()
+
+    def test_wake_rearm_survives_a_listener_that_raises(self):
+        # Runs inside a workspace notification block, which may not raise.
+        self.listener.request_divert_refresh.side_effect = RuntimeError("boom")
+        center, _ = self._register_observers()
+
+        with (
+            patch.object(
+                self.module.threading, "Thread",
+                self._capturing_thread_class([]),
+            ),
+            patch.object(self.module.time, "monotonic", return_value=100.0),
+        ):
+            center.callbacks[self._WAKE][1](None)
+
+        self.listener.request_divert_refresh.assert_called_once()
+
     def test_resume_worker_does_not_reconnect_after_stop(self):
         self.hook._running = False
 
@@ -1305,6 +1339,262 @@ class MacOSPassthroughWhenNoDeviceTests(unittest.TestCase):
 
         self.assertIs(result, cg_event)
         self.assertTrue(hook._dispatch_queue.empty())
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
+class MacOSUndivertedSensePressTests(unittest.TestCase):
+    """The Actions Ring only ever reaches the CGEventTap as a native button
+    when its HID++ divert has lapsed -- a diverted control never reaches the
+    OS at all. Serving it from the tap keeps the binding alive in that window
+    instead of the button being dead until the app is restarted."""
+
+    _kCGEventOtherMouseDown = 25
+    _kCGEventOtherMouseUp = 26
+
+    def setUp(self):
+        self.mock_quartz = MagicMock(name="Quartz")
+        self.mock_quartz.kCGEventOtherMouseDown = self._kCGEventOtherMouseDown
+        self.mock_quartz.kCGEventOtherMouseUp = self._kCGEventOtherMouseUp
+        self.mock_quartz.kCGEventMouseMoved = 5
+        self.mock_quartz.kCGEventOtherMouseDragged = 27
+        self.mock_quartz.kCGEventScrollWheel = 22
+        mouse_hook.Quartz = self.mock_quartz
+
+    def tearDown(self):
+        if hasattr(mouse_hook, "Quartz") and isinstance(
+                mouse_hook.Quartz, MagicMock):
+            del mouse_hook.Quartz
+
+    def _hook(self, sense_panel=True):
+        hook = mouse_hook.MouseHook()
+        hook._running = True
+        hook._tap = MagicMock(name="tap")
+        # A Logitech must look bound, or the KVM guard passes everything
+        # through before the button branch is reached.
+        hook._connected_device = object()
+        hook._gesture_via_sense_panel = sense_panel
+        hook._hid_gesture = MagicMock(name="hid_gesture")
+        # Real listeners report False here; a bare MagicMock attribute is
+        # truthy and would suppress the click that closes the gesture.
+        hook._hid_gesture.extra_held_during_gesture = False
+        return hook
+
+    def _press(self, hook, btn, event_type):
+        self.mock_quartz.CGEventGetIntegerValueField.return_value = btn
+        cg_event = MagicMock(name="cg_event")
+        return cg_event, hook._event_tap_callback(
+            None, event_type, cg_event, None)
+
+    def _drain(self, hook):
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait().event_type)
+        return events
+
+    def test_press_is_swallowed_and_fires_the_sense_binding(self):
+        hook = self._hook()
+
+        _, down = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        _, up = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        # Swallowed, so the raw button cannot also reach the foreground app.
+        self.assertIsNone(down)
+        self.assertIsNone(up)
+        self.assertEqual(
+            self._drain(hook),
+            [
+                mouse_hook.MouseEvent.SENSE_BUTTON_DOWN,
+                mouse_hook.MouseEvent.SENSE_BUTTON_UP,
+                mouse_hook.MouseEvent.SENSE_CLICK,
+            ],
+        )
+
+    def test_rearm_is_asked_for_on_release_never_mid_press(self):
+        # Asking on the way down let the divert come back while the button was
+        # still held, and the release then reached neither path: the firmware
+        # routed it to HID++, where the listener had no matching down. The
+        # gesture stayed open, the binding never fired, and with swipe
+        # directions enabled the stuck hold swallowed all cursor motion.
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._hid_gesture.request_divert_refresh.assert_not_called()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+        hook._hid_gesture.request_divert_refresh.assert_called_once()
+
+    def test_listener_is_told_when_the_native_press_starts_and_ends(self):
+        # The listener cannot see this hold for itself -- an undiverted press
+        # never reaches HID++ -- so it has to be told, or its own re-arm guard
+        # is blind to exactly the state this feature creates.
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._hid_gesture.set_native_hold.assert_called_once_with(True)
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+        self.assertEqual(
+            [c.args[0] for c in hook._hid_gesture.set_native_hold.call_args_list],
+            [True, False],
+        )
+
+    def test_release_is_claimed_by_the_hold_not_by_re_testing_conditions(self):
+        # A down that opened a hold must always get its up, or both the
+        # gesture and the native-hold flag strand on. So the release branch
+        # keys on the hold itself; re-evaluating the down conditions would let
+        # the up escape whenever one of them changed under the press.
+        hook = self._hook()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        hook._ui_passthrough = True
+        _, up = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        self.assertIsNone(up)
+        self.assertFalse(hook._native_gesture_active)
+        hook._hid_gesture.set_native_hold.assert_called_with(False)
+
+    def test_action_is_queued_not_run_on_the_tap_thread(self):
+        # Running a binding inline would stall the CGEventTap long enough for
+        # macOS to disable it, which is the failure this whole path exists to
+        # avoid. Nothing may be dispatched synchronously.
+        hook = self._hook()
+        ran = []
+        hook.register(mouse_hook.MouseEvent.SENSE_CLICK, lambda _e: ran.append(1))
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        self.assertEqual(ran, [])
+        self.assertFalse(hook._dispatch_queue.empty())
+
+    def test_button_six_passes_through_on_a_non_sense_panel_device(self):
+        hook = self._hook(sense_panel=False)
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+        hook._hid_gesture.request_divert_refresh.assert_not_called()
+
+    def test_button_six_passes_through_while_the_ui_captures_input(self):
+        # The binding-capture UI must see the raw press itself.
+        hook = self._hook()
+        hook._ui_passthrough = True
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_tap_disabled_mid_press_clears_the_native_hold(self):
+        # The system can disable the tap while the button is down, and the
+        # release is then never delivered. The hold flag must not survive
+        # that: left set, it blocks every later re-arm of the divert for the
+        # rest of the session, which is worse than the lapse being repaired.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self.assertTrue(hook._native_gesture_active)
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        self.assertFalse(hook._native_gesture_active)
+        hook._hid_gesture.set_native_hold.assert_called_with(False)
+
+    def test_tap_disabled_mid_press_leaves_the_button_usable(self):
+        # Dropping the hold flag alone is not enough: `_gesture_active` is what
+        # gates the next press, so left set it kills the button outright until
+        # the app restarts -- the failure this whole fallback exists to fix.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        self._drain(hook)
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        # The hold is resolved, not merely forgotten.
+        self.assertFalse(hook._gesture_active)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.SENSE_BUTTON_UP])
+
+        # And the next press opens a fresh one.
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+
+        self.assertTrue(hook._gesture_active)
+        self.assertTrue(hook._native_gesture_active)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.SENSE_BUTTON_DOWN])
+
+    def test_the_synthesised_release_is_tagged_as_cancelled(self):
+        # Downstream has to let go of the hold either way, so the up event
+        # still goes out -- but the engine routes a cancelled one to the ring's
+        # cancel rather than its selection. An untagged up during the ring's
+        # hold delay reads as a quick tap and opens it in toggle mode.
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        while not hook._dispatch_queue.empty():
+            hook._dispatch_queue.get_nowait()
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.SENSE_BUTTON_UP)
+        self.assertEqual(event.raw_data, {"cancelled": True})
+
+    def test_an_ordinary_release_is_not_tagged_as_cancelled(self):
+        hook = self._hook()
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseDown)
+        while not hook._dispatch_queue.empty():
+            hook._dispatch_queue.get_nowait()
+
+        self._press(
+            hook, mouse_hook._BTN_SENSE_PANEL, self._kCGEventOtherMouseUp)
+
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.SENSE_BUTTON_UP)
+        self.assertIsNone(event.raw_data)
+
+    def test_tap_disabled_with_no_press_in_flight_resolves_nothing(self):
+        # The tap is disabled far more often than it is disabled mid-press;
+        # a stray SENSE_UP on every such event would fire the ring's selection.
+        hook = self._hook()
+
+        hook._event_tap_callback(
+            None, mouse_hook._kCGEventTapDisabledByTimeout,
+            MagicMock(name="cg_event"), None)
+
+        self.assertEqual(self._drain(hook), [])
+
+    def test_ordinary_back_button_is_unaffected(self):
+        hook = self._hook()
+
+        cg_event, result = self._press(
+            hook, mouse_hook._BTN_BACK, self._kCGEventOtherMouseDown)
+
+        self.assertIs(result, cg_event)
+        self.assertEqual(
+            self._drain(hook), [mouse_hook.MouseEvent.XBUTTON1_DOWN])
 
 
 class LinuxShiftWheelHScrollTests(unittest.TestCase):
