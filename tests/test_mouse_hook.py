@@ -1341,6 +1341,7 @@ class MacOSPassthroughWhenNoDeviceTests(unittest.TestCase):
         self.assertTrue(hook._dispatch_queue.empty())
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")
 class MacOSUndivertedSensePressTests(unittest.TestCase):
     """The Actions Ring only ever reaches the CGEventTap as a native button
     when its HID++ divert has lapsed -- a diverted control never reaches the
