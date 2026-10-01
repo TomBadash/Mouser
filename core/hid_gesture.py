@@ -1109,7 +1109,20 @@ class HidGestureListener:
         self._smart_shift_call_lock = threading.Lock()
         self._smart_shift_slot_lock = threading.Lock()
         self._smart_shift_event = threading.Event()
-        self._reconnect_requested = False
+        # Reconnect requests cross from the platform hook thread into the HID
+        # listener thread.  A boolean is not sufficient here: Windows can
+        # deliver display-on and session-unlock while a reconnect is already
+        # opening a fresh handle.  The old boolean survived that open and then
+        # immediately tore the new connection back down.  Generations make a
+        # successful open satisfy every request that preceded it, while a
+        # request arriving afterwards is still observed exactly once.
+        self._reconnect_lock = threading.Lock()
+        self._reconnect_generation = 0
+        self._connected_generation = 0
+        # Device-topology notifications wake a disconnected listener out of
+        # its exponential backoff so a newly-created Bolt HID path is tried
+        # immediately instead of as much as 30 seconds later.
+        self._rescan_event = threading.Event()
         # signature -> monotonic deadline; see _REPROG_ABSENT_COOLDOWN_S.
         self._reprog_absent_until = {}
         self._pending_battery = None
@@ -1209,6 +1222,7 @@ class HidGestureListener:
                 print(f"[HidGesture] stop: horizontal invert revert failed: {exc}")
             self._wheel_divert_state = False
         self._running = False
+        self._rescan_event.set()
         d = self._dev
         if d:
             try:
@@ -2078,11 +2092,40 @@ class HidGestureListener:
     def force_reconnect(self):
         """Request the listener thread to drop and re-establish the HID++ connection.
 
-        Thread-safe: sets a flag checked at the top of the inner event loop.
-        The loop raises IOError, which triggers full cleanup + _try_connect(),
-        re-applying all button diverts (including CID 0x00C4).
+        Thread-safe and generation based.  A fresh connection records the
+        latest generation it satisfies, so a delayed resume request cannot
+        tear that new connection down immediately.  A later request still
+        triggers full cleanup + _try_connect(), re-applying all button diverts
+        (including CID 0x00C4).
         """
-        self._reconnect_requested = True
+        with self._reconnect_lock:
+            self._reconnect_generation += 1
+            generation = self._reconnect_generation
+        self._rescan_event.set()
+        return generation
+
+    def request_rescan(self):
+        """Wake a disconnected reconnect loop after device-topology change.
+
+        This deliberately does not invalidate a healthy handle.  The Windows
+        hook uses it for ``WM_DEVICECHANGE`` so a new Bolt device path is
+        enumerated immediately while the normal read-error path remains the
+        authority for dropping an existing connection.
+        """
+        self._rescan_event.set()
+
+    def _mark_connection_generation_current(self):
+        """Mark a newly-opened handle as satisfying all requests so far."""
+        with self._reconnect_lock:
+            self._connected_generation = self._reconnect_generation
+
+    def _consume_reconnect_request(self):
+        """Return True once for each newer reconnect generation."""
+        with self._reconnect_lock:
+            if self._reconnect_generation <= self._connected_generation:
+                return False
+            self._connected_generation = self._reconnect_generation
+            return True
 
     def seconds_since_last_report(self):
         """Seconds since the live handle last delivered a report, or None
@@ -3344,12 +3387,19 @@ class HidGestureListener:
         return False
 
     def _interruptible_sleep(self, seconds):
-        """Sleep up to ``seconds`` in 0.1 s slices, returning early if the
-        listener has been stopped so teardown stays responsive."""
-        for _ in range(int(max(0.0, seconds) / 0.1)):
+        """Sleep with an early wake for stop or device-topology changes."""
+        seconds = max(0.0, seconds)
+        steps = int(seconds / 0.1)
+        if seconds > steps * 0.1:
+            steps += 1
+        for index in range(steps):
             if not self._running:
                 return
-            time.sleep(0.1)
+            if self._rescan_event.is_set():
+                self._rescan_event.clear()
+                return
+            remaining = seconds - index * 0.1
+            time.sleep(min(0.1, remaining))
 
     def _main_loop(self):
         """Outer loop: connect → listen → reconnect on error/disconnect."""
@@ -3378,6 +3428,12 @@ class HidGestureListener:
             retry_logged = False
             connect_backoff_s = _CONNECT_BACKOFF_BASE_S
 
+            # This handle was opened after every reconnect request currently
+            # known.  Requests that arrived during discovery are therefore
+            # already satisfied by it; only a later generation may tear it
+            # down.  This is the key invariant for Modern Standby resume.
+            self._mark_connection_generation_current()
+            self._rescan_event.clear()
             self._connected = True
             self._last_report_at = time.monotonic()
             self._pending_liveness_ping = False
@@ -3396,8 +3452,7 @@ class HidGestureListener:
             _device_sleep_time = None
             try:
                 while self._running:
-                    if self._reconnect_requested:
-                        self._reconnect_requested = False
+                    if self._consume_reconnect_request():
                         raise IOError("reconnect requested")
 
                     if self._consecutive_request_timeouts >= _CONSECUTIVE_TIMEOUT_RECONNECT:
@@ -3523,7 +3578,6 @@ class HidGestureListener:
             self._gesture_candidates = list(DEFAULT_GESTURE_CIDS)
             self._rawxy_enabled = False
             self._connected_device_info = None
-            self._reconnect_requested = False
             if self._connected:
                 self._connected = False
                 if self._on_disconnect:

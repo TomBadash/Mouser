@@ -325,6 +325,12 @@ class MouseHook(BaseMouseHook):
         self._last_hook_event_at = 0.0
         self._last_raw_input_at = 0.0
         self._last_resume_at = 0.0
+        # One recovery coordinator owns a whole wake.  Modern Standby commonly
+        # delivers display-on and session-unlock more than five seconds apart;
+        # independent delay ladders used to leave a stale force_reconnect that
+        # immediately destroyed the freshly-restored HID session.
+        self._resume_lock = threading.Lock()
+        self._resume_worker_thread = None
         self._power_notify_handle = None
         self._session_notify_registered = False
         # Per-button slide gesture: last cursor position while an owner button
@@ -865,6 +871,17 @@ class MouseHook(BaseMouseHook):
         print("[MouseHook] Hook removed")
 
     def _on_device_change(self):
+        # Wake the HID reconnect loop even when hook reinstallation is
+        # debounced.  A new Bolt path can appear while that loop is in its
+        # 30-second backoff; waiting out the timer is unnecessary and was
+        # visible in real Modern Standby logs.
+        hg = self._hid_gesture
+        request_rescan = getattr(hg, "request_rescan", None) if hg else None
+        if request_rescan is not None:
+            try:
+                request_rescan()
+            except Exception as exc:
+                print(f"[MouseHook] HID rescan request failed: {exc}")
         now = time.time()
         if now - self._last_rehook_time < 2.0:
             return
@@ -919,42 +936,63 @@ class MouseHook(BaseMouseHook):
 
     def _on_system_resume(self, reason):
         """Entry point for every resume-ish cue. Windows commonly raises
-        several for one wake (APM resume, then display-on, then unlock), so
-        collapse a burst into a single recovery pass."""
+        several for one wake (APM resume, then display-on, then unlock).
+
+        Keep a single worker alive for the complete 10-second recovery ladder,
+        not merely a five-second timestamp window: real Modern Standby logs
+        show display-on and unlock seven seconds apart.
+        """
         now = time.monotonic()
-        if now - self._last_resume_at < self._RESUME_DEDUPE_S:
-            return False
-        self._last_resume_at = now
-        print(f"[MouseHook] System resume detected ({reason}) — recovering")
-        threading.Thread(
-            target=self._resume_recovery_worker,
-            args=(reason,),
-            daemon=True,
-            name="MouseHook-resume",
-        ).start()
+        with self._resume_lock:
+            worker = self._resume_worker_thread
+            if worker is not None and worker.is_alive():
+                self._last_resume_at = now
+                print(f"[MouseHook] Resume cue coalesced ({reason})")
+                return False
+            if (
+                self._last_resume_at
+                and now - self._last_resume_at < self._RESUME_DEDUPE_S
+            ):
+                return False
+            self._last_resume_at = now
+            print(f"[MouseHook] System resume detected ({reason}) — recovering")
+            worker = threading.Thread(
+                target=self._resume_recovery_worker,
+                args=(reason,),
+                daemon=True,
+                name="MouseHook-resume",
+            )
+            self._resume_worker_thread = worker
+            worker.start()
         return True
 
     def _resume_recovery_worker(self, reason):
-        elapsed = 0.0
-        for index, deadline in enumerate(self._RESUME_REARM_DELAYS_S):
-            time.sleep(max(0.0, deadline - elapsed))
-            elapsed = deadline
-            if not self._running:
-                return
-            self._request_rearm(f"resume: {reason}")
-            hg = self._hid_gesture
-            if hg is None:
-                continue
-            # The first pass always drops the HID handle: after a resume it
-            # can stay open against a device stack Windows has already
-            # replaced, and from the outside that is indistinguishable from a
-            # healthy connection. Later passes only step in if the device has
-            # not come back on its own.
-            if index == 0 or not self._device_connected:
-                try:
-                    hg.force_reconnect()
-                except Exception as exc:
-                    print(f"[MouseHook] resume reconnect request failed: {exc}")
+        try:
+            elapsed = 0.0
+            for index, deadline in enumerate(self._RESUME_REARM_DELAYS_S):
+                time.sleep(max(0.0, deadline - elapsed))
+                elapsed = deadline
+                if not self._running:
+                    return
+                self._request_rearm(f"resume: {reason}")
+                hg = self._hid_gesture
+                if hg is None:
+                    continue
+                # The first pass always invalidates the pre-resume handle.
+                # Later passes only wake/retry a listener that is still away.
+                # HidGestureListener generations ensure a request issued while
+                # discovery is already opening a new handle is satisfied by
+                # that handle rather than applied to it afterwards.
+                if index == 0 or not self._device_connected:
+                    try:
+                        hg.force_reconnect()
+                    except Exception as exc:
+                        print(f"[MouseHook] resume reconnect request failed: {exc}")
+        finally:
+            with self._resume_lock:
+                current = threading.current_thread()
+                if self._resume_worker_thread is current:
+                    self._resume_worker_thread = None
 
     # ── Hook watchdog ─────────────────────────────────────────────────
     # Windows removes a low-level hook whose procedure overruns

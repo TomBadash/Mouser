@@ -367,9 +367,21 @@ class WindowsResumeRecoveryTests(unittest.TestCase):
 
         self.assertEqual(thread.call_count, 1)
 
+    def test_unlock_seven_seconds_later_joins_active_recovery(self):
+        """Regression from a real Modern Standby log: the old five-second
+        dedupe spawned a second ladder whose delayed request killed the newly
+        restored connection."""
+        with patch.object(self.module.threading, "Thread") as thread:
+            self.assertTrue(self.hook._on_system_resume("display on"))
+            self.hook._last_resume_at -= 7.0
+            self.assertFalse(self.hook._on_system_resume("session unlock"))
+
+        self.assertEqual(thread.call_count, 1)
+
     def test_a_later_wake_recovers_again(self):
         with patch.object(self.module.threading, "Thread") as thread:
             self.assertTrue(self.hook._on_system_resume("power resume"))
+            self.hook._resume_worker_thread = None
             self.hook._last_resume_at -= self.hook._RESUME_DEDUPE_S + 1.0
             self.assertTrue(self.hook._on_system_resume("power resume"))
 
@@ -421,6 +433,15 @@ class WindowsResumeRecoveryTests(unittest.TestCase):
 
         post.assert_not_called()
         listener.force_reconnect.assert_not_called()
+
+    def test_device_change_wakes_hid_rescan_even_when_rehook_is_debounced(self):
+        listener = Mock()
+        self.hook._hid_gesture = listener
+        self.hook._last_rehook_time = self.module.time.time()
+
+        self.hook._on_device_change()
+
+        listener.request_rescan.assert_called_once_with()
 
     def test_display_on_payload_is_recognised(self):
         setting = self.module.POWERBROADCAST_SETTING()

@@ -1048,27 +1048,57 @@ class ConfigScrollForceMigrationTests(unittest.TestCase):
 
 
 class HidForceReconnectTests(unittest.TestCase):
-    """force_reconnect() flag and inner-loop behavior."""
+    """Generation-based force_reconnect() behavior."""
 
     def _make_listener(self):
         return hid_gesture.HidGestureListener()
 
-    def test_force_reconnect_sets_flag(self):
+    def test_force_reconnect_advances_generation(self):
         listener = self._make_listener()
-        self.assertFalse(listener._reconnect_requested)
-        listener.force_reconnect()
-        self.assertTrue(listener._reconnect_requested)
+        self.assertEqual(listener._reconnect_generation, 0)
+        self.assertEqual(listener.force_reconnect(), 1)
+        self.assertEqual(listener.force_reconnect(), 2)
 
-    def test_reconnect_flag_cleared_and_raises(self):
-        """Inner loop should clear flag and raise IOError when _reconnect_requested is True."""
+    def test_request_after_connection_is_consumed_once(self):
         listener = self._make_listener()
-        listener._reconnect_requested = True
-        # Simulate the inner-loop guard directly
-        with self.assertRaises(IOError):
-            if listener._reconnect_requested:
-                listener._reconnect_requested = False
-                raise IOError("reconnect requested")
-        self.assertFalse(listener._reconnect_requested)
+        listener._mark_connection_generation_current()
+
+        listener.force_reconnect()
+
+        self.assertTrue(listener._consume_reconnect_request())
+        self.assertFalse(listener._consume_reconnect_request())
+
+    def test_request_during_connect_is_satisfied_by_fresh_handle(self):
+        """Regression: delayed resume work must not tear down the new handle."""
+        listener = self._make_listener()
+        listener.force_reconnect()
+
+        # _main_loop calls this immediately after _try_connect succeeds.
+        listener._mark_connection_generation_current()
+
+        self.assertFalse(listener._consume_reconnect_request())
+
+    def test_reconnect_during_discovery_does_not_skip_the_fresh_read_loop(self):
+        listener = self._make_listener()
+        listener._running = True
+
+        def connect():
+            listener.force_reconnect()
+            return True
+
+        def read(_timeout):
+            listener._running = False
+            return None
+
+        with (
+            patch.object(listener, "_try_connect", side_effect=connect) as discovery,
+            patch.object(listener, "_rx", side_effect=read) as receive,
+            patch.object(listener, "_undivert"),
+        ):
+            listener._main_loop()
+
+        discovery.assert_called_once_with()
+        receive.assert_called_once_with(1000)
 
     def test_not_connected_read_returns_none_result(self):
         """When not connected, a pending read should leave _smart_shift_result as None."""

@@ -1417,6 +1417,17 @@ class HidReconnectStormTests(unittest.TestCase):
         listener._interruptible_sleep(5)
         self.assertLess(time.monotonic() - start, 0.5)
 
+    def test_device_change_wakes_reconnect_backoff(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._running = True
+        listener.request_rescan()
+
+        start = time.monotonic()
+        listener._interruptible_sleep(30)
+
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertFalse(listener._rescan_event.is_set())
+
 
 if __name__ == "__main__":
     unittest.main()
