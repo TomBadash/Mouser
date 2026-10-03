@@ -1387,6 +1387,29 @@ class DivertHealthCheckTests(unittest.TestCase):
         listener._handle_battery_notification([])
         self.assertTrue(listener._divert_check_due)
 
+    def test_wireless_relink_broadcast_schedules_divert_check(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x0D
+        listener._wireless_status_idx = 0x04
+        # Captured from an MX Master 4 on Bolt after a power-switch cycle.
+        listener._on_report([0x11, 0x02, 0x04, 0x00, 0x01, 0x01, 0x01]
+                            + [0x00] * 13)
+        self.assertTrue(listener._divert_check_due)
+
+    def test_wireless_status_without_relink_is_ignored(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._wireless_status_idx = 0x04
+        listener._on_report([0x11, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00]
+                            + [0x00] * 13)
+        self.assertFalse(listener._divert_check_due)
+
+    def test_own_wireless_status_response_is_ignored(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._wireless_status_idx = 0x04
+        listener._on_report([0x11, 0x02, 0x04, hid_gesture.MY_SW,
+                             0x01, 0x01, 0x01] + [0x00] * 13)
+        self.assertFalse(listener._divert_check_due)
+
 
 if __name__ == "__main__":
     unittest.main()
