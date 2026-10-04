@@ -64,6 +64,26 @@ ApplicationWindow {
     Material.background: theme.bg
     Material.foreground: theme.textPrimary
 
+    header: ToolBar {
+        visible: backend.remotePaused
+        height: visible ? remoteSessionLabel.implicitHeight + 24 : 0
+        background: Rectangle {
+            color: root.theme.bgCard
+            border.color: root.theme.border
+        }
+        Text {
+            id: remoteSessionLabel
+            anchors.centerIn: parent
+            width: parent.width - 40
+            text: s[backend.remoteSessionState === "remote"
+                    ? "session.remote_paused" : "session.unknown_paused"]
+            font.family: uiState.fontFamily
+            font.pixelSize: 13
+            color: root.theme.textPrimary
+            wrapMode: Text.WordWrap
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0

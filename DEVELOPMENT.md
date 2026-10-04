@@ -204,6 +204,7 @@ On Windows the Super key can't be recorded through Qt alone: the shell acts on t
 
 - **DPI slider** — 200 to the device max with quick presets (400, 800, 1000, 1600, 2400, 4000, 6000, 8000). Reads the current DPI from the device on startup.
 - **Scroll inversion** — independent toggles for vertical and horizontal scroll direction.
+- **Windows remote sessions** — the frontend watches the current WTS session and the engine pauses hooks, HID processing, and app detection in RDP. See [RemoteSessions.md](Documentation/RemoteSessions.md) for the behavior matrix and manual checks.
 - **Ignore trackpad (macOS)** — keep trackpad and Magic Mouse continuous scroll out of Mouser mappings. Disable only if you intentionally want Mouser to handle them.
 - **Smart Shift** — toggle ratchet ↔ free-spin (HID++ `0x2111`) plus a sensitivity threshold; status syncs every 15 s and on every reconnect.
 - **Startup controls** — **Start at login** (Windows + macOS) and **Start minimized** (all platforms).

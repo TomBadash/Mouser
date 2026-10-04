@@ -767,6 +767,16 @@ class MouseHook(BaseMouseHook):
         self._thread_id = None
         self._startup_ok = False
         self._startup_event.clear()
+        # Reusing the hook after a console/RDP switch must not replay old input
+        # or retain a posted-wheel flag whose message window was destroyed.
+        self._pending_vscroll = self._pending_hscroll = self._pending_shift_hscroll = 0
+        self._vscroll_posted = self._hscroll_posted = self._shift_hscroll_posted = False
+        while True:
+            try:
+                self._dispatch_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._set_device_connected(False)
 
 
 MouseHook._platform_module = sys.modules[__name__]

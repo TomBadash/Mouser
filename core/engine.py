@@ -29,6 +29,7 @@ from core.linux_permissions import (
 )
 from core.logi_devices import clamp_dpi
 from core.actions_ring import ActionsRingController
+from core.remote_session import is_remote_session
 
 HSCROLL_ACTION_COOLDOWN_S = 0.35
 HSCROLL_VOLUME_COOLDOWN_S = 0.06
@@ -88,6 +89,13 @@ class Engine:
         self.hook = MouseHook()
         self.cfg = load_config()
         self._enabled = True
+        # start()/stop() lifecycle; stays started while input is auto-paused.
+        self._engine_started = False
+        # Serialize lifecycle changes; notifications can re-enter on this thread.
+        self._lifecycle_lock = threading.RLock()
+        self._session_type = "unknown"       # last observation: local/remote/unknown
+        self._auto_paused = False           # applied policy, independent of _enabled
+        self._session_change_cb = None      # UI callback: (session_type, paused)
         self._last_haptic_time = 0.0
         self._hscroll_state = {
             MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
@@ -121,6 +129,8 @@ class Engine:
         self._replay_pending_rerun = False
         self._replay_lock = threading.Lock()
         self._mouse_release_timers = {}   # action_id → Timer for safety auto-release
+        # Serialize mouse injection and release timers against pause cleanup.
+        self._mouse_button_lock = threading.Lock()
         self._ring = None                 # ActionsRingController (created in _setup_hooks)
         self._ring_show_cb = None         # UI callback for showing ring overlay
         self._ring_hide_cb = None         # UI callback for hiding ring overlay
@@ -163,6 +173,8 @@ class Engine:
         write is skipped; the caller is responsible for applying it off the
         HID listener thread (see ``_on_connection_change``).
         """
+        if self.remote_paused:
+            return
         mappings = get_active_mappings(self.cfg)
 
         # Apply scroll inversion settings to the hook
@@ -440,7 +452,7 @@ class Engine:
         in-gesture tap action (or nothing when it is "Do Nothing")."""
         def handler(event):
             try:
-                if not self._enabled:
+                if not self.remapping_active:
                     return
                 raw = event.raw_data
                 owner = raw.get("gesture_owner") if isinstance(raw, dict) else None
@@ -464,7 +476,7 @@ class Engine:
         the event tag and fires that owner's action for this direction."""
         def handler(event):
             try:
-                if not self._enabled:
+                if not self.remapping_active:
                     return
                 raw = event.raw_data
                 owner = raw.get("gesture_owner") if isinstance(raw, dict) else None
@@ -496,7 +508,7 @@ class Engine:
     def _make_handler(self, action_id, btn_key=""):
         def handler(event):
             try:
-                if self._enabled:
+                if self.remapping_active:
                     self._emit_debug(
                         f"Mapped {event.event_type} -> {action_id} "
                         f"({self._action_label(action_id)})"
@@ -525,31 +537,36 @@ class Engine:
         return handler
 
     def _make_mouse_down_handler(self, action_id):
-        def _safety_release():
+        def _safety_release(timer):
             """Auto-release if the UP event never fires."""
             try:
-                print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
-                self._mouse_release_timers.pop(action_id, None)
-                inject_mouse_up(action_id)
+                with self._mouse_button_lock:
+                    # A cancelled callback may already be running when we pause.
+                    if self._mouse_release_timers.get(action_id) is not timer:
+                        return
+                    print(f"[Engine] SAFETY RELEASE fired for {action_id} (UP never received)")
+                    self._mouse_release_timers.pop(action_id, None)
+                    inject_mouse_up(action_id)
             except Exception as exc:
                 print(f"[Engine] _safety_release EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
 
         def handler(event):
             try:
-                if self._enabled:
-                    self._emit_debug(
-                        f"Mapped {event.event_type} -> {action_id} (mouse down)"
-                    )
-                    inject_mouse_down(action_id)
-                    # Safety: auto-release after 20s if UP event is never received
-                    old = self._mouse_release_timers.pop(action_id, None)
-                    if old is not None:
-                        old.cancel()
-                    t = threading.Timer(20.0, _safety_release)
-                    t.daemon = True
-                    self._mouse_release_timers[action_id] = t
-                    t.start()
+                with self._mouse_button_lock:
+                    if self.remapping_active:
+                        self._emit_debug(
+                            f"Mapped {event.event_type} -> {action_id} (mouse down)"
+                        )
+                        inject_mouse_down(action_id)
+                        # Safety: auto-release after 20s if UP event is never received
+                        old = self._mouse_release_timers.pop(action_id, None)
+                        if old is not None:
+                            old.cancel()
+                        t = threading.Timer(20.0, lambda: _safety_release(t))
+                        t.daemon = True
+                        self._mouse_release_timers[action_id] = t
+                        t.start()
             except Exception as exc:
                 print(f"[Engine] mouse_down_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
@@ -558,15 +575,16 @@ class Engine:
     def _make_mouse_up_handler(self, action_id):
         def handler(event):
             try:
-                if self._enabled:
-                    self._emit_debug(
-                        f"Mapped {event.event_type} -> {action_id} (mouse up)"
-                    )
-                    # Cancel safety timer
-                    old = self._mouse_release_timers.pop(action_id, None)
-                    if old is not None:
-                        old.cancel()
-                    inject_mouse_up(action_id)
+                with self._mouse_button_lock:
+                    if self.remapping_active:
+                        self._emit_debug(
+                            f"Mapped {event.event_type} -> {action_id} (mouse up)"
+                        )
+                        # Cancel safety timer
+                        old = self._mouse_release_timers.pop(action_id, None)
+                        if old is not None:
+                            old.cancel()
+                        inject_mouse_up(action_id)
             except Exception as exc:
                 print(f"[Engine] mouse_up_handler EXCEPTION for {action_id}: {exc}")
                 import traceback; traceback.print_exc()
@@ -663,6 +681,8 @@ class Engine:
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _apply_wheel_invert_setting(self, *, force: bool = False) -> None:
+        if self.remote_paused:
+            return
         settings = self.cfg.get("settings", {})
         kill_switch_off = (
             coerce_wheel_divert_setting(settings.get("wheel_divert")) == WHEEL_DIVERT_OFF
@@ -898,7 +918,7 @@ class Engine:
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
-            if not self._enabled:
+            if not self.remapping_active:
                 return
             state = self._hscroll_state.setdefault(
                 event.event_type,
@@ -945,6 +965,8 @@ class Engine:
     # ------------------------------------------------------------------
     def _on_app_change(self, app_identity: tuple[str, ...]):
         """Called by AppDetector when foreground window changes."""
+        if self.remote_paused:
+            return
         target = get_profile_for_app_identity(self.cfg, app_identity)
         if target == self._current_profile:
             return
@@ -1055,6 +1077,8 @@ class Engine:
 
     def _dispatch_action(self, action_id, source_key=""):
         """Route an action to the appropriate engine handler or system executor."""
+        if not self.remapping_active:
+            return
         if action_id == "activate_actions_ring":
             return
         elif action_id == "toggle_smart_shift":
@@ -1070,7 +1094,7 @@ class Engine:
 
     def _execute_ring_action(self, action_id):
         """Execute an action from the ring."""
-        if not self._enabled or action_id == "none":
+        if not self.remapping_active or action_id == "none":
             return
         self._emit_debug(f"Ring action -> {action_id} ({self._action_label(action_id)})")
         self._dispatch_action(action_id, "actions_ring")
@@ -1159,6 +1183,8 @@ class Engine:
         }
 
     def _run_saved_settings_replay(self):
+        if self.remote_paused:
+            return False
         hg = self.hook._hid_gesture
         if hg is None:
             return False
@@ -1191,8 +1217,8 @@ class Engine:
                         pass
 
         time.sleep(3)
-        hg = self.hook._hid_gesture
-        if hg is None or getattr(hg, "connected_device", None) is None:
+        if (self.remote_paused or self.hook._hid_gesture is not hg
+                or getattr(hg, "connected_device", None) is None):
             return False
 
         if saved_dpi is not None:
@@ -1223,8 +1249,8 @@ class Engine:
 
         if retry_dpi or retry_smart_shift:
             time.sleep(5)
-            hg = self.hook._hid_gesture
-            if hg is None or getattr(hg, "connected_device", None) is None:
+            if (self.remote_paused or self.hook._hid_gesture is not hg
+                    or getattr(hg, "connected_device", None) is None):
                 return False
             if retry_dpi:
                 if not hasattr(hg, "set_dpi") or not hg.set_dpi(saved_dpi):
@@ -1258,6 +1284,7 @@ class Engine:
 
     def _replay_saved_settings_worker(self):
         while True:
+            listener = self.hook._hid_gesture
             with self._replay_lock:
                 self._replay_pending_rerun = False
             replay_ok = self._run_saved_settings_replay()
@@ -1267,13 +1294,16 @@ class Engine:
                     continue
                 self._replay_inflight = False
                 should_emit_failure = not replay_ok
-            if should_emit_failure:
+            if (should_emit_failure and not self.remote_paused
+                    and self.hook._hid_gesture is listener):
                 self._emit_status(
                     "Mouse reconnected, but saved device settings could not be restored yet."
                 )
             return
 
     def _request_saved_settings_replay(self, *, startup_fallback=False):
+        if self.remote_paused:
+            return
         with self._replay_lock:
             if startup_fallback and self._hid_replay_requested_this_launch:
                 return
@@ -1291,6 +1321,8 @@ class Engine:
         ).start()
 
     def _on_connection_change(self, connected):
+        if connected and self.remote_paused:
+            return
         connection_changed = connected != self._last_connection_state
         hid_features_ready = self.hid_features_ready
         hid_features_changed = hid_features_ready != self._last_hid_features_ready
@@ -1461,6 +1493,52 @@ class Engine:
     def enabled(self):
         return self._enabled
 
+    @property
+    def remote_paused(self):
+        return self._auto_paused
+
+    @property
+    def remote_session_state(self):
+        return self._session_type
+
+    @property
+    def remapping_active(self):
+        return self._enabled and not self.remote_paused
+
+    def set_remote_session_change_callback(self, cb):
+        self._session_change_cb = cb
+
+    def refresh_remote_session(self):
+        """Recheck policy without reviving an explicitly stopped engine."""
+        with self._lifecycle_lock:
+            if not self._engine_started:
+                return
+            self._apply_remote_session_policy()
+
+    def _apply_remote_session_policy(self, *, initial_start=False):
+        """Apply detection under _lifecycle_lock, before starting any input runtime."""
+        detected_remote = is_remote_session()
+        session_type = ("unknown" if detected_remote is None
+                        else "remote" if detected_remote else "local")
+        paused = (sys.platform == "win32" and detected_remote is not False
+                  and self.cfg.get("settings", {}).get("pause_in_remote_session", True))
+        was_paused = self._auto_paused
+        changed = session_type != self._session_type or paused != was_paused
+        self._session_type = session_type
+        # Store the applied decision before cleanup so queued handlers see it.
+        # Deriving this from cfg would lose the previous state when a UI toggle
+        # updates cfg before asking us to apply the new policy.
+        self._auto_paused = paused
+        if paused:
+            if not was_paused:
+                self._stop_runtime()
+        elif initial_start or was_paused:
+            self._start_runtime()
+        if changed:
+            print(f"[Engine] Session={session_type}, paused={paused}")
+            if self._session_change_cb:
+                self._session_change_cb(session_type, paused)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1563,7 +1641,7 @@ class Engine:
         thread (e.g. an Actions Ring hover from the UI thread), where the
         listener would otherwise be parked in its blocking read for up to a
         second before draining the queue."""
-        if not self.cfg.get("settings", {}).get("haptic_enabled", True):
+        if self.remote_paused or not self.cfg.get("settings", {}).get("haptic_enabled", True):
             return
         if self.cfg.get("settings", {}).get("haptic_dedup", True):
             now = time.monotonic()
@@ -1594,6 +1672,7 @@ class Engine:
             self.hook.reset_bindings()
             self._setup_hooks()
             self._emit_debug(f"reload_mappings profile={self._current_profile}")
+        self.refresh_remote_session()
 
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
@@ -1612,6 +1691,14 @@ class Engine:
             self._emit_status(status_message)
 
     def start(self):
+        with self._lifecycle_lock:
+            initial_start = not self._engine_started
+            self._engine_started = True
+            self._apply_remote_session_policy(initial_start=initial_start)
+
+    def _start_runtime(self):
+        self.hook.reset_bindings()
+        self._setup_hooks()
         self._emit_linux_permission_warning()
         self.hook.start()
         self._app_detector.start()
@@ -1633,6 +1720,21 @@ class Engine:
         self._smart_shift_read_cb = cb
 
     def stop(self):
+        with self._lifecycle_lock:
+            self._engine_started = False
+            self._stop_runtime()
+
+    def _stop_runtime(self):
+        self.hook.reset_bindings()
+        self.hook.invert_vscroll = False
+        self.hook.invert_hscroll = False
+        with self._mouse_button_lock:
+            for action_id, timer in list(self._mouse_release_timers.items()):
+                timer.cancel()
+                inject_mouse_up(action_id)
+            self._mouse_release_timers.clear()
+        for state in self._hscroll_state.values():
+            state.update(accum=0.0, last_fire_at=0.0)
         if self._ring:
             self._ring.shutdown()
             self._ring = None
@@ -1642,3 +1744,8 @@ class Engine:
             self._battery_poll_thread = None
         self._app_detector.stop()
         self.hook.stop()
+        self._last_connection_state = False
+        self._last_hid_features_ready = False
+        self._wheel_divert_active_local = False
+        self._last_native_invert_target = (False, False)
+        self._notify_wheel_divert_change(False)

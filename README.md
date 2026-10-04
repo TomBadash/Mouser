@@ -114,6 +114,7 @@ That's it. The app opens, drops a tray / menu-bar icon, and starts remapping imm
 - **Smart Shift** — toggle Logitech's ratchet ↔ free-spin scroll mode (HID++ `0x2111`), with a sensitivity threshold and a mappable `Toggle SmartShift` action.
 - **Switch scroll mode** — bind a button to flip ratchet / free-spin without opening the UI; defaults to mode-shift.
 - **Scroll direction inversion** — independent toggles for vertical and horizontal scroll.
+- **Remote desktop auto-pause (Windows)** — pauses input handling in RDP sessions so mappings and scroll direction are handled by the connecting computer; resumes automatically on return to the local console. See [remote-session behavior](Documentation/RemoteSessions.md).
 - **Gesture button + swipe actions** — tap for one action, swipe up/down/left/right for four others.
 
 ### Cross-platform
