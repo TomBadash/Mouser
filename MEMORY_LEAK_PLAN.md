@@ -175,6 +175,9 @@ confound.
    poll as a fallback and on Windows/Linux where no equivalent leak exists).
    Per-app profiles keep working identically — `_on_change` semantics are
    unchanged, only the trigger differs.
+   > **Status:** implemented on this branch with observer cleanup during
+   > shutdown, startup identity detection, polling fallback, and lifecycle
+   > tests. Awaiting long-running validation with `leaks`.
 10. Re-validate with `leaks --nostacks --groupByType`: the ROOT LEAK
     `GPProcessMonitor` tree should stop growing entirely.
 

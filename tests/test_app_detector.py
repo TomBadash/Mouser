@@ -1,10 +1,12 @@
+from contextlib import nullcontext
 import importlib
 import os
 import plistlib
 import sys
 import tempfile
+import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def _unload_app_detector():
@@ -136,6 +138,154 @@ class AppDetectorMacOSTests(unittest.TestCase):
                     "Editor",
                 ),
             )
+
+
+class AppDetectorMacOSObserverTests(unittest.TestCase):
+    class FakeURL:
+        def __init__(self, path):
+            self._path = path
+
+        def path(self):
+            return self._path
+
+    class FakeRunningApplication:
+        def __init__(self, bundle_id, bundle_path, name):
+            self._bundle_id = bundle_id
+            self._bundle_path = bundle_path
+            self._name = name
+
+        def bundleURL(self):
+            return AppDetectorMacOSObserverTests.FakeURL(self._bundle_path)
+
+        def bundleIdentifier(self):
+            return self._bundle_id
+
+        def executableURL(self):
+            return None
+
+        def localizedName(self):
+            return self._name
+
+    class FakeUserInfo(dict):
+        def objectForKey_(self, key):
+            return self.get(key)
+
+    class FakeNotification:
+        def __init__(self, key, app):
+            self._user_info = AppDetectorMacOSObserverTests.FakeUserInfo({key: app})
+
+        def userInfo(self):
+            return self._user_info
+
+    class FakeNotificationCenter:
+        def __init__(self):
+            self.handler = None
+            self.token = object()
+            self.removed = []
+
+        def addObserverForName_object_queue_usingBlock_(
+            self, name, observed_object, queue, handler
+        ):
+            self.registration = (name, observed_object, queue)
+            self.handler = handler
+            return self.token
+
+        def removeObserver_(self, token):
+            self.removed.append(token)
+
+    def setUp(self):
+        self.addCleanup(_unload_app_detector)
+        self.center = self.FakeNotificationCenter()
+        self.initial_app = self.FakeRunningApplication(
+            "com.example.Initial", "/Applications/Initial.app", "Initial"
+        )
+        center = self.center
+        initial_app = self.initial_app
+
+        class FakeWorkspace:
+            @classmethod
+            def sharedWorkspace(cls):
+                return cls()
+
+            def notificationCenter(self):
+                return center
+
+            def frontmostApplication(self):
+                return initial_app
+
+        appkit = types.ModuleType("AppKit")
+        appkit.NSWorkspace = FakeWorkspace
+        appkit.NSWorkspaceApplicationKey = "application"
+        appkit.NSWorkspaceDidActivateApplicationNotification = "did-activate"
+        objc = types.ModuleType("objc")
+        objc.autorelease_pool = nullcontext
+
+        module_patch = patch.dict(sys.modules, {"AppKit": appkit, "objc": objc})
+        module_patch.start()
+        self.addCleanup(module_patch.stop)
+        self.module = _load_app_detector("darwin")
+
+    def test_uses_workspace_notifications_and_deduplicates_app_changes(self):
+        on_change = Mock()
+        detector = self.module.AppDetector(on_change)
+
+        detector.start()
+
+        self.assertEqual(self.center.registration, ("did-activate", None, None))
+        on_change.assert_called_once()
+        self.assertEqual(on_change.call_args.args[0][0], "com.example.Initial")
+        self.assertIsNone(detector._thread)
+
+        same_app = self.FakeNotification("application", self.initial_app)
+        self.center.handler(same_app)
+        on_change.assert_called_once()
+
+        next_app = self.FakeRunningApplication(
+            "com.example.Next", "/Applications/Next.app", "Next"
+        )
+        self.center.handler(self.FakeNotification("application", next_app))
+        self.assertEqual(on_change.call_count, 2)
+        self.assertEqual(on_change.call_args.args[0][0], "com.example.Next")
+
+    def test_stop_unregisters_workspace_observer(self):
+        detector = self.module.AppDetector(Mock())
+        detector.start()
+
+        detector.stop()
+
+        self.assertEqual(self.center.removed, [self.center.token])
+        self.assertIsNone(detector._macos_observer)
+
+    def test_initial_callback_failure_keeps_workspace_observer(self):
+        on_change = Mock(side_effect=RuntimeError("profile switch failed"))
+        detector = self.module.AppDetector(on_change)
+
+        detector.start()
+
+        self.assertIsNotNone(detector._macos_observer)
+        self.assertIsNone(detector._thread)
+        self.assertEqual(self.center.removed, [])
+
+    def test_registration_failure_falls_back_to_polling(self):
+        detector = self.module.AppDetector(Mock())
+        observer = Mock()
+        observer.start.side_effect = RuntimeError("registration failed")
+
+        with (
+            patch.object(self.module, "_MacOSWorkspaceObserver", return_value=observer),
+            patch.object(self.module.threading, "Thread") as thread_type,
+        ):
+            thread = thread_type.return_value
+            thread.is_alive.return_value = False
+            detector.start()
+
+        observer.stop.assert_called_once_with()
+        thread_type.assert_called_once_with(
+            target=detector._poll,
+            daemon=True,
+            name="AppDetector",
+        )
+        thread.start.assert_called_once_with()
 
 
 class ExplorerWindowTriageTests(unittest.TestCase):
