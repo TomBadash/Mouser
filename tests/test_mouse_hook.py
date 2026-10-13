@@ -622,6 +622,79 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
             ),
         )
 
+    def test_hid_connect_rescans_when_evdev_grabs_a_different_logitech_device(self):
+        # An MX Keys keyboard exposes a Logitech pointer node ("MX Keys Mouse").
+        # If it was grabbed before the real mouse connected, the HID++ connect
+        # for the mouse must trigger a rescan instead of keeping the keyboard.
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook._running = True
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(product_id=0xB020, transport="Bluetooth")
+        )
+        hook._evdev_device = SimpleNamespace(
+            info=SimpleNamespace(vendor=module._LOGI_VENDOR, product=0xB35B)
+        )
+        hook._set_evdev_ready(True)
+
+        hook._on_hid_connect()
+
+        self.assertTrue(hook._rescan_requested.is_set())
+        self.assertTrue(hook._evdev_wakeup.is_set())
+
+    def test_hid_connect_keeps_receiver_evdev_device_despite_pid_mismatch(self):
+        # Receiver-attached devices report the receiver PID over HID++, which
+        # never matches the per-device evdev node, so it must not force a rescan.
+        module = self._reload_for_linux()
+        hook = module.MouseHook()
+        hook._running = True
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(product_id=0xC548, transport="Logi Bolt")
+        )
+        hook._evdev_device = SimpleNamespace(
+            info=SimpleNamespace(vendor=module._LOGI_VENDOR, product=0x4082)
+        )
+        hook._set_evdev_ready(True)
+
+        hook._on_hid_connect()
+
+        self.assertFalse(hook._rescan_requested.is_set())
+
+    def test_find_mouse_device_prefers_node_matching_hid_device(self):
+        module = self._reload_for_linux()
+        keyboard_pointer = _FakeEvdevDevice(
+            name="MX Keys Mouse",
+            path="/dev/input/event16",
+            vendor=module._LOGI_VENDOR,
+            product=0xB35B,
+            capabilities=self._fake_caps(module, include_side=False),
+        )
+        mouse = _FakeEvdevDevice(
+            name="Logitech Unlisted Mouse",
+            path="/dev/input/event9",
+            vendor=module._LOGI_VENDOR,
+            product=0xB0AA,
+            capabilities=self._fake_caps(module, include_side=False),
+        )
+        hook = module.MouseHook()
+        hook._hid_ready = True
+        hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(product_id=0xB0AA, transport="Bluetooth")
+        )
+
+        patches = self._patch_evdev_lookup(
+            module,
+            {
+                keyboard_pointer.path: keyboard_pointer,
+                mouse.path: mouse,
+            },
+        )
+        with patches[0], patches[1]:
+            chosen = hook._find_mouse_device()
+
+        self.assertIs(chosen, mouse)
+        self.assertTrue(keyboard_pointer.close.called)
+
     def test_hid_connect_does_not_mark_device_connected_when_evdev_is_missing(self):
         module = self._reload_for_linux()
         hook = module.MouseHook()

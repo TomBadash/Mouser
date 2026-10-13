@@ -335,10 +335,25 @@ class MouseHook(BaseMouseHook):
         self._emit_debug("HID DPI switch button up")
         self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
+    def _hid_direct_product_id(self):
+        """Product ID of the HID++ device when it is connected directly.
+
+        A direct connection (devIdx 0xFF, labelled "Bluetooth") shares one HID
+        device between the hidraw and evdev nodes, so their product IDs match.
+        Receiver-attached devices report the receiver PID, so return None.
+        """
+        if not (self._hid_ready and self._hid_gesture):
+            return None
+        device = self._hid_gesture.connected_device
+        if getattr(device, "transport", None) != "Bluetooth":
+            return None
+        return getattr(device, "product_id", None)
+
     def _on_hid_connect(self):
         self._hid_ready = True
         self._refresh_device_state(force=True)
         dev = self._evdev_device
+        hid_pid = self._hid_direct_product_id()
         should_wake_evdev = (
             self._running
             and _EVDEV_OK
@@ -346,6 +361,8 @@ class MouseHook(BaseMouseHook):
                 dev is None
                 or not self._evdev_ready
                 or dev.info.vendor != _LOGI_VENDOR
+                # e.g. an MX Keys "Mouse" node grabbed before the mouse connected
+                or (hid_pid is not None and getattr(dev.info, "product", None) != hid_pid)
             )
         )
         if should_wake_evdev:
@@ -475,6 +492,8 @@ class MouseHook(BaseMouseHook):
             except (IndexError, ValueError):
                 return -1
 
+        hid_pid = self._hid_direct_product_id()
+
         def _sort_key(item):
             dev, has_side = item
             info = getattr(dev, "info", None)
@@ -483,6 +502,7 @@ class MouseHook(BaseMouseHook):
                 product_name=getattr(dev, "name", None),
             )
             return (
+                int(hid_pid is not None and getattr(info, "product", None) == hid_pid),
                 int(spec is not None),
                 int(has_side),
                 _event_num(dev),
