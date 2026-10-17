@@ -1477,7 +1477,18 @@ class HidGestureListener:
             msg = _parse(raw)
             if msg is None:
                 continue
-            _, r_feat, r_func, r_sw, r_params = msg
+            r_dev, r_feat, r_func, r_sw, r_params = msg
+
+            # A late reply from a previously probed receiver slot must not be
+            # accepted as the answer for the slot we are asking now.
+            if r_dev != self._dev_idx:
+                self._on_report(raw)
+                continue
+
+            # HID++ 1.0 error from the receiver (e.g. 0x09 UNKNOWN_DEVICE for
+            # an empty slot) -- no point waiting for the full timeout.
+            if r_feat == 0x8F:
+                return None
 
             # HID++ error (feature-index 0xFF)
             if r_feat == 0xFF:
@@ -1509,10 +1520,9 @@ class HidGestureListener:
 
         `timeout_ms` controls how long to wait for the IRoot response. The
         default of 2000 ms is the safe value for active sessions; during
-        the REPROG_V4 discovery probe in `_try_connect` we use a much
-        tighter timeout (≈400 ms) because a live HID++ device responds in
-        <50 ms and waiting longer just stalls us across non-matching
-        receiver slots and candidate interfaces.
+        the REPROG_V4 discovery probe in `_try_connect` we use 1500 ms:
+        empty receiver slots answer at once with a 0x8F error, but a
+        sleeping device can take up to ~1 s to wake and reply.
         """
         hi = (feature_id >> 8) & 0xFF
         lo = feature_id & 0xFF
@@ -3048,7 +3058,9 @@ class HidGestureListener:
             hidpp_name = None
             for idx in idx_order:
                 self._dev_idx = idx
-                fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=400)
+                # A sleeping device behind a receiver can take ~1 s to wake
+                # and answer; empty slots fail fast with a 0x8F error.
+                fi = self._find_feature(FEAT_REPROG_V4, timeout_ms=1500)
                 if fi is not None:
                     reprog_found = True
                     self._feat_idx = fi
