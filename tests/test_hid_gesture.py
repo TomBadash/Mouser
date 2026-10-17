@@ -496,6 +496,38 @@ class HidRequestTransportFailureTests(unittest.TestCase):
         self.assertEqual(listener._consecutive_request_timeouts, 1)
 
 
+class HidRequestDeviceIndexTests(unittest.TestCase):
+    def test_late_reply_from_other_slot_is_not_accepted(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev_idx = 0x01
+        # REPROG_V4 lookup reply that belongs to slot 2, arriving late.
+        late = [0x11, 0x02, 0x00, 0x0A, 0x09, 0x00, 0x00]
+        replies = [late]
+
+        with (
+            patch.object(listener, "_tx"),
+            patch.object(listener, "_rx", side_effect=lambda *_a: replies.pop(0) if replies else None),
+            patch.object(listener, "_on_report") as on_report,
+        ):
+            self.assertIsNone(listener._find_feature(0x1B04, timeout_ms=50))
+
+        on_report.assert_called_once_with(late)
+
+    def test_receiver_unknown_device_error_returns_immediately(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev_idx = 0x03
+        err = [0x10, 0x03, 0x8F, 0x00, 0x0A, 0x09, 0x00]
+
+        with (
+            patch.object(listener, "_tx"),
+            patch.object(listener, "_rx", side_effect=[err]) as rx,
+        ):
+            self.assertIsNone(listener._find_feature(0x1B04, timeout_ms=5000))
+
+        self.assertEqual(rx.call_count, 1)
+        self.assertEqual(listener._consecutive_request_timeouts, 0)
+
+
 class HidBoltReceiverTests(unittest.TestCase):
     """Tests for Logi Bolt receiver support."""
 
