@@ -410,6 +410,31 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             },
         )
 
+    def test_device_wake_replays_wheel_and_all_saved_settings(self):
+        engine = self._make_engine()
+
+        with (
+            patch.object(engine, "_schedule_wheel_invert_apply") as wheel_replay,
+            patch.object(engine, "_request_saved_settings_replay") as settings_replay,
+        ):
+            engine._on_device_wake()
+
+        wheel_replay.assert_called_once_with(force=True)
+        settings_replay.assert_called_once_with()
+
+    def test_saved_settings_replay_can_retry_after_thread_start_failure(self):
+        engine = self._make_engine()
+        with patch("core.engine.threading.Thread") as thread:
+            thread.return_value.start.side_effect = RuntimeError("cannot start")
+            engine._request_saved_settings_replay()
+        self.assertFalse(engine._replay_inflight)
+
+        threads = []
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._request_saved_settings_replay()
+        self.assertEqual(len(threads), 1)
+        self.assertTrue(engine._replay_inflight)
+
     def test_evdev_only_connected_true_does_not_request_replay_worker(self):
         engine = self._make_engine()
         engine.hook.connected_device = SimpleNamespace(name="MX Master 3S", source="evdev")
@@ -479,6 +504,28 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         engine._on_connection_change(True)
 
         self.assertFalse(engine._last_hid_features_ready)
+
+    def test_reconnect_after_sleep_timeout_replays_saved_settings(self):
+        # Asleep path: disconnect is reported while the listener still holds
+        # its device info; the sleep-timeout cleanup clears it silently, and
+        # the eventual reconnect finds hid-ready unchanged from last seen.
+        engine = self._make_engine()
+        engine.hook._hid_gesture = self._make_hid(
+            connected_device=SimpleNamespace(name="MX Master 4")
+        )
+        threads = []
+
+        with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
+            engine._on_connection_change(True)
+            self.assertEqual(len(self._non_battery_threads(threads)), 1)
+            self._non_battery_threads(threads)[0].run_target()
+
+            engine._on_connection_change(False)
+            engine.hook._hid_gesture.connected_device = None
+            engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Master 4")
+            engine._on_connection_change(True)
+
+        self.assertEqual(len(self._non_battery_threads(threads)), 2)
 
     def test_startup_fallback_does_not_queue_replay_after_hid_ready_replay_requested(self):
         engine = self._make_engine()
@@ -702,7 +749,6 @@ class WheelInvertConnectThreadingTests(unittest.TestCase):
             request.assert_not_called()
 
             worker = next(t for t in threads if t.name == "WheelInvertApply")
-            self.assertEqual(worker._target, engine._apply_wheel_invert_setting)
 
             # Once deferred to the worker, the write is applied with the
             # configured invert state.

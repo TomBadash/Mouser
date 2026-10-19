@@ -54,6 +54,7 @@ class BaseMouseHook:
         self._device_connected = False
         self._connection_change_cb = None
         self._battery_notify_cb = None
+        self._device_wake_cb = None
         self.divert_mode_shift = False
         self.divert_dpi_switch = False
         self.wheel_native_invert_active = False
@@ -328,6 +329,13 @@ class BaseMouseHook:
     def set_connection_change_callback(self, cb):
         self._connection_change_cb = cb
 
+    def set_device_wake_callback(self, cb):
+        """Called (on the HID listener thread) when the device re-links after
+        power-saving sleep. Distinct from the connection-change callback: the
+        HID handle never dropped, so ``device_connected`` never flipped, yet
+        the device has power-cycled and lost its volatile firmware settings."""
+        self._device_wake_cb = cb
+
     def set_battery_notify_callback(self, cb):
         """Register ``cb(level, charging)`` for unsolicited battery events."""
         self._battery_notify_cb = cb
@@ -481,6 +489,7 @@ class BaseMouseHook:
             on_thumb_button_up=self._on_hid_thumb_button_up,
             on_thumb_button_move=self._on_hid_thumb_button_move,
             on_battery=self._on_hid_battery,
+            on_wake=self._on_hid_wake,
         )
         self._hid_gesture = listener
         if not listener.start():
@@ -507,6 +516,15 @@ class BaseMouseHook:
     def _on_hid_disconnect(self):
         self._connected_device = None
         self._set_device_connected(False)
+
+    def _on_hid_wake(self):
+        cb = self._device_wake_cb
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception:
+            pass
 
     def _on_hid_battery(self, level, charging):
         cb = self._battery_notify_cb

@@ -165,6 +165,13 @@ The same module owns the SmartShift integration. It prefers the enhanced feature
 
 Mouser handles mouse power-off / on cycles automatically:
 
+A `0x1D4B` wireless-status wake queues a configuration replay on the HID
+listener loop. After the current request completes and held controls are
+released, the listener re-applies the negotiated gesture CID/rawXY mode and
+extra diverts. A failed acknowledgement requests a full reconnect; a successful
+re-arm invokes Engine's wake callback to replay saved DPI, SmartShift,
+haptic/force and wheel settings. This path adds no periodic polling.
+
 - **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device returns. Pending SmartShift / scroll-mode settings are replayed on reconnect.
 - **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` (Windows) and platform equivalents elsewhere, reinstalling the low-level hook when devices are added or removed.
 - **UI layer** — connection state and device identity flow from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge, device name, and active layout in real time.
