@@ -47,6 +47,11 @@ class KeyCaptureDialogQmlTests(unittest.TestCase):
         self.assertIn("dialog.switchToTyping()", DIALOG_QML)
         self.assertIn("dialog.startRecording()", DIALOG_QML)
 
+    def test_optional_ring_label_field_is_exposed(self):
+        self.assertIn("property bool showCustomLabel", DIALOG_QML)
+        self.assertIn("readonly property string customLabel", DIALOG_QML)
+        self.assertIn('s["key_capture.custom_label"]', DIALOG_QML)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1240,6 +1240,79 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertTrue(backend.isReservedCustomShortcut("Win+Shift+S"))
         self.assertFalse(backend.isReservedCustomShortcut("Ctrl+Shift+P"))
 
+    def test_actions_ring_custom_label_is_stored_separately(self):
+        backend = self._make_backend()
+
+        with patch("ui.backend.save_config"):
+            backend.setActionsRingSlot(
+                0, "custom:ctrl+shift+alt+9", "  ShareX screenshot  "
+            )
+
+        self.assertEqual(
+            backend.actionsRingSlots[0], "custom:ctrl+shift+alt+9"
+        )
+        self.assertEqual(backend.actionsRingSlotLabels[0], "ShareX screenshot")
+        self.assertEqual(
+            backend._active_ring_slot_labels(backend.actionsRingSlots)[0],
+            "ShareX screenshot",
+        )
+
+        emitted = []
+        # Observe the payload without queuing a QWidget overlay in this
+        # QCoreApplication-only backend test suite.
+        backend._showRingRequest.disconnect()
+        backend._showRingRequest.connect(
+            lambda labels, interactive: emitted.append((labels, interactive))
+        )
+        backend._onEngineShowRing(backend.actionsRingSlots, True)
+        self.assertEqual(emitted[0][0][0], "ShareX screenshot")
+        self.assertTrue(emitted[0][1])
+
+        with patch("ui.backend.save_config"):
+            backend.setActionsRingSlot(0, "play_pause", "ignored")
+        self.assertEqual(backend.actionsRingSlotLabels[0], "")
+
+    def test_actions_ring_labels_use_active_not_editor_profile(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"].update({
+            "actions_ring_use_global": False,
+            "actions_ring_slots": ["custom:ctrl+1"],
+            "actions_ring_slot_labels": ["Global"],
+        })
+        cfg["profiles"]["active"] = {"mappings": {
+            "actions_ring_slots": ["custom:ctrl+2"],
+            "actions_ring_slot_labels": ["Active"],
+        }}
+        cfg["profiles"]["editor"] = {"mappings": {
+            "actions_ring_slots": ["custom:ctrl+3"],
+            "actions_ring_slot_labels": ["Editor"],
+        }}
+        cfg["active_profile"] = "active"
+        backend = self._make_backend(cfg=cfg)
+        backend.setRingEditProfile("editor")
+        self.assertEqual(backend.actionsRingSlotLabels, ["Editor"])
+        self.assertEqual(backend._active_ring_slot_labels(["custom:ctrl+2"]), ["Active"])
+        with patch("ui.backend.save_config"):
+            backend.setActionsRingSlot(0, "custom:ctrl+4", "Edited")
+        self.assertEqual(backend.actionsRingSlotLabels, ["Edited"])
+        self.assertEqual(backend._cfg["profiles"]["active"]["mappings"]["actions_ring_slot_labels"], ["Active"])
+        del backend._cfg["profiles"]["active"]["mappings"]["actions_ring_slots"]
+        self.assertEqual(backend._active_ring_slot_labels(["custom:ctrl+1"]), ["Global"])
+
+    def test_actions_ring_label_alignment_length_limit_and_negative_index(self):
+        backend = self._make_backend()
+        original = copy.deepcopy(backend._cfg)
+        with patch("ui.backend.save_config") as save:
+            backend.setActionsRingSlot(-1, "custom:ctrl+1", "ignored")
+            save.assert_not_called()
+            self.assertEqual(backend._cfg, original)
+            backend.setActionsRingSlot(5, "custom:ctrl+1", "x" * 60)
+            self.assertEqual(len(backend.actionsRingSlots), 6)
+            self.assertEqual(len(backend.actionsRingSlotLabels), 6)
+            self.assertEqual(backend.actionsRingSlotLabels[5], "x" * 40)
+            backend.setActionsRingSlots(["play_pause", "custom:ctrl+2"])
+            self.assertEqual(backend.actionsRingSlotLabels, ["", ""])
+
     def test_custom_shortcut_validation_error_info_explains_parse_failure(self):
         backend = self._make_backend()
 

@@ -20,6 +20,8 @@ Rectangle {
     property string targetButton: ""
     property string targetProfile: ""
     property bool recording: false
+    property bool showCustomLabel: false
+    readonly property string customLabel: customLabelField.text.trim()
     property bool _valid: false
     property string _preview: ""
     property string _canonical: ""
@@ -40,9 +42,10 @@ Rectangle {
     color: "#80000000"
     z: 100
 
-    function open(profile, button) {
+    function open(profile, button, initialLabel) {
         targetProfile = profile
         targetButton = button
+        customLabelField.text = initialLabel || ""
         shortcutField.text = ""
         _valid = false
         _preview = ""
@@ -253,6 +256,26 @@ Rectangle {
                 text: s["key_capture.title"]
                 font { family: uiState.fontFamily; pixelSize: 16; bold: true }
                 color: dialog.theme.textPrimary
+            }
+
+            Text {
+                text: s["key_capture.custom_label"] || "Ring label (optional)"
+                font { family: uiState.fontFamily; pixelSize: 11 }
+                color: dialog.theme.textSecondary
+                visible: dialog.showCustomLabel
+            }
+
+            TextField {
+                id: customLabelField
+                width: parent.width
+                visible: dialog.showCustomLabel
+                placeholderText: s["key_capture.custom_label_placeholder"]
+                                 || "e.g. ShareX screenshot"
+                maximumLength: 40
+                font { family: uiState.fontFamily; pixelSize: 13 }
+                selectByMouse: true
+                inputMethodHints: Qt.ImhNoPredictiveText
+                Material.accent: dialog.theme.accent
             }
 
             TextField {

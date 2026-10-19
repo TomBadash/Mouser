@@ -177,6 +177,7 @@ All settings live in `config.json` under the platform config dir (`%APPDATA%\Mou
 - Per-profile app associations (list of `.exe` / bundle / process names)
 - Global settings: DPI, scroll inversion, macOS trackpad filtering, gesture tuning, appearance, debug flags, Smart Shift mode + sensitivity, language, and startup preferences (`start_at_login`, `start_minimized`)
 - Per-device layout override selections for unsupported devices
+- Optional Actions Ring custom-shortcut names: `actions_ring_slot_labels` is a parallel list alongside `actions_ring_slots`, in global settings or per-profile mappings. Action IDs remain unchanged. Missing/blank labels use the existing overlay fallback; non-custom actions keep their built-in names. The shortcut recorder offers a ring-only optional name field (trimmed, maximum 40 characters).
 - Automatic migration from older config versions (current version `10`)
 
 Logs are written via [`core/log_setup.py`](core/log_setup.py) to a 5 × 5 MB rotating file in `~/Library/Logs/Mouser`, `%APPDATA%\Mouser\logs`, or `$XDG_STATE_HOME/Mouser/logs`. The setup is idempotent and safe to call multiple times — `main_qml.py` invokes it before any Qt or core import so startup output is captured from the very first line.

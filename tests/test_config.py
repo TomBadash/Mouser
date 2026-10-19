@@ -24,6 +24,19 @@ def _platform_catalog(platform):
 
 
 class ConfigMigrationTests(unittest.TestCase):
+    def test_ring_label_migration_preserves_shortcuts_and_is_idempotent(self):
+        cfg = {
+            "version": config.DEFAULT_CONFIG["version"],
+            "profiles": {"default": {"mappings": {}}},
+            "settings": {"actions_ring_slots": ["custom:ctrl+1", "play_pause"]},
+        }
+        migrated = config._migrate(cfg)
+        self.assertEqual(migrated["settings"]["actions_ring_slot_labels"], ["", ""])
+        self.assertEqual(migrated["settings"]["actions_ring_slots"], ["custom:ctrl+1", "play_pause"])
+        migrated["settings"]["actions_ring_slot_labels"][0] = "My shortcut"
+        config._migrate(migrated)
+        self.assertEqual(migrated["settings"]["actions_ring_slot_labels"], ["My shortcut", ""])
+
     def test_migrate_v1_config_adds_profile_apps_and_gesture_defaults(self):
         legacy = {
             "version": 1,
@@ -559,6 +572,26 @@ class DefaultActionValidityTests(unittest.TestCase):
                     f"ring slot {slot!r} has no short label; the overlay would "
                     f"show a raw id on {platform}",
                 )
+
+    def test_custom_shortcut_ring_label_override_preserves_readable_fallback(self):
+        from core.key_simulator import custom_action_label
+        from ui.actions_ring_overlay import _resolve_ring_label
+
+        action_id = "custom:ctrl+shift+alt+9"
+        fallback = _resolve_ring_label(action_id, action_id)
+        self.assertEqual(fallback, custom_action_label(action_id))
+        self.assertNotIn("custom:", fallback)
+        self.assertEqual(
+            _resolve_ring_label(action_id, action_id, "  ShareX screenshot  "),
+            "ShareX screenshot",
+        )
+        self.assertEqual(
+            _resolve_ring_label(action_id, action_id, "   "), fallback
+        )
+        self.assertEqual(
+            _resolve_ring_label("play_pause", "Play / Pause", "ignored"),
+            "Play / Pause",
+        )
 
     def test_custom_shortcut_ring_label_is_readable(self):
         # A custom shortcut can never have a RING_LABEL_MAP entry, so it always

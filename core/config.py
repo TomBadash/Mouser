@@ -297,6 +297,7 @@ DEFAULT_CONFIG = {
         "actions_ring_hover_haptic": True,
         "actions_ring_use_global": True,
         "actions_ring_slots": _default_actions_ring_slots(),
+        "actions_ring_slot_labels": ["", "", "", ""],
     },
 }
 
@@ -767,6 +768,10 @@ def _migrate(cfg):
             list(default_slots) if default_slots
             else _default_actions_ring_slots()
         )
+    settings.setdefault(
+        "actions_ring_slot_labels",
+        [""] * len(settings.get("actions_ring_slots", [])),
+    )
 
     # Gesture Swipe unification:
     #  1. Seed every gesture key ("<btn>_tap" and the mode_shift/ordinary-button
