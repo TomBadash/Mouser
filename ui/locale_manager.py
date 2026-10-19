@@ -49,6 +49,10 @@ _TRANSLATIONS = {
         "ring.slots_title": "Ring Actions",
         "ring.slots_desc": "Choose the actions available in each sector of the radial menu",
         "ring.slot_prefix": "Slot ",
+        "ring.layout": "Ring Layout",
+        "ring.layout_desc": "Select the number of action sectors in the radial menu",
+        "ring.sectors_4": "4 Sectors",
+        "ring.sectors_8": "8 Sectors",
 
         # Mouse page — profile list
         "mouse.profiles": "Profiles",
@@ -325,6 +329,10 @@ _TRANSLATIONS = {
         "ring.slots_title": "\u73af\u5f62\u52a8\u4f5c",
         "ring.slots_desc": "\u9009\u62e9\u5f84\u5411\u83dc\u5355\u6bcf\u4e2a\u6247\u533a\u4e2d\u53ef\u7528\u7684\u52a8\u4f5c",
         "ring.slot_prefix": "\u4f4d\u7f6e ",
+        "ring.layout": "\u52a8\u4f5c\u73af\u5e03\u5c40",
+        "ring.layout_desc": "\u9009\u62e9\u5f84\u5411\u83dc\u5355\u4e2d\u7684\u6247\u533a\u6570\u91cf",
+        "ring.sectors_4": "4 \u4e2a\u6247\u533a",
+        "ring.sectors_8": "8 \u4e2a\u6247\u533a",
 
         "nav.actions_ring": "\u52a8\u4f5c\u73af",
         "nav.about": "\u5173\u4e8e",
@@ -587,6 +595,10 @@ _TRANSLATIONS = {
         "ring.slots_title": "\u74b0\u5f62\u52d5\u4f5c",
         "ring.slots_desc": "\u9078\u64c7\u5f91\u5411\u9078\u55ae\u6bcf\u500b\u6247\u5340\u4e2d\u53ef\u7528\u7684\u52d5\u4f5c",
         "ring.slot_prefix": "\u4f4d\u7f6e ",
+        "ring.layout": "\u52d5\u4f5c\u74b0\u7248\u9762\u914d\u7f6e",
+        "ring.layout_desc": "\u9078\u53d6\u5f91\u5411\u529f\u80fd\u8868\u4e2d\u7684\u6247\u5340\u6578\u91cf",
+        "ring.sectors_4": "4 \u500b\u6247\u5340",
+        "ring.sectors_8": "8 \u500b\u6247\u5340",
 
         "nav.actions_ring": "\u52d5\u4f5c\u74b0",
         "nav.about": "\u95dc\u65bc",

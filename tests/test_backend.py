@@ -1622,6 +1622,27 @@ class BackendListPropertyMemoizationTests(unittest.TestCase):
         backend.deviceLayoutChanged.emit()
         self.assertIs(backend.knownApps, first)
 
+    def test_actions_ring_slot_count_and_resize(self):
+        backend = self._build()
+        # Default slots count
+        self.assertGreaterEqual(backend.actionsRingSlotCount, 4)
+        initial_slots = list(backend.actionsRingSlots)
+
+        # Expand to 8 slots
+        backend.setActionsRingSlotCount(8)
+        self.assertEqual(backend.actionsRingSlotCount, 8)
+        self.assertEqual(len(backend.actionsRingSlots), 8)
+        # Ensure previous slots were preserved
+        for i, s in enumerate(initial_slots):
+            self.assertEqual(backend.actionsRingSlots[i], s)
+
+        # Shrink to 4 slots
+        backend.setActionsRingSlotCount(4)
+        self.assertEqual(backend.actionsRingSlotCount, 4)
+        self.assertEqual(len(backend.actionsRingSlots), 4)
+        self.assertEqual(backend.actionsRingSlots[:4], initial_slots[:4])
+
 
 if __name__ == "__main__":
     unittest.main()
+

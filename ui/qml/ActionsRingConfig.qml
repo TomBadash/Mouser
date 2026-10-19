@@ -37,12 +37,23 @@ Item {
         return 0
     }
 
+    function getSectorDirectionName(slotIndex, totalSlots) {
+        if (totalSlots === 4) {
+            var dir4 = ["Top", "Right", "Bottom", "Left"]
+            return slotIndex < dir4.length ? dir4[slotIndex] : ""
+        } else if (totalSlots === 8) {
+            var dir8 = ["Top", "Top-Right", "Right", "Bottom-Right", "Bottom", "Bottom-Left", "Left", "Top-Left"]
+            return slotIndex < dir8.length ? dir8[slotIndex] : ""
+        }
+        return ""
+    }
+
     function rebuildSlots(slotIndex, newActionId) {
         var current = backend.actionsRingSlots
         var slots = []
         for (var i = 0; i < current.length; i++)
             slots.push(current[i])
-        while (slots.length < 4)
+        while (slots.length <= slotIndex)
             slots.push("none")
         slots[slotIndex] = newActionId
         backend.setActionsRingSlots(slots)
@@ -319,6 +330,71 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            // ── Ring Layout Card (4 vs 8 Sectors) ────────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: ringLayoutContent.implicitHeight + 40
+                radius: Theme.radius
+                color: actionsRingConfig.theme.bgCard
+                border.width: 1
+                border.color: actionsRingConfig.theme.border
+
+                Column {
+                    id: ringLayoutContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Row {
+                        width: parent.width
+
+                        Text {
+                            text: s["ring.layout"] || "Ring Layout"
+                            font { family: uiState.fontFamily; pixelSize: 16; bold: true }
+                            color: actionsRingConfig.theme.textPrimary
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - layoutButtonsRow.width
+                        }
+
+                        Row {
+                            id: layoutButtonsRow
+                            spacing: 8
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Button {
+                                text: s["ring.sectors_4"] || "4 Sectors"
+                                highlighted: backend.actionsRingSlotCount === 4
+                                Material.accent: actionsRingConfig.theme.accent
+                                onClicked: backend.setActionsRingSlotCount(4)
+                            }
+
+                            Button {
+                                text: s["ring.sectors_8"] || "8 Sectors"
+                                highlighted: backend.actionsRingSlotCount === 8
+                                Material.accent: actionsRingConfig.theme.accent
+                                onClicked: backend.setActionsRingSlotCount(8)
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: s["ring.layout_desc"]
+                              || "Select the number of action sectors in the radial menu"
+                        font { family: uiState.fontFamily; pixelSize: 12 }
+                        color: actionsRingConfig.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── Ring Slot Editor Card ────────────────────────────────
             Rectangle {
                 width: parent.width - 72
@@ -362,15 +438,19 @@ Item {
                     }
 
                     Repeater {
-                        model: 4
+                        model: backend.actionsRingSlotCount
 
                         delegate: RowLayout {
                             width: slotsContent.width
                             spacing: 12
 
                             Text {
-                                text: (s["ring.slot_prefix"] || "Slot ") + (index + 1)
-                                Layout.preferredWidth: 60
+                                text: {
+                                    var dir = actionsRingConfig.getSectorDirectionName(index, backend.actionsRingSlotCount)
+                                    var prefix = (s["ring.slot_prefix"] || "Slot ") + (index + 1)
+                                    return dir ? prefix + " (" + dir + ")" : prefix
+                                }
+                                Layout.preferredWidth: 120
                                 font {
                                     family: uiState.fontFamily
                                     pixelSize: 12

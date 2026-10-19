@@ -23,6 +23,7 @@ from core.config import (
     get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
     set_button_haptic,
     GESTURE_SWIPE_ACTION, SWIPE_CAPABLE_BUTTONS, GESTURE_SWIPE_DIRECTIONS,
+    _default_actions_ring_slots,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -700,8 +701,12 @@ class Backend(QObject):
     @Property(list, notify=mappingsChanged)
     def actionsRingSlots(self):
         if self.actionsRingUseGlobal:
-            return list(self._cfg.get("settings", {}).get("actions_ring_slots", []))
-        return list(self._ring_slots_target_mappings().get("actions_ring_slots", []))
+            slots = self._cfg.get("settings", {}).get("actions_ring_slots")
+        else:
+            slots = self._ring_slots_target_mappings().get("actions_ring_slots")
+        if slots is None:
+            return list(_default_actions_ring_slots())
+        return list(slots)
 
     @Slot(list)
     def setActionsRingSlots(self, slots):
@@ -713,6 +718,29 @@ class Backend(QObject):
         self.mappingsChanged.emit()
         if self._engine:
             self._engine.reload_mappings()
+
+    @Property(int, notify=mappingsChanged)
+    def actionsRingSlotCount(self):
+        slots = self.actionsRingSlots
+        return len(slots) if slots else 4
+
+    @Slot(int)
+    def setActionsRingSlotCount(self, count):
+        count = max(2, min(16, int(count)))
+        current = list(self.actionsRingSlots)
+        if len(current) == count:
+            return
+        if len(current) < count:
+            default_slots = _default_actions_ring_slots()
+            while len(current) < count:
+                idx = len(current)
+                if idx < len(default_slots):
+                    current.append(default_slots[idx])
+                else:
+                    current.append("none")
+        else:
+            current = current[:count]
+        self.setActionsRingSlots(current)
 
     @Property(bool, notify=hidFeaturesReadyChanged)
     def hapticSupported(self):
