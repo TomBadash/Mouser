@@ -56,6 +56,15 @@ _kCGEventTapDisabledByTimeout = 0xFFFFFFFE
 _kCGEventTapDisabledByUserInput = 0xFFFFFFFF
 
 
+class _TapReturnBox:
+    # PyObjC (pyobjc-framework-Quartz <= 12.2.2) never Py_DECREFs the value an
+    # event-tap callback returns, so each passed-through event's CGEventRef
+    # proxy -- and its CGEvent -- would live forever. Returning this one
+    # long-lived box instead (PyObjC unwraps `__pyobjc_object__`) puts the
+    # stray reference on the box, and the event is freed once replaced.
+    __slots__ = ("__pyobjc_object__",)
+
+
 class MouseHook(BaseMouseHook):
     """
     Uses CGEventTap on macOS to intercept mouse button presses and scroll
@@ -76,6 +85,8 @@ class MouseHook(BaseMouseHook):
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_thread = None
         self._first_event_logged = False
+        self._tap_return_box = _TapReturnBox()
+        self._tap_return_box.__pyobjc_object__ = None
 
     def _negate_scroll_axis(self, cg_event, axis):
         for field_name in (
@@ -232,6 +243,12 @@ class MouseHook(BaseMouseHook):
             # covers the second thread that touches Foundation objects.
             with objc.autorelease_pool():
                 self._dispatch(event)
+
+    def _tap_callback_entry(self, proxy, event_type, cg_event, refcon):
+        result = self._event_tap_callback(proxy, event_type, cg_event, refcon)
+        box = self._tap_return_box
+        box.__pyobjc_object__ = result
+        return None if result is None else box
 
     @_autoreleased
     def _event_tap_callback(self, proxy, event_type, cg_event, refcon):
@@ -590,7 +607,7 @@ class MouseHook(BaseMouseHook):
             Quartz.kCGHeadInsertEventTap,
             Quartz.kCGEventTapOptionDefault,
             event_mask,
-            self._event_tap_callback,
+            self._tap_callback_entry,
             None,
         )
 
