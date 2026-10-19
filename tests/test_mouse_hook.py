@@ -1137,6 +1137,8 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
     def setUp(self):
         self.mock_quartz = MagicMock(name="Quartz")
         self.mock_quartz.kCGEventScrollWheel = self._kCGEventScrollWheel
+        self.mock_quartz.kCGScrollWheelEventScrollPhase = 99
+        self.mock_quartz.kCGScrollWheelEventMomentumPhase = 123
         mouse_hook.Quartz = self.mock_quartz
 
     def tearDown(self):
@@ -1153,7 +1155,7 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         hook.block(mouse_hook.MouseEvent.HSCROLL_RIGHT)
         hook._connected_device = SimpleNamespace(
             key="mx_master_3s",
-            thumb_button_via_hid=False,
+        thumb_button_via_hid=False,
             gesture_via_sense_panel=False,
         )
         return hook
@@ -1191,6 +1193,8 @@ class MacOSTrackpadScrollFilterTests(unittest.TestCase):
         def _get(event, field):
             if field == self.mock_quartz.kCGScrollWheelEventScrollPhase:
                 return 1  # trackpad
+            if field == 99:  # kCGScrollWheelEventScrollPhase
+                return 2  # Changed phase
             if field == self.mock_quartz.kCGScrollWheelEventFixedPtDeltaAxis2:
                 return 5 * 65536  # non-zero horizontal delta
             if field == self.mock_quartz.kCGEventSourceUserData:
