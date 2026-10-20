@@ -10,6 +10,7 @@ import sys
 import tempfile
 from urllib.parse import quote
 from core import app_catalog
+from core.locales import SYSTEM_LANGUAGE, normalize_language_preference
 
 if sys.platform == "darwin":
     CONFIG_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mouser")
@@ -281,7 +282,7 @@ DEFAULT_CONFIG = {
         "appearance_mode": "system",
         "debug_mode": False,
         "device_layout_overrides": {},
-        "language": "en",
+        "language": SYSTEM_LANGUAGE,
         "haptic_level": 2,          # 0=subtle, 1=low, 2=medium, 3=high
         "haptic_enabled": True,     # global haptic on/off
         "action_haptic": [],        # action IDs that fire haptic on press; empty = opt-in
@@ -734,7 +735,9 @@ def _migrate(cfg):
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
     cfg["settings"].setdefault("device_layout_overrides", {})
-    cfg["settings"].setdefault("language", "en")
+    cfg["settings"]["language"] = normalize_language_preference(
+        cfg["settings"].get("language", SYSTEM_LANGUAGE)
+    )
     cfg["settings"].setdefault("ignore_trackpad", True)
     cfg["settings"].setdefault("scroll_force", 50)
     cfg["settings"].setdefault("screenshot_directory", "")

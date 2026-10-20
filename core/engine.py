@@ -84,9 +84,9 @@ class Engine:
     and auto-switches profiles when the foreground app changes.
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
         self.hook = MouseHook()
-        self.cfg = load_config()
+        self.cfg = config if config is not None else load_config()
         self._enabled = True
         self._last_haptic_time = 0.0
         self._hscroll_state = {
@@ -1589,7 +1589,12 @@ class Engine:
         Re-wire callbacks without tearing down the hook or HID++.
         """
         with self._lock:
-            self.cfg = load_config()
+            loaded = load_config()
+            # Keep the object shared with the UI backend. Replacing it here
+            # would allow either side to overwrite newer settings with a stale
+            # snapshot on its next save.
+            self.cfg.clear()
+            self.cfg.update(loaded)
             self._current_profile = self.cfg.get("active_profile", "default")
             self.hook.reset_bindings()
             self._setup_hooks()

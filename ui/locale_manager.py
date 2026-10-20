@@ -1,10 +1,18 @@
 """
 Locale Manager — provides i18n support for the QML UI.
-Supports English (en), Simplified Chinese (zh_CN), and Traditional Chinese (zh_TW).
+Supports system-language detection, English (en), Simplified Chinese (zh_CN),
+and Traditional Chinese (zh_TW).
 Exposed to QML as the context property `lm`.
 """
 
-from PySide6.QtCore import QObject, Property, Signal, Slot
+from PySide6.QtCore import QObject, Property, QLocale, Signal, Slot
+
+from core.locales import (
+    LANGUAGE_PREFERENCES,
+    SYSTEM_LANGUAGE,
+    normalize_language_preference,
+    resolve_language_preference,
+)
 
 _TRANSLATIONS = {
     "en": {
@@ -282,6 +290,7 @@ _TRANSLATIONS = {
 
         # Language names
         "lang.en": "English",
+        "lang.system": "System default",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
         "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
     },
@@ -544,6 +553,7 @@ _TRANSLATIONS = {
         "about.close": "\u5173\u95ed",
 
         "lang.en": "English",
+        "lang.system": "\u8ddf\u968f\u7cfb\u7edf",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
         "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
     },
@@ -806,15 +816,17 @@ _TRANSLATIONS = {
         "about.close": "\u95dc\u9589",
 
         "lang.en": "English",
+        "lang.system": "\u8ddf\u96a8\u7cfb\u7d71",
         "lang.zh_CN": "\u7b80\u4f53\u4e2d\u6587",
         "lang.zh_TW": "\u7e41\u9ad4\u4e2d\u6587",
     },
 }
 
 AVAILABLE_LANGUAGES = [
-    {"code": "en",    "name": "English"},
-    {"code": "zh_CN", "name": "\u7b80\u4f53\u4e2d\u6587"},
-    {"code": "zh_TW", "name": "\u7e41\u9ad4\u4e2d\u6587"},
+    {"code": "system", "nameKey": "lang.system"},
+    {"code": "en", "nameKey": "lang.en"},
+    {"code": "zh_CN", "nameKey": "lang.zh_CN"},
+    {"code": "zh_TW", "nameKey": "lang.zh_TW"},
 ]
 
 # ── Button name translations ──────────────────────────────────────────────────
@@ -1064,25 +1076,47 @@ class LocaleManager(QObject):
 
     languageChanged = Signal()
 
-    def __init__(self, language: str = "en", parent=None):
+    def __init__(
+        self,
+        language: str = SYSTEM_LANGUAGE,
+        parent=None,
+        system_locale_name: str | None = None,
+    ):
         super().__init__(parent)
-        lang = language if language in _TRANSLATIONS else "en"
-        self._language = lang
-        self._strings: dict = dict(_TRANSLATIONS[lang])
+        system_locale = QLocale.system()
+        ui_languages = system_locale.uiLanguages()
+        self._system_locale_name = (
+            system_locale_name
+            or (ui_languages[0] if ui_languages else system_locale.name())
+        )
+        self._language_preference = normalize_language_preference(language)
+        self._language = resolve_language_preference(
+            self._language_preference,
+            self._system_locale_name,
+        )
+        self._strings: dict = dict(_TRANSLATIONS[self._language])
 
     # ── language property ─────────────────────────────────────────
     @Property(str, notify=languageChanged)
     def language(self) -> str:
         return self._language
 
+    @Property(str, notify=languageChanged)
+    def languagePreference(self) -> str:
+        return self._language_preference
+
     @Slot(str)
-    def setLanguage(self, lang: str) -> None:
-        if lang == self._language:
+    def setLanguage(self, preference: str) -> None:
+        if preference not in LANGUAGE_PREFERENCES:
             return
-        if lang not in _TRANSLATIONS:
+        if preference == self._language_preference:
             return
-        self._language = lang
-        self._strings = dict(_TRANSLATIONS[lang])
+        self._language_preference = preference
+        self._language = resolve_language_preference(
+            preference,
+            self._system_locale_name,
+        )
+        self._strings = dict(_TRANSLATIONS[self._language])
         self.languageChanged.emit()
 
     # ── strings map (QVariantMap) ─────────────────────────────────

@@ -1,6 +1,70 @@
 import unittest
 
-from ui.locale_manager import _TRANSLATIONS
+from ui.locale_manager import AVAILABLE_LANGUAGES, LocaleManager, _TRANSLATIONS
+
+from core.locales import language_for_system_locale, resolve_language_preference
+from ui.font_manager import preferred_ui_font_family
+
+
+class LocaleResolutionTests(unittest.TestCase):
+    def test_system_locale_resolves_supported_chinese_variants(self):
+        cases = {
+            "en-US": "en",
+            "zh-Hans-CN": "zh_CN",
+            "zh-SG": "zh_CN",
+            "zh-Hant-TW": "zh_TW",
+            "zh-HK": "zh_TW",
+        }
+        for locale_name, expected in cases.items():
+            with self.subTest(locale_name=locale_name):
+                self.assertEqual(language_for_system_locale(locale_name), expected)
+
+    def test_explicit_language_overrides_an_english_system(self):
+        self.assertEqual(resolve_language_preference("zh_CN", "en-US"), "zh_CN")
+        manager = LocaleManager(language="zh_CN", system_locale_name="en-US")
+        self.assertEqual(manager.languagePreference, "zh_CN")
+        self.assertEqual(manager.language, "zh_CN")
+
+    def test_system_preference_is_distinct_when_resolved_language_is_same(self):
+        manager = LocaleManager(language="en", system_locale_name="en-US")
+        changes = []
+        manager.languageChanged.connect(lambda: changes.append(manager.languagePreference))
+
+        manager.setLanguage("system")
+
+        self.assertEqual(manager.language, "en")
+        self.assertEqual(manager.languagePreference, "system")
+        self.assertEqual(changes, ["system"])
+
+    def test_available_languages_include_system_default(self):
+        self.assertEqual(AVAILABLE_LANGUAGES[0]["code"], "system")
+        self.assertTrue(all("nameKey" in option for option in AVAILABLE_LANGUAGES))
+
+
+class LocaleFontTests(unittest.TestCase):
+    def test_simplified_chinese_uses_windows_ui_font_on_english_windows(self):
+        family = preferred_ui_font_family(
+            "win32",
+            "zh_CN",
+            ["Segoe UI", "Microsoft YaHei UI", "Microsoft JhengHei UI"],
+            "Segoe UI",
+        )
+        self.assertEqual(family, "Microsoft YaHei UI")
+
+    def test_traditional_chinese_uses_its_own_windows_glyph_family(self):
+        family = preferred_ui_font_family(
+            "win32",
+            "zh_TW",
+            ["Segoe UI", "Microsoft YaHei UI", "Microsoft JhengHei UI"],
+            "Segoe UI",
+        )
+        self.assertEqual(family, "Microsoft JhengHei UI")
+
+    def test_missing_cjk_fonts_fall_back_to_system_font(self):
+        family = preferred_ui_font_family(
+            "win32", "zh_CN", ["Segoe UI"], "Segoe UI"
+        )
+        self.assertEqual(family, "Segoe UI")
 
 
 class LocaleManagerTranslationTests(unittest.TestCase):

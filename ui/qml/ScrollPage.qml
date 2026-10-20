@@ -741,34 +741,34 @@ Item {
                                 width: Math.max(108, langText.implicitWidth + 28)
                                 height: 38
                                 radius: 10
-                                color: lm.language === modelData.code
+                                color: lm.languagePreference === modelData.code
                                        ? scrollPage.theme.accent
                                        : langMa.containsMouse
                                          ? scrollPage.theme.bgCardHover
                                          : scrollPage.theme.bgSubtle
                                 border.width: 1
-                                border.color: lm.language === modelData.code
+                                border.color: lm.languagePreference === modelData.code
                                               ? scrollPage.theme.accent
                                               : scrollPage.theme.border
 
                                 Behavior on color { ColorAnimation { duration: 120 } }
 
                                 Accessible.role: Accessible.Button
-                                Accessible.name: modelData.name
+                                Accessible.name: s[modelData.nameKey]
                                 Accessible.checkable: true
-                                Accessible.checked: lm.language === modelData.code
+                                Accessible.checked: lm.languagePreference === modelData.code
                                 Accessible.onPressAction: lm.setLanguage(modelData.code)
 
                                 Text {
                                     id: langText
                                     anchors.centerIn: parent
-                                    text: modelData.name
+                                    text: s[modelData.nameKey]
                                     font {
                                         family: uiState.fontFamily
                                         pixelSize: 12
-                                        bold: lm.language === modelData.code
+                                        bold: lm.languagePreference === modelData.code
                                     }
-                                    color: lm.language === modelData.code
+                                    color: lm.languagePreference === modelData.code
                                            ? scrollPage.theme.bgSidebar
                                            : scrollPage.theme.textPrimary
                                 }

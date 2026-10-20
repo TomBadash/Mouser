@@ -104,6 +104,25 @@ class _RecordedThread:
         return None
 
 
+class EngineConfigSharingTests(unittest.TestCase):
+    def test_reload_mappings_preserves_shared_config_identity(self):
+        from core.engine import Engine
+
+        shared = copy.deepcopy(DEFAULT_CONFIG)
+        loaded = copy.deepcopy(DEFAULT_CONFIG)
+        loaded["settings"]["language"] = "zh_TW"
+        with (
+            patch("core.engine.MouseHook", _FakeMouseHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+        ):
+            engine = Engine(config=shared)
+            with patch("core.engine.load_config", return_value=loaded):
+                engine.reload_mappings()
+
+        self.assertIs(engine.cfg, shared)
+        self.assertEqual(shared["settings"]["language"], "zh_TW")
+
+
 class EngineHorizontalScrollTests(unittest.TestCase):
     def _make_engine(self, hscroll_threshold=1):
         from core.engine import Engine

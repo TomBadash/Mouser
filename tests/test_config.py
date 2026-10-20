@@ -1,3 +1,4 @@
+import copy
 import json
 import ntpath
 import os
@@ -59,6 +60,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
+        self.assertEqual(migrated["settings"]["language"], "system")
         self.assertTrue(migrated["settings"]["ignore_trackpad"])
         self.assertEqual(migrated["settings"]["screenshot_directory"], "")
         self.assertTrue(migrated["settings"]["check_for_updates"])
@@ -116,6 +118,17 @@ class ConfigMigrationTests(unittest.TestCase):
 
     def test_default_hscroll_threshold_supports_fractional_mac_deltas(self):
         self.assertEqual(config.DEFAULT_CONFIG["settings"]["hscroll_threshold"], 0.1)
+
+    def test_new_config_follows_system_language(self):
+        self.assertEqual(config.DEFAULT_CONFIG["settings"]["language"], "system")
+
+    def test_invalid_language_preference_migrates_to_system(self):
+        cfg = copy.deepcopy(config.DEFAULT_CONFIG)
+        cfg["settings"]["language"] = "unsupported"
+
+        migrated = config._migrate(cfg)
+
+        self.assertEqual(migrated["settings"]["language"], "system")
 
     def test_load_config_migrates_integer_hscroll_threshold(self):
         partial = {

@@ -112,6 +112,28 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertEqual(backend.effectiveDeviceLayoutKey, "generic_mouse")
         self.assertFalse(backend.hasInteractiveDeviceLayout)
 
+    def test_language_preference_survives_later_saves_in_shared_config(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["settings"]["language"] = "en"
+        engine = _FakeEngine()
+        engine.cfg = cfg
+        backend = self._make_backend(engine=engine, cfg=cfg)
+        saved = []
+
+        with patch(
+            "ui.backend.save_config",
+            side_effect=lambda value: saved.append(copy.deepcopy(value)),
+        ):
+            backend.setLanguagePreference("zh_CN")
+            backend.setStartMinimized(not backend.startMinimized)
+
+        self.assertIs(backend._cfg, engine.cfg)
+        self.assertEqual(engine.cfg["settings"]["language"], "zh_CN")
+        self.assertEqual(len(saved), 2)
+        self.assertTrue(
+            all(item["settings"]["language"] == "zh_CN" for item in saved)
+        )
+
     def test_device_image_source_uses_encoded_file_url(self):
         backend = self._make_backend(root_dir="/tmp/Mouser Build")
 
