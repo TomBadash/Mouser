@@ -355,6 +355,25 @@ def _macos_plist_path() -> str:
     )
 
 
+def running_as_macos_launch_agent() -> bool:
+    """True when THIS process was spawned by the Mouser LaunchAgent.
+
+    launchd sets ``XPC_SERVICE_NAME`` to the job label for the processes it
+    spawns. Booting that job out would terminate this very process, so the
+    caller must avoid ``launchctl bootout`` (and a re-``bootstrap``, whose
+    RunAtLoad would spawn a duplicate instance) while running as the agent.
+    """
+    return os.environ.get("XPC_SERVICE_NAME", "").strip() == MACOS_LAUNCH_AGENT_LABEL
+
+
+def _launchctl_job_loaded(domain: str) -> bool:
+    """True when the Mouser LaunchAgent is loaded in the given launchd domain."""
+    result = _launchctl_run(
+        ["launchctl", "print", f"{domain}/{MACOS_LAUNCH_AGENT_LABEL}"]
+    )
+    return result.returncode == 0
+
+
 def _launchctl_run(args: list) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
@@ -434,12 +453,18 @@ def _apply_macos(enabled: bool) -> None:
     launch_agents_dir = os.path.dirname(plist_path)
     uid = os.getuid()
     domain = f"gui/{uid}"
+    running_as_agent = running_as_macos_launch_agent()
 
     if enabled:
         os.makedirs(launch_agents_dir, exist_ok=True)
-        plist_existed = os.path.isfile(plist_path)
+        payload = {
+            "Label": MACOS_LAUNCH_AGENT_LABEL,
+            "ProgramArguments": _program_arguments(),
+            "RunAtLoad": True,
+        }
+        new_plist = plistlib.dumps(payload, fmt=plistlib.FMT_XML)
         previous_plist = None
-        if plist_existed:
+        if os.path.isfile(plist_path):
             try:
                 with open(plist_path, "rb") as f:
                     previous_plist = f.read()
@@ -447,28 +472,46 @@ def _apply_macos(enabled: bool) -> None:
                 raise RuntimeError(
                     f"failed to preserve existing launch agent: {exc}"
                 ) from exc
-            _launchctl_run(["launchctl", "bootout", domain, plist_path])
-        payload = {
-            "Label": MACOS_LAUNCH_AGENT_LABEL,
-            "ProgramArguments": _program_arguments(),
-            "RunAtLoad": True,
-        }
-        new_plist = plistlib.dumps(payload, fmt=plistlib.FMT_XML)
-        try:
-            _atomic_write_file(plist_path, new_plist)
+
+        if previous_plist == new_plist:
+            # The on-disk agent already matches the desired state. Re-loading
+            # the job here is not just wasteful -- it is harmful:
+            #   * bootout would kill this process when launchd spawned it
+            #     (login start), silently breaking start-at-login;
+            #   * bootstrap re-runs RunAtLoad, spawning a duplicate instance
+            #     that immediately exits via the single-instance lock (and
+            #     pops the settings window while doing so).
+            if running_as_agent or _launchctl_job_loaded(domain):
+                return
+            # The plist exists but the job is not loaded in this session;
+            # load it so the state matches the config right away.
             result = _launchctl_run(["launchctl", "bootstrap", domain, plist_path])
             if result.returncode != 0:
                 raise RuntimeError(_launchctl_failure_message("bootstrap", result))
+            return
+
+        # Desired agent differs from what is on disk (or none exists yet).
+        if previous_plist is not None and not running_as_agent:
+            _launchctl_run(["launchctl", "bootout", domain, plist_path])
+        try:
+            _atomic_write_file(plist_path, new_plist)
+            if not running_as_agent:
+                result = _launchctl_run(["launchctl", "bootstrap", domain, plist_path])
+                if result.returncode != 0:
+                    raise RuntimeError(_launchctl_failure_message("bootstrap", result))
         except Exception as exc:
             _restore_macos_plist_then_raise(plist_path, previous_plist, domain, exc)
+        # When running as the agent itself, the rewritten plist is picked up
+        # at the next login; re-loading the job now would terminate us.
     else:
         if os.path.isfile(plist_path):
-            _launchctl_run(["launchctl", "bootout", domain, plist_path])
+            if not running_as_agent:
+                _launchctl_run(["launchctl", "bootout", domain, plist_path])
             try:
                 os.remove(plist_path)
             except OSError:
                 pass
-        else:
+        elif not running_as_agent:
             _launchctl_run(
                 ["launchctl", "bootout", domain, MACOS_LAUNCH_AGENT_LABEL]
             )

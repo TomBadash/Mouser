@@ -66,7 +66,11 @@ from core.config import load_config, save_config
 from core.engine import Engine
 from core.hid_gesture import set_backend_preference as set_hid_backend_preference
 from core.accessibility import is_process_trusted
-from core.startup import linux_runtime_icon_path, sync_linux_icon_theme
+from core.startup import (
+    linux_runtime_icon_path,
+    running_as_macos_launch_agent,
+    sync_linux_icon_theme,
+)
 from core.version import APP_BUILD_MODE, APP_COMMIT_DISPLAY, APP_VERSION
 from ui.backend import Backend
 from ui.locale_manager import LocaleManager
@@ -123,13 +127,18 @@ def _single_instance_server_name() -> str:
     return f"mouser_instance_{digest}"
 
 
-def _try_activate_existing_instance(server_name: str, timeout_ms: int = 500) -> bool:
+def _try_activate_existing_instance(
+    server_name: str,
+    timeout_ms: int = 500,
+    send_activate: bool = True,
+) -> bool:
     sock = QLocalSocket()
     sock.connectToServer(server_name)
     if not sock.waitForConnected(timeout_ms):
         return False
-    sock.write(_SINGLE_INSTANCE_ACTIVATE_MSG)
-    sock.waitForBytesWritten(timeout_ms)
+    if send_activate:
+        sock.write(_SINGLE_INSTANCE_ACTIVATE_MSG)
+        sock.waitForBytesWritten(timeout_ms)
     sock.disconnectFromServer()
     return True
 
@@ -144,7 +153,14 @@ def _drain_local_activate_socket(sock: QLocalSocket | None) -> None:
 
 def _single_instance_acquire(app: QApplication, server_name: str):
     """Return (QLocalServer, None) if this process owns the instance, or (None, exit_code)."""
-    if _try_activate_existing_instance(server_name):
+    # When our own LaunchAgent spawned us (login start or a re-bootstrap)
+    # while another instance already runs, exit quietly: raising the running
+    # instance's window would pop the settings window on every login start
+    # even when configured to start minimized.
+    send_activate = not (
+        sys.platform == "darwin" and running_as_macos_launch_agent()
+    )
+    if _try_activate_existing_instance(server_name, send_activate=send_activate):
         return None, 0
     server = QLocalServer(app)
     QLocalServer.removeServer(server_name)
@@ -155,7 +171,7 @@ def _single_instance_acquire(app: QApplication, server_name: str):
         return None, 1
     for _ in range(3):
         time.sleep(0.05)
-        if _try_activate_existing_instance(server_name):
+        if _try_activate_existing_instance(server_name, send_activate=send_activate):
             return None, 0
         QLocalServer.removeServer(server_name)
         server.close()
@@ -1394,7 +1410,10 @@ def main():
     def _save_language():
         """Persist the selected language to config.json."""
         try:
-            saved_cfg = load_config()
+            # Write through the Backend's live config dict -- the same object
+            # the Engine holds -- so this save cannot be clobbered by a stale
+            # in-memory copy the next time another component saves config.
+            saved_cfg = backend._cfg if backend is not None else load_config()
             saved_cfg.setdefault("settings", {})["language"] = locale_mgr.language
             save_config(saved_cfg)
         except Exception as exc:

@@ -1589,7 +1589,12 @@ class Engine:
         Re-wire callbacks without tearing down the hook or HID++.
         """
         with self._lock:
-            self.cfg = load_config()
+            fresh_cfg = load_config()
+            # Update in place instead of rebinding self.cfg: Backend shares
+            # this exact dict object, and rebinding it would silently fork
+            # the two config holders again (stale-copy overwrite bug).
+            self.cfg.clear()
+            self.cfg.update(fresh_cfg)
             self._current_profile = self.cfg.get("active_profile", "default")
             self.hook.reset_bindings()
             self._setup_hooks()

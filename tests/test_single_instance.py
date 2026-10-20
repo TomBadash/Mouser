@@ -52,6 +52,18 @@ class TryActivateExistingTests(unittest.TestCase):
         sock.write.assert_called_once_with(main_qml._SINGLE_INSTANCE_ACTIVATE_MSG)
         sock.disconnectFromServer.assert_called_once()
 
+    @patch("main_qml.QLocalSocket")
+    def test_does_not_send_payload_when_send_activate_disabled(self, mock_sock_cls):
+        sock = MagicMock()
+        sock.waitForConnected.return_value = True
+        sock.waitForBytesWritten.return_value = True
+        mock_sock_cls.return_value = sock
+        self.assertTrue(
+            main_qml._try_activate_existing_instance("pipe_name", send_activate=False)
+        )
+        sock.write.assert_not_called()
+        sock.disconnectFromServer.assert_called_once()
+
 
 @unittest.skipIf(main_qml is None, "main_qml / PySide6 not available")
 class SingleInstanceAcquireTests(unittest.TestCase):
@@ -61,6 +73,21 @@ class SingleInstanceAcquireTests(unittest.TestCase):
         server, code = main_qml._single_instance_acquire(app, "any_name")
         self.assertIsNone(server)
         self.assertEqual(code, 0)
+
+    @patch("main_qml.running_as_macos_launch_agent", return_value=True)
+    @patch("main_qml._try_activate_existing_instance", return_value=True)
+    def test_launch_agent_spawned_duplicate_does_not_raise_window(
+        self, try_activate, _running_as_agent
+    ):
+        """A LaunchAgent-spawned duplicate exits without sending "show" --
+        sending it popped the settings window on every login start, even
+        when start_minimized was configured."""
+        app = _ensure_qapp()
+        with patch.object(main_qml.sys, "platform", "darwin"):
+            server, code = main_qml._single_instance_acquire(app, "any_name")
+        self.assertIsNone(server)
+        self.assertEqual(code, 0)
+        try_activate.assert_called_once_with("any_name", send_activate=False)
 
     @patch("main_qml._try_activate_existing_instance", return_value=False)
     @patch("main_qml.QLocalServer.removeServer")

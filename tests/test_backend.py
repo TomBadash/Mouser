@@ -86,6 +86,64 @@ class _FakeEngine:
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendConfigSharingTests(unittest.TestCase):
+    """The Backend must share the Engine's live config dict.
+
+    Separate per-component copies caused a stale holder to clobber newer
+    settings on its next whole-config save: switching the UI language to
+    Chinese was reverted to "en" by the next Backend/Engine save, and
+    start_at_login was reverted the same way by Engine-side saves (which
+    then removed the login agent at the next startup sync).
+    """
+
+    @staticmethod
+    def _make_engine_with_cfg(cfg):
+        engine = _FakeEngine()
+        engine.cfg = cfg
+        return engine
+
+    def _make_backend(self, engine, loaded_config):
+        with (
+            patch("ui.backend.load_config", return_value=loaded_config),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            return Backend(engine=engine)
+
+    def test_backend_shares_engine_live_config_dict(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        engine = self._make_engine_with_cfg(cfg)
+        backend = self._make_backend(engine, copy.deepcopy(DEFAULT_CONFIG))
+        self.assertIs(backend._cfg, cfg)
+
+    def test_backend_falls_back_to_own_load_without_engine_cfg(self):
+        engine = _FakeEngine()  # no .cfg attribute
+        loaded = copy.deepcopy(DEFAULT_CONFIG)
+        backend = self._make_backend(engine, loaded)
+        self.assertIs(backend._cfg, loaded)
+
+    def test_language_change_survives_subsequent_backend_save(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        engine = self._make_engine_with_cfg(cfg)
+
+        with (
+            patch("ui.backend.load_config", return_value=copy.deepcopy(DEFAULT_CONFIG)),
+            patch("ui.backend.save_config") as save_mock,
+            patch("ui.backend.supports_login_startup", return_value=False),
+        ):
+            backend = Backend(engine=engine)
+            # What main_qml._save_language now does: write "zh" through the
+            # shared live config and persist it.
+            backend._cfg.setdefault("settings", {})["language"] = "zh"
+            save_mock.reset_mock()
+            backend.setStartMinimized(False)  # default is True; forces a save
+
+        saved_cfg = save_mock.call_args.args[0]
+        self.assertIs(saved_cfg, cfg)
+        self.assertEqual(saved_cfg["settings"]["language"], "zh")
+
+
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
 class BackendDeviceLayoutTests(unittest.TestCase):
     def _make_backend(self, engine=None, root_dir=None, cfg=None):
         loaded_config = copy.deepcopy(cfg or DEFAULT_CONFIG)
