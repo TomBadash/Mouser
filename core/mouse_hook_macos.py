@@ -77,19 +77,6 @@ class MouseHook(BaseMouseHook):
         self._dispatch_thread = None
         self._first_event_logged = False
 
-    def _negate_scroll_axis(self, cg_event, axis):
-        for field_name in (
-            f"kCGScrollWheelEventDeltaAxis{axis}",
-            f"kCGScrollWheelEventFixedPtDeltaAxis{axis}",
-            f"kCGScrollWheelEventPointDeltaAxis{axis}",
-        ):
-            field = getattr(Quartz, field_name, None)
-            if field is None:
-                continue
-            value = Quartz.CGEventGetIntegerValueField(cg_event, field)
-            if value:
-                Quartz.CGEventSetIntegerValueField(cg_event, field, -value)
-
     def _post_shift_hscroll_event(self, cg_event):
         """Translate Shift+vertical-wheel into a horizontal scroll event.
 
