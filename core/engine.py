@@ -16,6 +16,7 @@ from core.config import (
     load_config, get_active_mappings, get_profile_for_app_identity,
     BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, SWIPE_SET_FOR_TAP,
     save_config, action_haptic_enabled, button_haptic_enabled,
+    gesture_swipe_haptic_enabled,
     WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
     GESTURE_SWIPE_ACTION, BUTTON_GESTURE_OWNERS, BUTTON_GESTURE_DIRECTIONS,
     button_gesture_owners, button_gesture_bindings_for, button_gesture_tap_action,
@@ -228,6 +229,24 @@ class Engine:
         elif hasattr(self.hook, "configure_thumb_gestures"):
             # No secondary control on this device — keep it disabled.
             self.hook.configure_thumb_gestures(enabled=False)
+
+        # Gesture Swipe Feedback: a confirmation pulse the instant a swipe
+        # direction is recognized, for any direction (bound or not). Registered
+        # as an extra, non-consuming observer alongside any action handler; the
+        # toggle is read live in the handler so it applies without a rebind.
+        # Skipped when the control drives the Actions Ring instead of swipes.
+        swipe_haptic_events = set()
+        if _swipe_enabled(primary_tap_key) and not primary_ring:
+            prefix = "sense_swipe_" if via_sense else "gesture_swipe_"
+            swipe_haptic_events.update(
+                prefix + d for d in BUTTON_GESTURE_DIRECTIONS)
+        if (thumb_tap_key and _swipe_enabled(thumb_tap_key)
+                and mappings.get(thumb_tap_key) != "activate_actions_ring"):
+            # The thumb Gesture button always emits the gesture_swipe_* family.
+            swipe_haptic_events.update(
+                "gesture_swipe_" + d for d in BUTTON_GESTURE_DIRECTIONS)
+        for evt_type in swipe_haptic_events:
+            self.hook.register(evt_type, self._on_gesture_swipe_haptic)
 
         # Swipe-direction keys whose owning tap button is set to the Actions
         # Ring: their movement drives the ring, so the swipe events never fire
@@ -492,6 +511,15 @@ class Engine:
                 print(f"[Engine] _make_button_gesture_handler EXCEPTION: {exc}")
                 import traceback; traceback.print_exc()
         return handler
+
+    def _on_gesture_swipe_haptic(self, event):
+        """Non-consuming observer: play a confirmation pulse when a gesture
+        swipe direction is recognized, if Gesture Swipe Feedback is enabled.
+        Runs alongside any action handler bound to the same direction."""
+        if not self._enabled:
+            return
+        if gesture_swipe_haptic_enabled(self.cfg):
+            self._play_haptic_async(7)  # COMPLETED
 
     def _make_handler(self, action_id, btn_key=""):
         def handler(event):

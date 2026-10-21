@@ -295,6 +295,7 @@ DEFAULT_CONFIG = {
         "force_sensitivity": None,
         "actions_ring_hold_ms": 250,
         "actions_ring_hover_haptic": True,
+        "gesture_swipe_haptic": True,
         "actions_ring_use_global": True,
         "actions_ring_slots": _default_actions_ring_slots(),
     },
@@ -516,6 +517,12 @@ def set_button_haptic(cfg, button_key, enabled):
             lst.remove(button_key)
     save_config(cfg)
     return cfg
+
+
+def gesture_swipe_haptic_enabled(cfg):
+    """True if a haptic pulse fires the moment a gesture swipe direction is
+    recognized (independent of whether the direction is bound). Defaults on."""
+    return bool(cfg.get("settings", {}).get("gesture_swipe_haptic", True))
 
 
 def delete_profile(cfg, name):

@@ -39,6 +39,8 @@ _TRANSLATIONS = {
         "haptic.buttons_empty": "No buttons selected. Pick from Available.",
         "haptic.dedup_title": "Prevent Duplicate Haptics",
         "haptic.dedup_desc": "When two haptic events fire close together, play only one pulse. Disable to allow both.",
+        "haptic.gesture_swipe_title": "Gesture Swipe Feedback",
+        "haptic.gesture_swipe_desc": "Fire a haptic pulse the moment a Gesture button swipe direction is recognized.",
         "haptic.experimental_note": "Haptic feedback support is experimental. Some settings may not take effect until the protocol is fully documented.",
 
         # Actions Ring page
@@ -315,6 +317,8 @@ _TRANSLATIONS = {
         "haptic.buttons_empty": "\u672a\u9009\u62e9\u4efb\u4f55\u6309\u952e\u3002\u8bf7\u4ece\u201c\u53ef\u9009\u201d\u4e2d\u6dfb\u52a0\u3002",
         "haptic.dedup_title": "\u9632\u6b62\u91cd\u590d\u89e6\u89c9",
         "haptic.dedup_desc": "\u5f53\u4e24\u4e2a\u89e6\u89c9\u4e8b\u4ef6\u77ed\u65f6\u95f4\u5185\u540c\u65f6\u89e6\u53d1\u65f6\uff0c\u4ec5\u64ad\u653e\u4e00\u6b21\u3002\u7981\u7528\u5219\u5141\u8bb8\u4e24\u6b21\u90fd\u89e6\u53d1\u3002",
+        "haptic.gesture_swipe_title": "\u624b\u52bf\u6ed1\u52a8\u53cd\u9988",
+        "haptic.gesture_swipe_desc": "\u8bc6\u522b\u5230\u624b\u52bf\u6309\u952e\u7684\u6ed1\u52a8\u65b9\u5411\u65f6\u7acb\u5373\u64ad\u653e\u4e00\u6b21\u89e6\u89c9\u8109\u51b2\u3002",
         "haptic.experimental_note": "\u89e6\u89c9\u53cd\u9988\u652f\u6301\u4e3a\u5b9e\u9a8c\u6027\u529f\u80fd\u3002\u90e8\u5206\u8bbe\u7f6e\u53ef\u80fd\u5728\u534f\u8bae\u5b8c\u5168\u6587\u6863\u5316\u540e\u624d\u751f\u6548\u3002",
 
         # Actions Ring page
@@ -577,6 +581,8 @@ _TRANSLATIONS = {
         "haptic.buttons_empty": "\u672a\u9078\u64c7\u4efb\u4f55\u6309\u9375\u3002\u8acb\u5f9e\u300c\u53ef\u9078\u300d\u4e2d\u52a0\u5165\u3002",
         "haptic.dedup_title": "\u9632\u6b62\u91cd\u8907\u89f8\u89ba",
         "haptic.dedup_desc": "\u7576\u5169\u500b\u89f8\u89ba\u4e8b\u4ef6\u77ed\u6642\u9593\u5167\u540c\u6642\u89f8\u767c\u6642\uff0c\u50c5\u64ad\u653e\u4e00\u6b21\u3002\u505c\u7528\u5247\u5141\u8a31\u5169\u6b21\u90fd\u89f8\u767c\u3002",
+        "haptic.gesture_swipe_title": "\u624b\u52e2\u6ed1\u52d5\u56de\u994b",
+        "haptic.gesture_swipe_desc": "\u8fa8\u8b58\u5230\u624b\u52e2\u6309\u9375\u7684\u6ed1\u52d5\u65b9\u5411\u6642\u7acb\u5373\u64ad\u653e\u4e00\u6b21\u89f8\u89ba\u8108\u885d\u3002",
         "haptic.experimental_note": "\u89f8\u89ba\u56de\u994b\u652f\u63f4\u70ba\u5be6\u9a57\u6027\u529f\u80fd\u3002\u90e8\u5206\u8a2d\u5b9a\u53ef\u80fd\u5728\u5354\u5b9a\u5b8c\u5168\u6587\u4ef6\u5316\u5f8c\u624d\u751f\u6548\u3002",
 
         # Actions Ring page

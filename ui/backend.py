@@ -786,6 +786,11 @@ class Backend(QObject):
         return bool(self._cfg.get("settings", {}).get(
             "actions_ring_hover_haptic", True))
 
+    @Property(bool, notify=hapticChanged)
+    def gestureSwipeHaptic(self):
+        return bool(self._cfg.get("settings", {}).get(
+            "gesture_swipe_haptic", True))
+
     @Property(bool, notify=hidFeaturesReadyChanged)
     def forceSensingSupported(self):
         return self._engine.force_sensing_supported if self._engine else False
@@ -1780,6 +1785,15 @@ class Backend(QObject):
     def setActionsRingHoverHaptic(self, enabled):
         """Set whether landing on a ring slot fires haptic feedback."""
         self._cfg.setdefault("settings", {})["actions_ring_hover_haptic"] = bool(enabled)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
+    @Slot(bool)
+    def setGestureSwipeHaptic(self, enabled):
+        """Set whether recognizing a gesture swipe direction fires haptic feedback."""
+        self._cfg.setdefault("settings", {})["gesture_swipe_haptic"] = bool(enabled)
         save_config(self._cfg)
         if self._engine:
             self._engine.cfg = self._cfg

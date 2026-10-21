@@ -366,5 +366,79 @@ class EngineButtonGestureWiringTests(unittest.TestCase):
         self.assertNotIn("middle_down", engine.hook.registered)
 
 
+class EngineGestureSwipeHapticTests(unittest.TestCase):
+    """The dedicated 'Gesture Swipe Feedback' pulse fires the moment a swipe
+    direction is recognized, for any direction (bound or not), when the toggle
+    is on — independent of the per-action / per-button haptic allowlists."""
+
+    def _engine(self, mappings, *, via_sense=False,
+                supported_buttons=("gesture",)):
+        from core.engine import Engine
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["profiles"]["default"]["mappings"].update(mappings)
+        with (
+            patch("core.engine.MouseHook", _RecordingHook),
+            patch("core.engine.AppDetector", _FakeAppDetector),
+            patch("core.engine.load_config", return_value=cfg),
+        ):
+            engine = Engine()
+        engine.hook.connected_device = SimpleNamespace(
+            supported_buttons=supported_buttons,
+            gesture_via_sense_panel=via_sense,
+        )
+        engine.hook.reset_bindings()
+        engine._setup_hooks()
+        return engine, cfg
+
+    def test_observer_registered_on_all_directions_in_swipe_mode(self):
+        engine, _ = self._engine({"gesture": "gesture_swipe"})
+        for d in ("left", "right", "up", "down"):
+            self.assertIn(f"gesture_swipe_{d}", engine.hook.registered)
+
+    def test_thumb_swipe_observer_on_sense_panel_device(self):
+        # MX Master 4: primary control is the Sense Panel; the thumb Gesture
+        # button emits the gesture_swipe_* family.
+        engine, _ = self._engine(
+            {"gesture": "gesture_swipe"}, via_sense=True,
+            supported_buttons=("gesture", "actions_ring"),
+        )
+        for d in ("left", "right", "up", "down"):
+            self.assertIn(f"gesture_swipe_{d}", engine.hook.registered)
+
+    def test_recognition_fires_pulse_when_enabled_even_if_unbound(self):
+        engine, _ = self._engine({"gesture": "gesture_swipe"})  # up is unbound
+        engine._enabled = True
+        handler = engine.hook.registered["gesture_swipe_up"]
+        with patch.object(engine, "_play_haptic_async") as ph:
+            handler(SimpleNamespace(
+                event_type="gesture_swipe_up", raw_data={}, timestamp=1.0))
+        ph.assert_called_once_with(7)
+
+    def test_no_pulse_when_toggle_off(self):
+        engine, cfg = self._engine({"gesture": "gesture_swipe"})
+        cfg["settings"]["gesture_swipe_haptic"] = False
+        engine.cfg = cfg
+        engine._enabled = True
+        handler = engine.hook.registered["gesture_swipe_up"]
+        with patch.object(engine, "_play_haptic_async") as ph:
+            handler(SimpleNamespace(
+                event_type="gesture_swipe_up", raw_data={}, timestamp=1.0))
+        ph.assert_not_called()
+
+    def test_no_pulse_when_engine_disabled(self):
+        engine, _ = self._engine({"gesture": "gesture_swipe"})
+        engine._enabled = False
+        handler = engine.hook.registered["gesture_swipe_up"]
+        with patch.object(engine, "_play_haptic_async") as ph:
+            handler(SimpleNamespace(
+                event_type="gesture_swipe_up", raw_data={}, timestamp=1.0))
+        ph.assert_not_called()
+
+    def test_no_observer_when_gesture_not_in_swipe_mode(self):
+        engine, _ = self._engine({"gesture": "middle_click"})
+        for d in ("left", "right", "up", "down"):
+            self.assertNotIn(f"gesture_swipe_{d}", engine.hook.registered)
+
+
 if __name__ == "__main__":
     unittest.main()
