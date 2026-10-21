@@ -1528,5 +1528,92 @@ class HidReconnectStormTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 0.5)
 
 
+class DivertHealthCheckTests(unittest.TestCase):
+    def _make_listener(self, reporting_flags=0x33):
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x0D
+        listener._gesture_cid = 0x01A0
+        listener._get_cid_reporting = Mock(return_value=(
+            0x02, 0x0D, 2, hid_gesture.MY_SW,
+            [0x01, 0xA0, reporting_flags, 0x00, 0x00],
+        ))
+        return listener
+
+    def test_lost_divert_raises_to_trigger_reconnect(self):
+        listener = self._make_listener(reporting_flags=0x00)
+        listener._divert_check_due = True
+        with self.assertRaises(IOError):
+            listener._maybe_verify_divert(now=100.0)
+        listener._get_cid_reporting.assert_called_once_with(0x01A0)
+
+    def test_intact_divert_is_left_alone(self):
+        listener = self._make_listener(reporting_flags=0x33)
+        listener._divert_check_due = True
+        listener._maybe_verify_divert(now=100.0)
+        self.assertFalse(listener._divert_check_due)
+        self.assertEqual(listener._last_divert_check, 100.0)
+
+    def test_no_answer_does_not_reconnect(self):
+        listener = self._make_listener()
+        listener._get_cid_reporting = Mock(return_value=None)
+        listener._divert_check_due = True
+        listener._maybe_verify_divert(now=100.0)
+
+    def test_periodic_check_waits_for_interval(self):
+        listener = self._make_listener()
+        listener._last_divert_check = 100.0
+        with patch.object(hid_gesture, "_user_idle_seconds", return_value=0.0):
+            listener._maybe_verify_divert(now=110.0)
+            listener._get_cid_reporting.assert_not_called()
+            listener._maybe_verify_divert(now=131.0)
+        listener._get_cid_reporting.assert_called_once()
+
+    def test_periodic_check_skipped_while_user_idle(self):
+        listener = self._make_listener()
+        listener._last_divert_check = 0.0
+        with patch.object(hid_gesture, "_user_idle_seconds", return_value=600.0):
+            listener._maybe_verify_divert(now=1000.0)
+        listener._get_cid_reporting.assert_not_called()
+
+    def test_due_check_ignores_idle_and_skips_while_held(self):
+        listener = self._make_listener()
+        listener._divert_check_due = True
+        listener._held = True
+        with patch.object(hid_gesture, "_user_idle_seconds", return_value=600.0):
+            listener._maybe_verify_divert(now=1000.0)
+            listener._get_cid_reporting.assert_not_called()
+            listener._held = False
+            listener._maybe_verify_divert(now=1000.0)
+        listener._get_cid_reporting.assert_called_once()
+
+    def test_battery_broadcast_schedules_divert_check(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._handle_battery_notification([])
+        self.assertTrue(listener._divert_check_due)
+
+    def test_wireless_relink_broadcast_schedules_divert_check(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._feat_idx = 0x0D
+        listener._wireless_status_idx = 0x04
+        # Captured from an MX Master 4 on Bolt after a power-switch cycle.
+        listener._on_report([0x11, 0x02, 0x04, 0x00, 0x01, 0x01, 0x01]
+                            + [0x00] * 13)
+        self.assertTrue(listener._divert_check_due)
+
+    def test_wireless_status_without_relink_is_ignored(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._wireless_status_idx = 0x04
+        listener._on_report([0x11, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00]
+                            + [0x00] * 13)
+        self.assertFalse(listener._divert_check_due)
+
+    def test_own_wireless_status_response_is_ignored(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._wireless_status_idx = 0x04
+        listener._on_report([0x11, 0x02, 0x04, hid_gesture.MY_SW,
+                             0x01, 0x01, 0x01] + [0x00] * 13)
+        self.assertFalse(listener._divert_check_due)
+
+
 if __name__ == "__main__":
     unittest.main()

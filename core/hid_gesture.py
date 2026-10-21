@@ -254,6 +254,15 @@ def _log_once(key, message):
     print(message)
 
 
+def _user_idle_seconds():
+    """Seconds since the last user input, or None when unknown."""
+    try:
+        from core.engine import _system_idle_seconds
+    except Exception:
+        return None
+    return _system_idle_seconds()
+
+
 def _device_path_display(path):
     if isinstance(path, memoryview):
         path = bytes(path)
@@ -896,6 +905,11 @@ FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
 FEAT_HAPTIC         = 0x19B0      # Haptic Feedback (MX Master 4)
 FEAT_FORCE_SENSING  = 0x19C0      # Force Sensing Button (MX Master 4)
+FEAT_WIRELESS_DEVICE_STATUS = 0x1D4B  # Wireless Device Status
+# 0x1D4B statusBroadcastEvent (function 0). The device sends this itself when
+# it re-links to the receiver, which is exactly when volatile diverts are lost.
+_WDS_STATUS_RECONNECTION = 0x01
+_WDS_REQUEST_RECONFIGURE = 0x01
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 
 # REPROG_V4 ``setCidReporting`` control flags (fn 3 byte 2). The
@@ -1120,6 +1134,10 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+        self._wireless_status_idx = None    # feature index of 0x1D4B
+        # Divert health check (see _maybe_verify_divert).
+        self._divert_check_due = False
+        self._last_divert_check = 0.0
         # 0x2121 Hi-Res Wheel + 0x2150 Thumbwheel native-invert state.
         # Lock ordering: outer `_wheel_divert_call_lock` serializes
         # cross-thread callers, inner `_wheel_divert_lock` protects the
@@ -2675,6 +2693,19 @@ class HidGestureListener:
         self._pending_battery = None
         self._battery_event.set()
 
+    def _handle_wireless_status_event(self, params):
+        """Decode a 0x1D4B statusBroadcastEvent and schedule a divert check
+        when the device reports a re-link or asks to be reconfigured."""
+        status = params[0] if len(params) > 0 else 0
+        request = params[1] if len(params) > 1 else 0
+        reason = params[2] if len(params) > 2 else 0
+        if not (status == _WDS_STATUS_RECONNECTION
+                or request == _WDS_REQUEST_RECONFIGURE):
+            return
+        print(f"[HidGesture] Device re-linked (0x1D4B status={status:#04x} "
+              f"request={request:#04x} reason={reason:#04x})")
+        self._divert_check_due = True
+
     def _handle_battery_notification(self, params):
         """Push an unsolicited battery status broadcast straight to the UI.
 
@@ -2682,6 +2713,9 @@ class HidGestureListener:
         change (e.g. USB just plugged in), so the charging indicator updates
         immediately instead of on the next 300s poll.
         """
+        # Devices broadcast battery status when they (re)link to a receiver,
+        # which is also when they drop our temporary diverts.
+        self._divert_check_due = True
         result = self._parse_battery_params(params)
         if result is None:
             return
@@ -2752,6 +2786,14 @@ class HidGestureListener:
         if msg is None:
             return
         _, feat, func, _sw, params = msg
+
+        # 0x1D4B statusBroadcastEvent: the device re-linked and dropped our
+        # volatile diverts. `_sw != MY_SW` keeps our own responses out.
+        if (self._wireless_status_idx is not None
+                and feat == self._wireless_status_idx
+                and func == 0 and _sw != MY_SW):
+            self._handle_wireless_status_event(params)
+            return
 
         # Unsolicited battery status broadcast (feature 0x1004 / 0x1000,
         # event func 0) — pushed to the UI so charging shows instantly.
@@ -2947,6 +2989,7 @@ class HidGestureListener:
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._wireless_status_idx = None
             self._haptic_idx = None
             self._force_sensing_idx = None
             self._force_sensing_range = None
@@ -3148,6 +3191,15 @@ class HidGestureListener:
                             self._battery_idx = batt_fi
                             self._battery_feature_id = FEAT_BATTERY_STATUS
                             print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
+                    # Optional: older or wired-only devices lack it and rely
+                    # on the periodic divert check alone. Assign either way
+                    # so a previous slot's index never lingers.
+                    self._wireless_status_idx = self._find_feature(
+                        FEAT_WIRELESS_DEVICE_STATUS
+                    )
+                    if self._wireless_status_idx:
+                        print("[HidGesture] Found WIRELESS_DEVICE_STATUS "
+                              f"@0x{self._wireless_status_idx:02X}")
                     # Haptic Feedback (MX Master 4)
                     haptic_fi = self._find_feature(FEAT_HAPTIC)
                     if haptic_fi:
@@ -3323,6 +3375,49 @@ class HidGestureListener:
                 return
             time.sleep(0.1)
 
+    # Receiver-attached devices (Bolt / Unifying) silently drop temporary
+    # diverts when they power-cycle, deep-sleep or re-link, while the
+    # receiver handle stays open and healthy. Nothing surfaces on the long
+    # HID++ collection we listen on, so periodically confirm the gesture
+    # CID is still diverted and reconnect when it is not.
+    _DIVERT_CHECK_INTERVAL_S = 30.0
+    # Only run the periodic check when the user produced input this
+    # recently, so we never poke a sleeping mouse (timeouts would flip the
+    # listener into its "asleep" state for nothing).
+    _DIVERT_CHECK_ACTIVE_WINDOW_S = 30.0
+
+    def _gesture_divert_intact(self):
+        """True/False when getCidReporting confirms/denies the gesture
+        divert, None when the device gave no usable answer."""
+        cid = self._gesture_cid
+        resp = self._get_cid_reporting(cid)
+        if not resp:
+            return None
+        params = resp[4]
+        if len(params) < 3 or ((params[0] << 8) | params[1]) != cid:
+            return None
+        return bool(params[2] & 0x01)
+
+    def _maybe_verify_divert(self, now=None):
+        """Raise IOError (triggering a full reconnect) when the device has
+        lost the gesture divert."""
+        if now is None:
+            now = time.monotonic()
+        if not self._divert_check_due:
+            if now - self._last_divert_check < self._DIVERT_CHECK_INTERVAL_S:
+                return
+            idle = _user_idle_seconds()
+            if idle is not None and idle >= self._DIVERT_CHECK_ACTIVE_WINDOW_S:
+                return
+        if self._held or any(i["held"] for i in self._extra_diverts.values()):
+            return
+        self._divert_check_due = False
+        self._last_divert_check = now
+        if self._gesture_divert_intact() is False:
+            print(f"[HidGesture] Divert of {_format_cid(self._gesture_cid)} "
+                  "lost (device re-linked or reset) — reconnecting")
+            raise IOError("gesture divert lost")
+
     def _main_loop(self):
         """Outer loop: connect → listen → reconnect on error/disconnect."""
         retry_logged = False
@@ -3364,6 +3459,8 @@ class HidGestureListener:
             self._consecutive_request_timeouts = 0
             _device_asleep = False
             _device_sleep_time = None
+            self._divert_check_due = False
+            self._last_divert_check = time.monotonic()
             try:
                 while self._running:
                     if self._reconnect_requested:
@@ -3407,6 +3504,7 @@ class HidGestureListener:
                                 except Exception:
                                     pass
                             print("[HidGesture] Device woke from sleep")
+                            self._divert_check_due = True
                             self._on_report(raw)
                         continue
 
@@ -3426,6 +3524,7 @@ class HidGestureListener:
                         self._apply_pending_haptic()
                     if self._pending_force_sensing is not None:
                         self._apply_pending_force_sensing()
+                    self._maybe_verify_divert()
                     raw = self._rx(1000)
                     if raw:
                         _no_data_count = 0
@@ -3452,6 +3551,7 @@ class HidGestureListener:
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._wireless_status_idx = None
             self._wheel_feature_indexes = {}
             self._drain_pending_requests()
             self._hires_wheel_idx = None
