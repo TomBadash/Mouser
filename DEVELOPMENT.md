@@ -348,6 +348,37 @@ $s.Save()
 
 ## Debugging tips
 
+### macOS memory growth
+
+Use the standard-library-only diagnostic tool against a running packaged or source
+instance. Find its PID in Activity Monitor, then take a baseline and another sample
+after a period of normal use (replace `12345` with that PID):
+
+```bash
+python3 tools/macos_memory_report.py 12345 --output /tmp/mouser-before.json
+# Continue using the mouse, then sample the same process again.
+python3 tools/macos_memory_report.py 12345 --baseline /tmp/mouser-before.json --output /tmp/mouser-after.json
+```
+
+The JSON reports contain the footprint in bytes, process start time and executable
+path, and aggregate counts/bytes for `CGEvent`, `CGSEventAppendix`, `HIDEvent`,
+`IOHIDManager`, `GPProcessMonitor`, and `NSXPCConnection`. The second report also
+contains deltas. Reports from different process instances are rejected; take a new
+baseline after restarting Mouser. Existing output files are never overwritten.
+
+This invokes Apple's `footprint` and `heap -s`, which can take several minutes and
+temporarily pause the target. Run it manually when investigating, rather than as a
+background poller. If macOS denies inspection, the tool reports an error; do not
+disable SIP to collect a report. A snapshot spans both commands, so it is not an
+atomic measurement. Heap inspection can itself affect timing and memory.
+
+Attach the reports to a memory issue along with Mouser version/commit, macOS
+version, mouse model/connection, elapsed usage time, and whether that interval
+involved movement, scrolling, remapped clicks, or reconnects. Review the executable
+path before sharing. No event payloads, heap contents, or configuration are saved.
+Object growth helps distinguish event retention from reconnect or app-monitor
+growth; counts alone do not prove a particular leak or validate a fix.
+
 - **Thread dump:** `kill -USR1 $(pgrep -f main_qml.py)` triggers `_dump_threads` and prints all stack traces to the terminal — useful for cross-thread freezes without an attached debugger.
 - **Startup timing:** `_t0`–`_t8` markers in `main_qml.py` log per-phase startup costs (env setup, PySide6 imports, core imports). Watch for regressions when adding heavy imports.
 - **HID transport override:** `--hid-backend=iokit|hidapi|auto` lets you isolate transport-specific bugs (e.g. Bolt receivers, BLE quirks).
