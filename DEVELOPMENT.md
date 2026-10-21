@@ -151,10 +151,10 @@ The same module owns the SmartShift integration. It prefers the enhanced feature
 
 ### App detector
 
-[`core/app_detector.py`](core/app_detector.py) polls the foreground window every 300ms.
+[`core/app_detector.py`](core/app_detector.py) watches the foreground application and switches profiles when its identity changes.
 
 - **Windows:** `GetForegroundWindow` → `GetWindowThreadProcessId` → process name. UWP apps are resolved via `ApplicationFrameHost.exe` to the actual child process. That resolution enumerates every top-level window and opens each owning process, so `classify_explorer_window()` triages `explorer.exe` windows first: real Explorer surfaces are the app, transient shell windows (taskbar previews, Alt-Tab, context menus) are skipped outright, and any other window is resolved at most once — its handle and class are memoised when nothing is found behind it. Without that triage a context menu or taskbar preview held the foreground and re-ran the full scan three times a second, starving the mouse hook (issue #252).
-- **macOS:** `NSWorkspace.frontmostApplication`.
+- **macOS:** `NSWorkspaceDidActivateApplicationNotification`, with one `frontmostApplication` lookup at startup. If observer registration fails, Mouser falls back to polling. The event-driven path avoids native `GPProcessMonitor` and XPC objects retained by repeated foreground-app lookups during long-running sessions.
 - **Linux:** `xdotool` (X11) and `kdotool` (KDE Wayland). Other Wayland compositors fall back to the default profile.
 
 ### Engine

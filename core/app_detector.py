@@ -1,8 +1,8 @@
 """
-Foreground application detector — polls the active window and fires
+Foreground application detector — watches the active window and fires
 a callback when the foreground app changes.
 Windows: GetForegroundWindow + QueryFullProcessImageNameW (with UWP resolution).
-macOS:   NSWorkspace.sharedWorkspace().frontmostApplication().
+macOS:   NSWorkspace activation notifications.
 """
 
 import functools
@@ -11,6 +11,10 @@ import plistlib
 import sys
 import threading
 import time
+import weakref
+
+
+_IS_MACOS = sys.platform == "darwin"
 
 
 # ── Windows explorer.exe window triage (platform-independent policy) ─────────
@@ -357,6 +361,66 @@ elif sys.platform == "darwin":
         except Exception:
             return ()
 
+    class _MacOSWorkspaceObserver:
+        """Deliver foreground-app changes without repeatedly polling AppKit."""
+
+        def __init__(self, on_change):
+            self._on_change = on_change
+            self._notification_center = None
+            self._observer_token = None
+            self._notification_handler = None
+
+        def start(self):
+            if self._observer_token is not None:
+                return
+
+            from AppKit import (
+                NSWorkspace,
+                NSWorkspaceApplicationKey,
+                NSWorkspaceDidActivateApplicationNotification,
+            )
+
+            notification_center = NSWorkspace.sharedWorkspace().notificationCenter()
+            observer_ref = weakref.ref(self)
+
+            def _handle_activation(notification):
+                observer = observer_ref()
+                if observer is None:
+                    return
+                try:
+                    with _objc.autorelease_pool():
+                        user_info = notification.userInfo()
+                        if hasattr(user_info, "objectForKey_"):
+                            app = user_info.objectForKey_(NSWorkspaceApplicationKey)
+                        else:
+                            app = user_info.get(NSWorkspaceApplicationKey)
+                        if app is not None:
+                            observer._on_change(_macos_running_app_identities(app))
+                except Exception:
+                    # Do not let Python exceptions escape through an ObjC block.
+                    pass
+
+            token = notification_center.addObserverForName_object_queue_usingBlock_(
+                NSWorkspaceDidActivateApplicationNotification,
+                None,
+                None,
+                _handle_activation,
+            )
+            if token is None:
+                raise RuntimeError("NSWorkspace activation observer returned no token")
+
+            self._notification_center = notification_center
+            self._observer_token = token
+            # PyObjC blocks must remain strongly referenced for the observer lifetime.
+            self._notification_handler = _handle_activation
+
+        def stop(self):
+            if self._observer_token is not None and self._notification_center is not None:
+                self._notification_center.removeObserver_(self._observer_token)
+            self._observer_token = None
+            self._notification_center = None
+            self._notification_handler = None
+
 elif sys.platform == "linux":
     import subprocess as _subprocess
 
@@ -418,7 +482,11 @@ else:
 
 class AppDetector:
     """
-    Polls the foreground window every *interval* seconds.
+    Watches the foreground application for changes.
+
+    macOS uses NSWorkspace activation notifications to avoid native objects
+    retained by repeated ``frontmostApplication()`` calls. Other platforms,
+    and macOS when observer registration fails, poll every *interval* seconds.
     Calls ``on_change(app_identity)`` when the foreground app changes.
     """
 
@@ -428,27 +496,57 @@ class AppDetector:
         self._last_app_identity: tuple[str, ...] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._macos_observer = None
 
     def start(self):
+        if self._macos_observer is not None:
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
+
+        if _IS_MACOS:
+            observer = None
+            try:
+                observer = _MacOSWorkspaceObserver(self._handle_app_change)
+                observer.start()
+            except Exception as exc:
+                if observer is not None:
+                    observer.stop()
+                print(
+                    "[AppDetector] NSWorkspace observer unavailable; "
+                    f"falling back to polling: {exc}"
+                )
+            else:
+                self._macos_observer = observer
+                try:
+                    self._handle_app_change(get_foreground_app_identity())
+                except Exception:
+                    pass
+                return
+
         self._thread = threading.Thread(target=self._poll, daemon=True, name="AppDetector")
         self._thread.start()
 
     def stop(self):
         self._stop.set()
+        if self._macos_observer is not None:
+            self._macos_observer.stop()
+            self._macos_observer = None
         if self._thread:
             self._thread.join(timeout=2)
+            self._thread = None
+
+    def _handle_app_change(self, app_identity):
+        if app_identity and app_identity != self._last_app_identity:
+            self._last_app_identity = app_identity
+            self._on_change(app_identity)
 
     # ------------------------------------------------------------------
     def _poll(self):
         while not self._stop.is_set():
             try:
-                app_identity = get_foreground_app_identity()
-                if app_identity and app_identity != self._last_app_identity:
-                    self._last_app_identity = app_identity
-                    self._on_change(app_identity)
+                self._handle_app_change(get_foreground_app_identity())
             except Exception:
                 pass
             self._stop.wait(self._interval)
