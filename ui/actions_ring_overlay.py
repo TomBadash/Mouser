@@ -160,6 +160,7 @@ class ActionsRingOverlay(QWidget):
         self._tick_timer.timeout.connect(self._on_tick)
 
         self._rawxy_offset = None
+        self._rawxy_seen = False
 
         self._label_font = QFont()
         self._label_font.setPixelSize(12)
@@ -187,6 +188,7 @@ class ActionsRingOverlay(QWidget):
         self._target_sector = -1
         self._interactive = interactive
         self._rawxy_offset = None if interactive else (0, 0)
+        self._rawxy_seen = False
 
         self._tick_count = 0
         self._appear_progress = 0.0
@@ -239,6 +241,7 @@ class ActionsRingOverlay(QWidget):
         off = self._rawxy_offset
         if off is not None:
             self._rawxy_offset = (off[0] + dx, off[1] + dy)
+            self._rawxy_seen = True
 
     @property
     def current_sector(self) -> int:
@@ -447,6 +450,26 @@ class ActionsRingOverlay(QWidget):
 
     # -- internal helpers ----------------------------------------------------
 
+    def _steer_sector(self) -> int:
+        """Current sector, from whichever motion source is actually live.
+
+        A held ring steers on rawXY because the firmware pins the OS cursor
+        for the duration of a rawXY divert (see `_divert` in core/hid_gesture),
+        so there is no cursor movement left to read. But rawXY only arrives
+        while that divert is in force, and the OS-button fallback runs
+        precisely when it is not -- and with no divert there is no pinning
+        either, so the cursor tracks the hand again and is the right source.
+
+        Keying on "has a delta actually arrived" rather than on which path
+        opened the press keeps this self-correcting, and costs nothing while
+        diverted: until the first delta the cursor is pinned at the anchor,
+        which resolves to the dead zone exactly as a (0, 0) offset would.
+        """
+        off = self._rawxy_offset
+        if off is not None and self._rawxy_seen:
+            return angle_to_sector(off[0], off[1], len(self._slot_labels))
+        return self._cursor_to_sector(QCursor.pos())
+
     def _cursor_to_sector(self, global_pos) -> int:
         local = self.mapFromGlobal(global_pos)
         dx = local.x() - self._center.x()
@@ -469,11 +492,7 @@ class ActionsRingOverlay(QWidget):
         self._tick_count += 1
 
         # cursor poll
-        off = self._rawxy_offset
-        if off is not None:
-            sector = angle_to_sector(off[0], off[1], len(self._slot_labels))
-        else:
-            sector = self._cursor_to_sector(QCursor.pos())
+        sector = self._steer_sector()
         if sector != self._target_sector:
             self._target_sector = sector
             self.sector_changed.emit(sector)
@@ -518,6 +537,7 @@ class ActionsRingOverlay(QWidget):
             if self._dismiss_progress >= 1.0:
                 self._tick_timer.stop()
                 self._rawxy_offset = None
+                self._rawxy_seen = False
                 self.hide()
                 return
 

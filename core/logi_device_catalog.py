@@ -25,7 +25,9 @@ MX_MASTER_BUTTONS = (
 
 # MX Master 4 layout: two gesture-capable controls, each with its own swipe
 # set (config keys are tied to the physical button — see core/config.py):
-#  - Sense Panel (CID 0x01A0): large top surface → config key "actions_ring",
+#  - Sense Panel (CID 0x01A0): large haptic top button (a button, not a touch
+#    surface — its swipes come from moving the mouse while it is held, and its
+#    haptics are driven over HID++) → config key "actions_ring",
 #    labeled "Actions Ring". Primary gesture control; tap can activate the
 #    Actions Ring, and (when tap = Do Nothing) it has its own swipe set
 #    "actions_ring_left/right/up/down".

@@ -38,9 +38,10 @@ class MouseEvent:
     GESTURE_SWIPE_UP = "gesture_swipe_up"
     GESTURE_SWIPE_DOWN = "gesture_swipe_down"
     # ── Sense Panel ("Actions Ring") — config key "actions_ring" ────
-    # The MX Master 4's large touch/press panel (CID 0x01A0), the primary
-    # gesture control on that device. MX4-only; other devices never emit
-    # this family.
+    # The MX Master 4's large haptic button (CID 0x01A0), the primary gesture
+    # control on that device. It is a button, not a touch surface: its swipes
+    # come from moving the whole mouse while it is held. MX4-only; other
+    # devices never emit this family.
     SENSE_CLICK = "sense_click"
     SENSE_BUTTON_DOWN = "sense_button_down"
     SENSE_BUTTON_UP = "sense_button_up"

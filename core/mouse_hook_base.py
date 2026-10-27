@@ -70,6 +70,9 @@ class BaseMouseHook:
         # (MX Master 4). Set on connect. Governs which event family the
         # primary control emits (sense_* vs gesture_*).
         self._gesture_via_sense_panel = False
+        # True between a native-button down and up of the primary control, i.e.
+        # only while its HID++ divert has lapsed. See `_set_native_gesture_hold`.
+        self._native_gesture_active = False
         # Secondary Gesture button (thumb) on the MX Master 4 — its own
         # movement-swipe recognizer, independent of the Sense Panel's.
         self._thumb_active = False
@@ -508,6 +511,20 @@ class BaseMouseHook:
         self._connected_device = None
         self._set_device_connected(False)
 
+    def request_divert_refresh(self, reason):
+        """Ask the HID listener to re-apply a diversion that may have lapsed.
+
+        Swallows everything: the callers are an event-tap callback and a
+        workspace notification block, neither of which may raise.
+        """
+        hg = self._hid_gesture
+        if hg is None:
+            return False
+        try:
+            return bool(hg.request_divert_refresh(reason))
+        except Exception:
+            return False
+
     def _on_hid_battery(self, level, charging):
         cb = self._battery_notify_cb
         if cb:
@@ -516,37 +533,127 @@ class BaseMouseHook:
             except Exception:
                 pass
 
-    def _on_hid_gesture_down(self):
+    # `emit` is a parameter rather than always `_dispatch` because the primary
+    # gesture control has two entry points on different threads. The HID
+    # listener thread can dispatch synchronously, but the OS-button fallback
+    # (see `_on_native_gesture_down`) runs inside the CGEventTap callback,
+    # where running a user action inline stalls the tap long enough for the
+    # system to disable it.
+    def _begin_primary_gesture(self, emit, source):
+        """Open a primary-gesture hold. Returns whether one actually opened."""
         if getattr(self, "_ui_passthrough", False):
-            return
+            return False
         if self._gesture_active:
-            return
+            return False
         self._gesture_recognizer.begin()
         self._gesture_active = True
-        self._emit_debug("HID gesture button down")
+        self._emit_debug(f"{source} gesture button down")
         self._emit_gesture_event({"type": "button_down"})
-        self._dispatch(MouseEvent(self._primary_button_down_event()))
+        emit(MouseEvent(self._primary_button_down_event()))
+        return True
 
-    def _on_hid_gesture_up(self):
+    def _end_primary_gesture(self, emit, source, cancelled=False):
+        """Close a primary-gesture hold. Returns whether one was open.
+
+        `cancelled` closes a hold whose release was lost rather than made. The
+        up event still goes out -- downstream state has to be let go of either
+        way -- but it is tagged so consumers can tell the two apart. See
+        `_abort_native_gesture`.
+        """
         if getattr(self, "_ui_passthrough", False):
-            return
+            return False
         if not self._gesture_active:
-            return
+            return False
         self._gesture_active = False
         was_click = self._gesture_recognizer.end()
+        if cancelled:
+            # Nobody let go, so a motionless hold is not a click -- and the
+            # recognizer calls every motionless hold one, so leaving this to
+            # the usual path fires the bound action on a press nobody made.
+            was_click = False
         hg = self._hid_gesture
         if was_click and hg and getattr(hg, "extra_held_during_gesture", False):
             was_click = False
         self._log_gesture_summary()
         self._emit_debug(
-            f"HID gesture button up click_candidate={str(was_click).lower()}"
+            f"{source} gesture button up click_candidate={str(was_click).lower()}"
         )
         self._emit_gesture_event(
             {"type": "button_up", "click_candidate": was_click}
         )
-        self._dispatch(MouseEvent(self._primary_button_up_event()))
+        emit(MouseEvent(
+            self._primary_button_up_event(),
+            {"cancelled": True} if cancelled else None,
+        ))
         if was_click:
-            self._dispatch(MouseEvent(self._primary_click_event()))
+            emit(MouseEvent(self._primary_click_event()))
+        return True
+
+    def _on_hid_gesture_down(self):
+        self._begin_primary_gesture(self._dispatch, "HID")
+
+    def _on_hid_gesture_up(self):
+        self._end_primary_gesture(self._dispatch, "HID")
+
+    def _set_native_gesture_hold(self, active):
+        """Record that the primary control is held via its *native* OS button.
+
+        Mirrored onto the HID listener because its own `_held` flag cannot
+        express this state: `_held` is set only from an incoming HID++ report,
+        which by definition never arrives while the control is undiverted. The
+        listener needs to know all the same, so that re-arming the divert
+        cannot land in the middle of a press whose release would then be
+        routed to a path that never saw the press begin.
+        """
+        self._native_gesture_active = bool(active)
+        hg = self._hid_gesture
+        if hg is None:
+            return
+        try:
+            hg.set_native_hold(active)
+        except Exception:
+            pass
+
+    def _on_native_gesture_down(self):
+        """Primary gesture control pressed as a *native* OS button.
+
+        Only reachable when the HID++ divert of that control has lapsed -- a
+        diverted control never reaches the OS at all, so this and the HID path
+        are mutually exclusive and cannot double-fire.
+        """
+        if self._begin_primary_gesture(self._enqueue_dispatch_event, "Native"):
+            self._set_native_gesture_hold(True)
+
+    def _on_native_gesture_up(self):
+        # The hold must be dropped somewhere in this release, or it blocks
+        # every later re-arm of the divert. Doing it first is not load-bearing:
+        # the caller only asks for the re-arm once both of these have returned.
+        self._set_native_gesture_hold(False)
+        self._end_primary_gesture(self._enqueue_dispatch_event, "Native")
+
+    def _abort_native_gesture(self, reason):
+        """Close a native hold whose release will never arrive.
+
+        The counterpart to `abort_button_gesture`, for the primary control. It
+        has to close the hold rather than just forget it: `_gesture_active`
+        gates the *next* press, so a stranded one kills the button outright
+        until the app restarts -- the failure the native fallback exists to
+        prevent. The up event goes out tagged as cancelled, so the Actions Ring
+        neither selects a sector nor mistakes a short hold for a quick tap and
+        opens itself in toggle mode.
+        """
+        # Inert on macOS -- `_ui_passthrough` is only ever set by the Linux
+        # hook -- but noted because `_end_primary_gesture` tests it before
+        # `_gesture_active`, so an abort under passthrough would strand the
+        # very flag this method exists to release.
+        if not self._native_gesture_active:
+            return False
+        self._set_native_gesture_hold(False)
+        self._end_primary_gesture(
+            self._enqueue_dispatch_event, "Native", cancelled=True
+        )
+        self._emit_debug(f"Native gesture aborted reason={reason}")
+        return True
 
     def _on_hid_gesture_move(self, dx, dy):
         if getattr(self, "_ui_passthrough", False):

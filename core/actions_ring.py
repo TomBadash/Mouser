@@ -37,6 +37,20 @@ class ActionsRingController:
         self._move_cb = move_cb
 
         self._lock = threading.Lock()
+        # Ordering lock for the overlay callbacks. `_lock` cannot do this job:
+        # it is dropped before the callback runs, so a transition decided first
+        # can still call out second. That reversal strands the ring -- a cancel
+        # racing the hold timer hides a ring not yet shown, the show then runs
+        # anyway, and nothing is left to take it down. Always taken before
+        # `_lock`, never the other way round, and never held across
+        # `_execute_cb`, which runs the user's action.
+        #
+        # Deliberately not re-entrant. No callback taken under it calls back in
+        # -- both overlay callbacks reach Qt through a queued signal, and the
+        # event tap only ever enqueues -- so a re-entrant call would be a new
+        # bug, and this way it deadlocks where it happens instead of quietly
+        # running a transition nested inside another one.
+        self._ui_lock = threading.Lock()
         self._state = self.IDLE
         self._timer = None
         self._anchor_pos = None
@@ -62,25 +76,26 @@ class ActionsRingController:
         """
         do_hide = False
         timer_to_start = None
-        with self._lock:
-            if self._state == self.IDLE:
-                self._state = self.WAITING
-                timer = threading.Timer(
-                    self._hold_ms / 1000.0, self._on_hold_triggered)
-                timer.daemon = True
-                self._timer = timer
-                timer_to_start = timer
-            elif self._state == self.SHOWING_TOGGLE:
-                self._state = self.IDLE
-                self._anchor_pos = None
-                self._current_sector = -1
-                do_hide = True
-            else:
-                return
-        if timer_to_start is not None:
-            timer_to_start.start()
-        elif do_hide:
-            self._hide_ring_cb()
+        with self._ui_lock:
+            with self._lock:
+                if self._state == self.IDLE:
+                    self._state = self.WAITING
+                    timer = threading.Timer(
+                        self._hold_ms / 1000.0, self._on_hold_triggered)
+                    timer.daemon = True
+                    self._timer = timer
+                    timer_to_start = timer
+                elif self._state == self.SHOWING_TOGGLE:
+                    self._state = self.IDLE
+                    self._anchor_pos = None
+                    self._current_sector = -1
+                    do_hide = True
+                else:
+                    return
+            if timer_to_start is not None:
+                timer_to_start.start()
+            elif do_hide:
+                self._hide_ring_cb()
 
     def on_button_up(self, sector_override=None):
         """Called on button release for buttons with down/up events.
@@ -92,34 +107,35 @@ class ActionsRingController:
         do_hide = False
         do_show_toggle = False
         action_to_execute = None
-        with self._lock:
-            if self._state == self.WAITING:
-                self._cancel_timer()
-                self._state = self.SHOWING_TOGGLE
-                do_show_toggle = True
-            elif self._state == self.SHOWING_HELD:
-                sector = (sector_override if sector_override is not None
-                          else self._current_sector)
-                self._state = self.IDLE
-                self._anchor_pos = None
-                self._current_sector = -1
-                do_hide = True
-                if 0 <= sector < len(self._slots):
-                    action_to_execute = self._slots[sector]
-            elif self._state == self.SHOWING_TOGGLE:
-                return
-            else:
-                return
-        if do_show_toggle:
-            if self._get_cursor_pos_cb:
-                self._anchor_pos = self._get_cursor_pos_cb()
-            self._play_haptic_cb(0)
-            self._show_ring_cb(list(self._slots), True)
-        elif do_hide:
-            self._hide_ring_cb()
-            if action_to_execute is not None:
-                self._execute_cb(action_to_execute)
-                self._play_haptic_cb(7)
+        with self._ui_lock:
+            with self._lock:
+                if self._state == self.WAITING:
+                    self._cancel_timer()
+                    self._state = self.SHOWING_TOGGLE
+                    do_show_toggle = True
+                elif self._state == self.SHOWING_HELD:
+                    sector = (sector_override if sector_override is not None
+                              else self._current_sector)
+                    self._state = self.IDLE
+                    self._anchor_pos = None
+                    self._current_sector = -1
+                    do_hide = True
+                    if 0 <= sector < len(self._slots):
+                        action_to_execute = self._slots[sector]
+                elif self._state == self.SHOWING_TOGGLE:
+                    return
+                else:
+                    return
+            if do_show_toggle:
+                if self._get_cursor_pos_cb:
+                    self._anchor_pos = self._get_cursor_pos_cb()
+                self._play_haptic_cb(0)
+                self._show_ring_cb(list(self._slots), True)
+            elif do_hide:
+                self._hide_ring_cb()
+        if action_to_execute is not None:
+            self._execute_cb(action_to_execute)
+            self._play_haptic_cb(7)
 
     def on_click(self):
         """Called for single-fire buttons (e.g. gesture_click).
@@ -128,54 +144,57 @@ class ActionsRingController:
         """
         do_show = False
         do_hide = False
-        with self._lock:
-            if self._state == self.IDLE:
-                self._state = self.SHOWING_TOGGLE
-                do_show = True
-            elif self._state == self.SHOWING_TOGGLE:
-                self._state = self.IDLE
-                self._anchor_pos = None
-                self._current_sector = -1
-                do_hide = True
-        if do_show:
-            if self._get_cursor_pos_cb:
-                self._anchor_pos = self._get_cursor_pos_cb()
-            self._play_haptic_cb(0)
-            self._show_ring_cb(list(self._slots), True)
-        elif do_hide:
-            self._hide_ring_cb()
+        with self._ui_lock:
+            with self._lock:
+                if self._state == self.IDLE:
+                    self._state = self.SHOWING_TOGGLE
+                    do_show = True
+                elif self._state == self.SHOWING_TOGGLE:
+                    self._state = self.IDLE
+                    self._anchor_pos = None
+                    self._current_sector = -1
+                    do_hide = True
+            if do_show:
+                if self._get_cursor_pos_cb:
+                    self._anchor_pos = self._get_cursor_pos_cb()
+                self._play_haptic_cb(0)
+                self._show_ring_cb(list(self._slots), True)
+            elif do_hide:
+                self._hide_ring_cb()
 
     def on_toggle_select(self, sector):
         """Called from the overlay when user clicks a sector in toggle mode."""
         action_to_execute = None
         do_hide = False
-        with self._lock:
-            if self._state != self.SHOWING_TOGGLE:
-                return
-            self._state = self.IDLE
-            self._anchor_pos = None
-            self._current_sector = -1
-            do_hide = True
-            if 0 <= sector < len(self._slots):
-                action_to_execute = self._slots[sector]
-        if do_hide:
-            self._hide_ring_cb()
-            if action_to_execute is not None:
-                self._execute_cb(action_to_execute)
-                self._play_haptic_cb(7)
+        with self._ui_lock:
+            with self._lock:
+                if self._state != self.SHOWING_TOGGLE:
+                    return
+                self._state = self.IDLE
+                self._anchor_pos = None
+                self._current_sector = -1
+                do_hide = True
+                if 0 <= sector < len(self._slots):
+                    action_to_execute = self._slots[sector]
+            if do_hide:
+                self._hide_ring_cb()
+        if action_to_execute is not None:
+            self._execute_cb(action_to_execute)
+            self._play_haptic_cb(7)
 
     def on_toggle_dismiss(self):
         """Called from the overlay when user clicks center X or outside in toggle mode."""
         do_hide = False
-        with self._lock:
-            if self._state != self.SHOWING_TOGGLE:
-                return
-            self._state = self.IDLE
-            self._anchor_pos = None
-            self._current_sector = -1
-            do_hide = True
-        if do_hide:
-            self._hide_ring_cb()
+        with self._ui_lock:
+            with self._lock:
+                if self._state != self.SHOWING_TOGGLE:
+                    return
+                self._state = self.IDLE
+                self._anchor_pos = None
+                self._current_sector = -1
+                do_hide = True
+            if do_hide:
+                self._hide_ring_cb()
 
     def on_move(self, dx, dy):
         """Forward rawXY deltas to the UI when the ring is showing in held mode."""
@@ -192,17 +211,18 @@ class ActionsRingController:
     def _on_hold_triggered(self):
         """Timer callback — transition WAITING -> SHOWING_HELD."""
         do_show = False
-        with self._lock:
-            if self._state != self.WAITING:
-                return
-            self._state = self.SHOWING_HELD
-            if self._get_cursor_pos_cb:
-                self._anchor_pos = self._get_cursor_pos_cb()
-            slots = list(self._slots)
-            do_show = True
-        if do_show:
-            self._play_haptic_cb(0)
-            self._show_ring_cb(slots, False)
+        with self._ui_lock:
+            with self._lock:
+                if self._state != self.WAITING:
+                    return
+                self._state = self.SHOWING_HELD
+                if self._get_cursor_pos_cb:
+                    self._anchor_pos = self._get_cursor_pos_cb()
+                slots = list(self._slots)
+                do_show = True
+            if do_show:
+                self._play_haptic_cb(0)
+                self._show_ring_cb(slots, False)
 
     def resolve_sector(self, cursor_x, cursor_y) -> int:
         """Compute sector from cursor position relative to anchor."""
@@ -216,18 +236,31 @@ class ActionsRingController:
         self._current_sector = sector
         return sector
 
+    def cancel(self):
+        """Abandon a hold whose release will never arrive, selecting nothing.
+
+        The event tap can be disabled by the system mid-press, and the release
+        is then lost. Resolving that through `on_button_up` would read as a
+        deliberate one: from SHOWING_HELD it fires the highlighted sector, and
+        from WAITING -- any press shorter than the hold delay -- it looks like
+        a quick tap and leaves the ring open in toggle mode, waiting for a
+        dismissal the user never asked to give.
+        """
+        self.shutdown()
+
     def shutdown(self):
         """Cancel pending timer, reset state."""
         hide = False
-        with self._lock:
-            self._cancel_timer()
-            if self._state in (self.SHOWING_HELD, self.SHOWING_TOGGLE):
-                hide = True
-            self._state = self.IDLE
-            self._anchor_pos = None
-            self._current_sector = -1
-        if hide:
-            self._hide_ring_cb()
+        with self._ui_lock:
+            with self._lock:
+                self._cancel_timer()
+                if self._state in (self.SHOWING_HELD, self.SHOWING_TOGGLE):
+                    hide = True
+                self._state = self.IDLE
+                self._anchor_pos = None
+                self._current_sector = -1
+            if hide:
+                self._hide_ring_cb()
 
     def _cancel_timer(self):
         """Cancel and discard the hold timer (must hold lock)."""
