@@ -1286,6 +1286,40 @@ Item {
 
                     Rectangle {
                         width: parent.width
+                        height: 52
+                        radius: 10
+                        color: scrollPage.theme.bgSubtle
+
+                        RowLayout {
+                            anchors {
+                                fill: parent
+                                leftMargin: 16
+                                rightMargin: 16
+                            }
+
+                            Text {
+                                text: s["scroll.shift_wheel_hscroll"]
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 13
+                                }
+                                color: scrollPage.theme.textPrimary
+                                Layout.fillWidth: true
+                            }
+
+                            Switch {
+                                id: shiftWheelHScrollSwitch
+                                checked: backend.shiftWheelHScroll
+                                focusPolicy: Qt.StrongFocus
+                                Material.accent: scrollPage.theme.accent
+                                Accessible.name: s["scroll.shift_wheel_hscroll"]
+                                onClicked: backend.setShiftWheelHScroll(checked)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width
                         height: 62
                         radius: 10
                         color: scrollPage.theme.bgSubtle
@@ -1401,6 +1435,7 @@ Item {
             checkUpdatesSwitch.checked = backend.checkForUpdates
             vscrollSwitch.checked = backend.invertVScroll
             hscrollSwitch.checked = backend.invertHScroll
+            shiftWheelHScrollSwitch.checked = backend.shiftWheelHScroll
             ignoreTrackpadSwitch.checked = backend.ignoreTrackpad
         }
         function onSmartShiftChanged() {

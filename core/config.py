@@ -225,7 +225,7 @@ def _default_actions_ring_slots(platform=None):
 
 
 DEFAULT_CONFIG = {
-    "version": 11,
+    "version": 12,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -269,6 +269,7 @@ DEFAULT_CONFIG = {
         "hscroll_threshold": 0.1,
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
+        "shift_wheel_hscroll": True,  # Shift+wheel -> horizontal scroll (Windows)
         "dpi": 1000,              # pointer speed / DPI setting
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
@@ -730,6 +731,13 @@ def _migrate(cfg):
         settings.setdefault("scroll_force", 50)
         cfg["version"] = 11
 
+    if version < 12:
+        # v11 -> v12: opt-out for the Windows Shift+wheel -> horizontal
+        # scroll translation. Defaults to True to preserve existing behavior.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("shift_wheel_hscroll", True)
+        cfg["version"] = 12
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -740,6 +748,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
+    cfg["settings"].setdefault("shift_wheel_hscroll", True)
     cfg["settings"]["wheel_divert"] = coerce_wheel_divert_setting(
         cfg["settings"].get("wheel_divert", WHEEL_DIVERT_DEFAULT)
     )

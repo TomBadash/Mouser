@@ -49,6 +49,7 @@ class BaseMouseHook:
         self.debug_mode = False
         self.invert_vscroll = False
         self.invert_hscroll = False
+        self.shift_wheel_hscroll = True
         self._gesture_active = False
         self._hid_gesture = None
         self._device_connected = False

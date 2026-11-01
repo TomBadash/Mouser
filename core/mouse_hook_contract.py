@@ -12,6 +12,7 @@ class MouseHookLike(Protocol):
     debug_mode: bool
     invert_vscroll: bool
     invert_hscroll: bool
+    shift_wheel_hscroll: bool
     divert_mode_shift: bool
     divert_dpi_switch: bool
     # When True, the connected Logitech device is performing scroll

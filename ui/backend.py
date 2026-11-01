@@ -846,6 +846,10 @@ class Backend(QObject):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
     @Property(bool, notify=settingsChanged)
+    def shiftWheelHScroll(self):
+        return self._cfg.get("settings", {}).get("shift_wheel_hscroll", True)
+
+    @Property(bool, notify=settingsChanged)
     def ignoreTrackpad(self):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
 
@@ -1819,6 +1823,17 @@ class Backend(QObject):
         if self.invertHScroll == value:
             return
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(bool)
+    def setShiftWheelHScroll(self, value):
+        value = bool(value)
+        if self.shiftWheelHScroll == value:
+            return
+        self._cfg.setdefault("settings", {})["shift_wheel_hscroll"] = value
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()
