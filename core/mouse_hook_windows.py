@@ -422,7 +422,11 @@ class MouseHook(BaseMouseHook):
 
             elif wParam == WM_MOUSEWHEEL:
                 delta = hiword(mouse_data)
-                if delta != 0 and (GetAsyncKeyState(VK_SHIFT) & 0x8000):
+                if (
+                    delta != 0
+                    and self.shift_wheel_hscroll
+                    and (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+                ):
                     if self._ri_hwnd:
                         h_delta = -delta if self.invert_hscroll else delta
                         self._pending_shift_hscroll += h_delta
