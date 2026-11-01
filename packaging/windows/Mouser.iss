@@ -36,7 +36,6 @@ DisableProgramGroupPage=yes
 ; Start Menu and %LOCALAPPDATA%\Programs. The user can still elevate
 ; to an all-users install from the wizard if they choose.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\dist\installer
 OutputBaseFilename=Mouser-Setup-{#MyAppVersion}
 SetupIconFile=..\..\images\logo.ico
