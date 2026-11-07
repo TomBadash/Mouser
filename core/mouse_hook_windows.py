@@ -575,10 +575,11 @@ class MouseHook(BaseMouseHook):
         if extra_now == extra_prev:
             return
         if extra_now and not extra_prev:
-            if not self._gesture_active:
-                self._gesture_recognizer.begin()
-                self._gesture_active = True
-                print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
+            # begin() is idempotent — always reset on press so a lost
+            # button-up cannot carry stale recognizer state into the next hold.
+            self._gesture_recognizer.begin()
+            self._gesture_active = True
+            print(f"[MouseHook] Gesture DOWN (rawBtns extra: 0x{extra_now:X})")
         elif not extra_now and extra_prev:
             if self._gesture_active:
                 self._gesture_active = False

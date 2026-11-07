@@ -95,11 +95,19 @@ class GestureRecognizer:
         self._cross_ratio = 0.5
         self._dir_eps = 7.5
         self._min_return = 22.5
+        # Press-settle window: movement samples arriving within this many
+        # seconds of begin() are ignored. Pressing the button itself can
+        # inject a small burst of motion reports (HID rawXY or OS pointer
+        # deltas) before the finger settles; without this window that burst
+        # can cross the commit threshold on its own and fire a swipe the user
+        # never intended. 0 disables the window.
+        self._press_window = 0.0
+        self._hold_start_t = None
 
         self._reset_hold()
 
     def configure(self, *, enabled, threshold, commit_window_ms,
-                  settle_ms, cross_ratio):
+                  settle_ms, cross_ratio, press_window_ms=0):
         with self._lock:
             self._enabled = bool(enabled)
             self._commit_distance = max(8.0, float(threshold))
@@ -108,12 +116,14 @@ class GestureRecognizer:
             self._cross_ratio = min(2.0, max(0.05, float(cross_ratio)))
             self._dir_eps = max(5.0, self._commit_distance * 0.15)
             self._min_return = max(14.0, self._commit_distance * 0.45)
+            self._press_window = max(0.0, float(press_window_ms) / 1000.0)
 
-    def begin(self):
+    def begin(self, now=None):
         """Gesture button pressed — discard any prior state, start fresh."""
         with self._lock:
             self._reset_hold()
             self._active = True
+            self._hold_start_t = time.monotonic() if now is None else now
 
     def end(self):
         """Gesture button released. Returns True when no swipe fired (click)."""
@@ -133,6 +143,9 @@ class GestureRecognizer:
             if not (self._active and self._enabled):
                 return
             if dx == 0 and dy == 0:
+                return
+            if (self._press_window > 0.0 and self._hold_start_t is not None
+                    and (now - self._hold_start_t) < self._press_window):
                 return
             if not self._accept_source(source):
                 return
@@ -176,6 +189,7 @@ class GestureRecognizer:
         self._hold_first_t = None
         self._hold_peak_speed = 0.0
         self._hold_fired = []
+        self._hold_start_t = None
         self._reset_leg(0.0, 0.0)
         self._lock_axis = None
         self._lock_sign = 0

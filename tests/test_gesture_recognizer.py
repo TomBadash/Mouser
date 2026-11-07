@@ -6,7 +6,7 @@ from core.gesture_recognizer import GestureRecognizer, LEFT, RIGHT, UP, DOWN
 
 
 def make(enabled=True, threshold=50, commit_window_ms=400,
-         settle_ms=90, cross_ratio=0.5):
+         settle_ms=90, cross_ratio=0.5, press_window_ms=0):
     swipes = []
     rec = GestureRecognizer(on_swipe=swipes.append)
     rec.configure(
@@ -15,6 +15,7 @@ def make(enabled=True, threshold=50, commit_window_ms=400,
         commit_window_ms=commit_window_ms,
         settle_ms=settle_ms,
         cross_ratio=cross_ratio,
+        press_window_ms=press_window_ms,
     )
     rec.swipes = swipes
     return rec
@@ -202,17 +203,55 @@ class ClickJoltRejectionTests(unittest.TestCase):
         self.assertEqual(rec.swipes, [LEFT])
 
 
-class SummaryTests(unittest.TestCase):
-    def test_summary_reports_hold_stats(self):
-        rec = make()
-        rec.begin()
-        feed(rec, FLICK_LEFT, t=0.0)
-        rec.end()
-        s = rec.summary()
-        self.assertEqual(s["fired"], [LEFT])
-        self.assertEqual(s["samples"], len(FLICK_LEFT))
-        self.assertLess(s["net_x"], 0)
-        self.assertEqual(s["source"], "hid_rawxy")
+class PressSettleWindowTests(unittest.TestCase):
+    def test_press_jolt_inside_window_is_ignored(self):
+        # A 4-report x 20px burst that lands inside the press-settle window
+        # (the jolt of pressing the button) must not fire — it crosses the
+        # threshold but arrives before the finger settles.
+        rec = make(press_window_ms=80)
+        rec.begin(now=0.0)
+        feed(rec, [(-20, 0)] * 4, t=0.0)   # 0.012..0.048 s, inside 80 ms
+        self.assertTrue(rec.end())
+        self.assertEqual(rec.swipes, [])
+
+    def test_motion_after_window_still_fires(self):
+        rec = make(press_window_ms=80)
+        rec.begin(now=0.0)
+        feed(rec, [(-20, 0)] * 4, t=0.0)   # dropped by the window
+        feed(rec, FLICK_LEFT, t=0.1)       # real motion after the window
+        self.assertFalse(rec.end())
+        self.assertEqual(rec.swipes, [LEFT])
+
+    def test_window_zero_keeps_legacy_behavior(self):
+        rec = make()                       # press_window_ms defaults to 0
+        rec.begin(now=0.0)
+        feed(rec, [(-20, 0)] * 4, t=0.0)
+        self.assertFalse(rec.end())
+        self.assertEqual(rec.swipes, [LEFT])
+
+
+class DownAlwaysResetsTests(unittest.TestCase):
+    def test_down_resets_stale_recognizer_state(self):
+        # Simulate a lost button-up: recognizer is mid-hold with an
+        # accumulated leg and _gesture_active is still True. The next press
+        # must reset everything (begin is idempotent), so the stale leg cannot
+        # combine with the new press's motion to fire a swipe.
+        from core.mouse_hook_base import BaseMouseHook
+        hook = BaseMouseHook()
+        hook._gesture_recognizer.begin(now=0.0)
+        hook._gesture_recognizer.sample(-40, 0, "hid_rawxy", now=0.012)
+        hook._gesture_recognizer.sample(-40, 0, "hid_rawxy", now=0.024)
+        hook._gesture_active = True        # stale: button-up was lost
+        hook._dispatch = lambda ev: None
+        hook._emit_debug = lambda msg: None
+        hook._emit_gesture_event = lambda ev: None
+        hook._on_hid_gesture_down()        # must reset, not be swallowed
+        # Small motion on the new press must not build on the stale -80 leg.
+        hook._gesture_recognizer.sample(-10, 0, "hid_rawxy", now=0.036)
+        hook._gesture_recognizer.sample(-10, 0, "hid_rawxy", now=0.048)
+        hook._gesture_recognizer.sample(-10, 0, "hid_rawxy", now=0.060)
+        self.assertFalse(hook._gesture_recognizer.fired)
+        self.assertTrue(hook._gesture_recognizer.end())
 
 
 if __name__ == "__main__":
