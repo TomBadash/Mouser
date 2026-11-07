@@ -90,8 +90,8 @@ class Engine:
         self._enabled = True
         self._last_haptic_time = 0.0
         self._hscroll_state = {
-            MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0},
-            MouseEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0},
+            MouseEvent.HSCROLL_LEFT: {"accum": 0.0, "last_fire_at": 0.0, "rep_accum": 0.0},
+            MouseEvent.HSCROLL_RIGHT: {"accum": 0.0, "last_fire_at": 0.0, "rep_accum": 0.0},
         }
         self._current_profile: str = self.cfg.get("active_profile", "default")
         self._app_detector = AppDetector(self._on_app_change)
@@ -902,7 +902,7 @@ class Engine:
                 return
             state = self._hscroll_state.setdefault(
                 event.event_type,
-                {"accum": 0.0, "last_fire_at": 0.0},
+                {"accum": 0.0, "last_fire_at": 0.0, "rep_accum": 0.0},
             )
             step = self._hscroll_step(event.raw_data)
             threshold = self._hscroll_threshold()
@@ -919,20 +919,38 @@ class Engine:
 
             state["accum"] = 0.0
             state["last_fire_at"] = now
+
+            # hscroll_step_multiplier controls how many times the action
+            # fires per physical wheel notch, independent of the (small)
+            # noise-gating threshold above. >=1.0 fires multiple times per
+            # notch (bigger/faster steps); <1.0 spreads a single fire
+            # across multiple notches (smaller/slower steps) via rep_accum.
+            state["rep_accum"] += self._hscroll_multiplier()
+            reps = int(state["rep_accum"])
+            state["rep_accum"] -= reps
+            if reps <= 0:
+                return
+
             self._emit_debug(
-                f"Mapped {event.event_type} -> {action_id} "
+                f"Mapped {event.event_type} -> {action_id} x{reps} "
                 f"({self._action_label(action_id)})"
             )
-            execute_action(action_id)
+            for _ in range(reps):
+                execute_action(action_id)
         return handler
 
     def _hscroll_step(self, raw_value):
+        """Horizontal (thumb wheel/volume) scroll step (raw, unmultiplied)."""
         if not isinstance(raw_value, (int, float)):
             return 1.0
-
         # Treat large wheel deltas as a single logical step while preserving
         # sub-step deltas from macOS event tap scrolling.
         return min(abs(float(raw_value)), 1.0)
+
+    def _hscroll_multiplier(self):
+        return max(0.5, min(5.0, float(
+            self.cfg.get("settings", {}).get("hscroll_step_multiplier", 1.0)
+        )))
 
     def _hscroll_threshold(self):
         return max(

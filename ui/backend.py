@@ -845,6 +845,11 @@ class Backend(QObject):
     def invertHScroll(self):
         return self._cfg.get("settings", {}).get("invert_hscroll", False)
 
+    @Property(float, notify=settingsChanged)
+    def hscrollStepMultiplier(self):
+        val = float(self._cfg.get("settings", {}).get("hscroll_step_multiplier", 1.0))
+        return max(0.5, min(5.0, val))
+
     @Property(bool, notify=settingsChanged)
     def ignoreTrackpad(self):
         return self._cfg.get("settings", {}).get("ignore_trackpad", True)
@@ -1819,6 +1824,17 @@ class Backend(QObject):
         if self.invertHScroll == value:
             return
         self._cfg.setdefault("settings", {})["invert_hscroll"] = value
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.reload_mappings()
+        self.settingsChanged.emit()
+
+    @Slot(float)
+    def setHScrollStepMultiplier(self, value):
+        val = max(0.5, min(5.0, float(value)))
+        if abs(self.hscrollStepMultiplier - val) < 0.01:
+            return
+        self._cfg.setdefault("settings", {})["hscroll_step_multiplier"] = val
         save_config(self._cfg)
         if self._engine:
             self._engine.reload_mappings()

@@ -294,6 +294,112 @@ Item {
 
             Item { width: 1; height: 16; visible: backend.smartShiftSupported && backend.deviceHasSmartShift }
 
+            // ── Thumb Wheel Volume Step Size ──────────────────────
+            Rectangle {
+                id: volumeStepCard
+                visible: backend.hidFeaturesReady
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: volumeStepContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: volumeStepContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.volume_step_size"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["scroll.volume_step_size_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: 8
+
+                        Text {
+                            text: "0.5x"
+                            font { family: uiState.fontFamily; pixelSize: 11 }
+                            color: scrollPage.theme.textDim
+                        }
+
+                        WheelSafeSlider {
+                            id: volumeStepSlider
+                            Layout.fillWidth: true
+                            from: 0.5
+                            to: 5.0
+                            stepSize: 0.1
+                            value: backend.hscrollStepMultiplier
+                            accentColor: scrollPage.theme.accent
+                            accentDimColor: scrollPage.theme.accentDim
+                            trackColor: scrollPage.theme.border
+
+                            onMoved: {
+                                volumeStepLabel.text = value.toFixed(1) + "x"
+                                volumeStepDebounce.restart()
+                            }
+                        }
+
+                        Text {
+                            text: "5.0x"
+                            font { family: uiState.fontFamily; pixelSize: 11 }
+                            color: scrollPage.theme.textDim
+                        }
+
+                        Rectangle {
+                            Layout.preferredWidth: 72
+                            Layout.preferredHeight: 36
+                            radius: 10
+                            color: scrollPage.theme.accentDim
+
+                            Text {
+                                id: volumeStepLabel
+                                anchors.centerIn: parent
+                                text: backend.hscrollStepMultiplier.toFixed(1) + "x"
+                                font {
+                                    family: uiState.fontFamily
+                                    pixelSize: 14
+                                    bold: true
+                                }
+                                color: scrollPage.theme.accent
+                            }
+                        }
+                    }
+
+                    Timer {
+                        id: volumeStepDebounce
+                        interval: 300
+                        onTriggered: backend.setHScrollStepMultiplier(volumeStepSlider.value)
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16; visible: backend.smartShiftSupported && backend.deviceHasSmartShift }
+
             // ── Scroll Wheel Mode ─────────────────────────────────
             Rectangle {
                 visible: backend.smartShiftSupported && backend.deviceHasSmartShift

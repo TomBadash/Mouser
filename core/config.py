@@ -225,7 +225,7 @@ def _default_actions_ring_slots(platform=None):
 
 
 DEFAULT_CONFIG = {
-    "version": 11,
+    "version": 12,
     "active_profile": "default",
     "profiles": {
         "default": {
@@ -274,6 +274,7 @@ DEFAULT_CONFIG = {
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
         "scroll_force": 50,     # 1-100, ratchet firmness (enhanced 0x2111 devices only)
+        "hscroll_step_multiplier": 1.0,  # horizontal (thumb wheel/volume) scroll step multiplier (0.5-5.0)
         "gesture_threshold": GESTURE_SENSITIVITY_PX[GESTURE_DEFAULT_SENSITIVITY_INDEX],
         "gesture_commit_window_ms": 400,
         "gesture_settle_ms": 90,
@@ -730,6 +731,12 @@ def _migrate(cfg):
         settings.setdefault("scroll_force", 50)
         cfg["version"] = 11
 
+    if version < 12:
+        # v11 -> v12: horizontal scroll (thumb wheel/volume) step multiplier.
+        settings = cfg.setdefault("settings", {})
+        settings.setdefault("hscroll_step_multiplier", 1.0)
+        cfg["version"] = 12
+
     cfg.setdefault("settings", {})
     cfg["settings"].setdefault("appearance_mode", "system")
     cfg["settings"].setdefault("debug_mode", False)
@@ -737,6 +744,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("ignore_trackpad", True)
     cfg["settings"].setdefault("scroll_force", 50)
+    cfg["settings"].setdefault("hscroll_step_multiplier", 1.0)
     cfg["settings"].setdefault("screenshot_directory", "")
     cfg["settings"].setdefault("check_for_updates", True)
     cfg["settings"].setdefault("update_check_state", {})
