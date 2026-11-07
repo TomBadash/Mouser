@@ -419,6 +419,7 @@ class EngineSmartShiftTests(unittest.TestCase):
         with (
             patch("core.engine.threading.Thread", _ImmediateThread),
             patch("time.sleep"),
+            patch("core.engine.is_remote_session", return_value=False),
         ):
             engine.start()
         # Called twice: once immediately, once after the settled 3 s delay.
@@ -432,6 +433,7 @@ class EngineSmartShiftTests(unittest.TestCase):
         with (
             patch("core.engine.threading.Thread", _ImmediateThread),
             patch("time.sleep"),
+            patch("core.engine.is_remote_session", return_value=False),
         ):
             engine.start()
         hg.set_smart_shift.assert_not_called()

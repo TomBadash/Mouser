@@ -1056,7 +1056,7 @@ def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
     if accessibility_granted:
         QTimer.singleShot(0, lambda: (
             engine.start(),
-            print("[Mouser] Engine started -- remapping is active"),
+            print("[Mouser] Engine started"),
         ))
         return True
 
@@ -1077,8 +1077,11 @@ def _schedule_engine_start(engine, *, accessibility_granted: bool) -> bool:
     return False
 
 
-def _schedule_tray_minimized_notice(tray, locale_mgr) -> None:
+def _schedule_tray_minimized_notice(tray, locale_mgr, *, is_paused=None) -> None:
     def _tray_minimized_notice():
+        # Do not replace the more useful remote-session warning at startup.
+        if is_paused is not None and is_paused():
+            return
         tray.showMessage(
             "Mouser",
             locale_mgr.tr("tray.tray_message"),
@@ -1319,6 +1322,20 @@ def main():
     tray = QSystemTrayIcon(_tray_icon(), app)
     tray.setToolTip("Mouser")
 
+    def sync_session_tooltip():
+        key = ("session.remote_paused" if backend.remoteSessionState == "remote"
+               else "session.unknown_paused")
+        tray.setToolTip("Mouser — " + locale_mgr.tr(key) if backend.remotePaused else "Mouser")
+
+    backend.remoteSessionChanged.connect(sync_session_tooltip)
+    locale_mgr.languageChanged.connect(sync_session_tooltip)
+    backend.remoteSessionWarning.connect(lambda key: tray.showMessage(
+        "Mouser", locale_mgr.tr(key), QSystemTrayIcon.MessageIcon.Warning, 8000,
+    ))
+    if sys.platform == "win32":
+        from ui.windows_session_monitor import WindowsSessionMonitor
+        engine._session_monitor = WindowsSessionMonitor(engine, root_window, app)
+
     tray_menu = QMenu()
 
     open_action = QAction(locale_mgr.tr("tray.open_settings"), tray_menu)
@@ -1432,7 +1449,9 @@ def main():
             tray.setVisible(False)
 
     if launch_hidden and QSystemTrayIcon.isSystemTrayAvailable():
-        _schedule_tray_minimized_notice(tray, locale_mgr)
+        _schedule_tray_minimized_notice(
+            tray, locale_mgr, is_paused=lambda: backend.remotePaused,
+        )
 
     # ── Run ────────────────────────────────────────────────────
     try:

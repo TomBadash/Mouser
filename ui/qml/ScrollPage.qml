@@ -788,7 +788,61 @@ Item {
 
             Item { width: 1; height: 16 }
 
-            // ── Startup ───────────────────────────────────────────
+            // ── Remote Desktop ──────────────────────────────────
+            Rectangle {
+                visible: backend.isWindows
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: remoteSessionContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: remoteSessionContent
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
+                    spacing: 12
+
+                    Text {
+                        text: s["session.title"]
+                        font.family: uiState.fontFamily
+                        font.pixelSize: 16
+                        font.bold: true
+                        color: scrollPage.theme.textPrimary
+                    }
+                    Text {
+                        text: s["session.description"]
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.family: uiState.fontFamily
+                        font.pixelSize: 12
+                        color: scrollPage.theme.textSecondary
+                    }
+                    RowLayout {
+                        width: parent.width
+                        Text {
+                            text: s["session.auto_pause"]
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.family: uiState.fontFamily
+                            font.pixelSize: 13
+                            color: scrollPage.theme.textPrimary
+                        }
+                        Switch {
+                            checked: backend.pauseInRemoteSession
+                            focusPolicy: Qt.StrongFocus
+                            Material.accent: scrollPage.theme.accent
+                            Accessible.name: s["session.auto_pause"]
+                            onClicked: backend.setPauseInRemoteSession(checked)
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: backend.isWindows ? 16 : 0 }
+
+            // ── Startup ────────────────────────────────────────
             Rectangle {
                 visible: backend.supportsStartAtLogin
                 width: parent.width - 72

@@ -250,9 +250,12 @@ class Backend(QObject):
     updateAvailable = Signal(str, str)
     updateInstallChanged = Signal()
     superKeyHeldChanged = Signal()
+    remoteSessionChanged = Signal()
+    remoteSessionWarning = Signal(str)
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
+    _remoteSessionRequest = Signal(str, bool)
     _dpiReadRequest = Signal(int)
     _connectionChangeRequest = Signal(bool)
     _batteryChangeRequest = Signal(int, bool)
@@ -337,6 +340,9 @@ class Backend(QObject):
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
             self._handleProfileSwitch, Qt.QueuedConnection)
+        self._remote_warning_shown = False
+        self._remoteSessionRequest.connect(
+            self._handleRemoteSession, Qt.QueuedConnection)
         self._dpiReadRequest.connect(
             self._handleDpiRead, Qt.QueuedConnection)
         self._connectionChangeRequest.connect(
@@ -387,6 +393,8 @@ class Backend(QObject):
 
         # Wire engine callbacks
         if engine:
+            if hasattr(engine, "set_remote_session_change_callback"):
+                engine.set_remote_session_change_callback(self._remoteSessionRequest.emit)
             engine.set_profile_change_callback(self._onEngineProfileSwitch)
             engine.set_dpi_read_callback(self._onEngineDpiRead)
             engine.set_connection_change_callback(self._onEngineConnectionChange)
@@ -828,6 +836,37 @@ class Backend(QObject):
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
         return bool(self._cfg.get("settings", {}).get("start_minimized", True))
+
+    @Property(bool, notify=settingsChanged)
+    def pauseInRemoteSession(self):
+        return bool(self._cfg.get("settings", {}).get("pause_in_remote_session", True))
+
+    @Property(bool, notify=remoteSessionChanged)
+    def remotePaused(self):
+        return bool(getattr(self._engine, "remote_paused", False))
+
+    @Property(str, notify=remoteSessionChanged)
+    def remoteSessionState(self):
+        return getattr(self._engine, "remote_session_state", "local")
+
+    @Slot(bool)
+    def setPauseInRemoteSession(self, value):
+        self._cfg.setdefault("settings", {})["pause_in_remote_session"] = bool(value)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+            self._engine.refresh_remote_session()
+        self.settingsChanged.emit()
+
+    @Slot(str, bool)
+    def _handleRemoteSession(self, state, paused):
+        if state == "local":
+            self._remote_warning_shown = False
+        if paused and not self._remote_warning_shown:
+            self._remote_warning_shown = True
+            self.remoteSessionWarning.emit(
+                "session.remote_warning" if state == "remote" else "session.unknown_warning")
+        self.remoteSessionChanged.emit()
 
     @Property(bool, notify=settingsChanged)
     def startAtLogin(self):

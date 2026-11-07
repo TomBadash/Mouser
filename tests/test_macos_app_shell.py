@@ -570,6 +570,16 @@ class MacOSQuitAndAccessibilityTests(unittest.TestCase):
             5000,
         )
 
+    def test_remote_startup_keeps_warning_instead_of_minimized_notice(self):
+        tray = MagicMock()
+        locale_mgr = SimpleNamespace(tr=lambda key: key)
+        with patch.object(main_qml.QTimer, "singleShot") as single_shot:
+            main_qml._schedule_tray_minimized_notice(
+                tray, locale_mgr, is_paused=lambda: True,
+            )
+        single_shot.call_args.args[1]()
+        tray.showMessage.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
