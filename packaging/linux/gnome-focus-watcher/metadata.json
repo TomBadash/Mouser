@@ -1,0 +1,16 @@
+{
+  "name": "Mouser Focus Watcher",
+  "description": "Tracks the currently focused window and exposes its details as a JSON string via D-Bus for Mouser and other applications.",
+  "uuid": "focus-watcher@mouser.app",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "50.1"
+  ],
+  "url": "https://github.com/TomBadash/Mouser",
+  "version": 2
+}

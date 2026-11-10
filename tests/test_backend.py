@@ -1623,5 +1623,114 @@ class BackendListPropertyMemoizationTests(unittest.TestCase):
         self.assertIs(backend.knownApps, first)
 
 
+@unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
+class BackendGnomeFocusTests(unittest.TestCase):
+    def _make_backend(self, engine=None, installed=False):
+        """Build a Backend. ``installed`` reflects the file-level check that
+        runs in __init__; the live D-Bus ``active`` state is only computed on
+        a refresh (never during init, to avoid a blocking gdbus call)."""
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        with (
+            patch("ui.backend.load_config", return_value=cfg),
+            patch("ui.backend.save_config"),
+            patch("ui.backend.supports_login_startup", return_value=False),
+            patch(
+                "ui.backend.gnome_focus_module.extension_installed",
+                return_value=installed,
+            ),
+            patch(
+                "ui.backend.gnome_focus_module.extension_active",
+                return_value=False,
+            ),
+        ):
+            return Backend(engine=engine)
+
+    def test_init_reflects_installed_state(self):
+        installed = self._make_backend(installed=True)
+        self.assertTrue(installed.gnomeFocusExtensionInstalled)
+
+        clean = self._make_backend()
+        self.assertFalse(clean.gnomeFocusExtensionInstalled)
+
+    def test_active_is_false_until_refresh(self):
+        backend = self._make_backend(installed=True)
+        # __init__ never queries D-Bus, so active starts False.
+        self.assertFalse(backend.gnomeFocusExtensionActive)
+
+    def test_refresh_re_evaluates_state_and_emits(self):
+        backend = self._make_backend()
+        received = []
+        backend.gnomeFocusExtensionChanged.connect(lambda: received.append(True))
+
+        with (
+            patch(
+                "ui.backend.gnome_focus_module.extension_installed",
+                return_value=True,
+            ),
+            patch(
+                "ui.backend.gnome_focus_module.extension_active",
+                return_value=True,
+            ),
+            patch(
+                "ui.backend.gnome_focus_module.gnome_focus_watcher_supported",
+                return_value=True,
+            ),
+        ):
+            backend.refreshGnomeFocusExtensionStatus()
+
+        self.assertTrue(backend.gnomeFocusExtensionInstalled)
+        self.assertTrue(backend.gnomeFocusExtensionActive)
+        self.assertEqual(received, [True])
+
+    def test_install_calls_installer_and_emits_status(self):
+        backend = self._make_backend()
+        statuses = []
+        backend.statusMessage.connect(statuses.append)
+
+        with (
+            patch("ui.backend.gnome_focus_module.install_extension", return_value=True),
+            patch(
+                "ui.backend.gnome_focus_module.gnome_focus_watcher_supported",
+                return_value=True,
+            ),
+        ):
+            backend.installGnomeFocusExtension()
+
+        self.assertTrue(statuses)
+        self.assertTrue(any("installed" in msg.lower() for msg in statuses))
+
+    def test_install_noop_when_unsupported(self):
+        backend = self._make_backend()
+        statuses = []
+        backend.statusMessage.connect(statuses.append)
+        with (
+            patch("ui.backend.gnome_focus_module.install_extension") as inst,
+            patch(
+                "ui.backend.gnome_focus_module.gnome_focus_watcher_supported",
+                return_value=False,
+            ),
+        ):
+            backend.installGnomeFocusExtension()
+        inst.assert_not_called()
+        self.assertEqual(statuses, [])
+
+    def test_enable_calls_enabler_and_emits_status(self):
+        backend = self._make_backend()
+        statuses = []
+        backend.statusMessage.connect(statuses.append)
+
+        with (
+            patch("ui.backend.gnome_focus_module.enable_extension", return_value=True),
+            patch(
+                "ui.backend.gnome_focus_module.gnome_focus_watcher_supported",
+                return_value=True,
+            ),
+        ):
+            backend.enableGnomeFocusExtension()
+
+        self.assertTrue(statuses)
+        self.assertTrue(any("enabled" in msg.lower() for msg in statuses))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2225,6 +2225,45 @@ Item {
 
                             Rectangle {
                                 width: parent.width
+                                height: activeProfileRow.implicitHeight + 16
+                                radius: 10
+                                color: Qt.rgba(0.89, 0.45, 0.25, 0.10)
+                                border.width: 1
+                                border.color: Qt.rgba(0.89, 0.45, 0.25, 0.35)
+
+                                Row {
+                                    id: activeProfileRow
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 10
+
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: s["mouse.debug_active_profile"]
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textSecondary
+                                    }
+
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: activeProfileName.implicitWidth + 16
+                                        height: 24
+                                        radius: 12
+                                        color: theme.accent
+
+                                        Text {
+                                            id: activeProfileName
+                                            anchors.centerIn: parent
+                                            text: backend.activeProfile
+                                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                            color: "#ffffff"
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
                                 radius: 10
                                 color: Qt.rgba(1, 1, 1, 0.03)
                                 border.width: 1

@@ -4,7 +4,7 @@ Supports English (en), Simplified Chinese (zh_CN), and Traditional Chinese (zh_T
 Exposed to QML as the context property `lm`.
 """
 
-from PySide6.QtCore import QObject, Property, Signal, Slot
+from PySide6.QtCore import QObject, Property, Signal, Slot  # pyright: ignore[reportMissingImports]
 
 _TRANSLATIONS = {
     "en": {
@@ -107,6 +107,7 @@ _TRANSLATIONS = {
         # Mouse page — debug panel
         "mouse.debug_events": "Debug Events",
         "mouse.debug_events_desc": "Collects detected buttons, gestures, and mapped actions",
+        "mouse.debug_active_profile": "Active profile",
         "mouse.clear": "Clear",
         "mouse.clear_rec": "Clear Rec",
         "mouse.on": "On",
@@ -223,6 +224,17 @@ _TRANSLATIONS = {
         "scroll.ignore_trackpad": "Ignore trackpad",
         "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
         "scroll.dpi_note": "DPI changes require HID++ communication with the device and will take effect after a short delay.",
+        "scroll.gnome_focus_watcher": "GNOME Focus Watcher",
+        "scroll.gnome_focus_watcher_desc": "Install the bundled GNOME Shell extension so Mouser can detect the focused app on GNOME/Wayland (required for per-app profiles).",
+        "scroll.gnome_focus_install": "Install extension",
+        "scroll.gnome_focus_reinstall": "Reinstall extension",
+        "scroll.gnome_focus_enable": "Enable extension",
+        "scroll.gnome_focus_not_installed": "Not installed",
+        "scroll.gnome_focus_not_installed_desc": "Mouser cannot detect the focused app on this GNOME/Wayland session yet. Install the extension, then log out and back in.",
+        "scroll.gnome_focus_restart": "Installed — restart required",
+        "scroll.gnome_focus_restart_desc": "Log out and back in (or on X11 press Alt+F2 and type 'r'), then click Enable.",
+        "scroll.gnome_focus_active": "Active",
+        "scroll.gnome_focus_active_desc": "The extension is running and Mouser can detect the focused app on GNOME/Wayland.",
         "scroll.language": "Language",
         "scroll.language_desc": "Choose the display language for the application.",
 
@@ -379,6 +391,7 @@ _TRANSLATIONS = {
 
         "mouse.debug_events": "\u8c03\u8bd5\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u68c0\u6d4b\u5230\u7684\u6309\u952e\u3001\u624b\u52bf\u548c\u6620\u5c04\u52a8\u4f5c",
+        "mouse.debug_active_profile": "\u5f53\u524d\u914d\u7f6e\u6587\u4ef6",
         "mouse.clear": "\u6e05\u9664",
         "mouse.clear_rec": "\u6e05\u9664\u5f55\u5236",
         "mouse.on": "\u5f00",
@@ -492,6 +505,17 @@ _TRANSLATIONS = {
         "scroll.ignore_trackpad": "\u5ffd\u7565\u89e6\u6478\u677f",
         "scroll.ignore_trackpad_desc": "\u4ec5\u54cd\u5e94\u9f20\u6807\u4e8b\u4ef6\uff0c\u4e0d\u54cd\u5e94\u89e6\u6478\u677f\u6216 Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u901a\u8fc7 HID++ \u4e0e\u8bbe\u5907\u901a\u4fe1\uff0c\u5c06\u5728\u77ed\u6682\u5ef6\u8fdf\u540e\u751f\u6548\u3002",
+        "scroll.gnome_focus_watcher": "GNOME \u7126\u70b9\u76d1\u89c6\u5668",
+        "scroll.gnome_focus_watcher_desc": "\u5b89\u88c5\u968f\u5305\u7684 GNOME Shell \u6269\u5c55\uff0c\u4f7f Mouser \u80fd\u5728 GNOME/Wayland \u4e0b\u68c0\u6d4b\u6b63\u5728\u4f7f\u7528\u7684\u5e94\u7528\uff08\u6309\u5e94\u7528\u914d\u7f6e\u6587\u4ef6\u6240\u9700\uff09\u3002",
+        "scroll.gnome_focus_install": "\u5b89\u88c5\u6269\u5c55",
+        "scroll.gnome_focus_reinstall": "\u91cd\u65b0\u5b89\u88c5\u6269\u5c55",
+        "scroll.gnome_focus_enable": "\u542f\u7528\u6269\u5c55",
+        "scroll.gnome_focus_not_installed": "\u5c1a\u672a\u5b89\u88c5",
+        "scroll.gnome_focus_not_installed_desc": "Mouser \u6682\u65f6\u65e0\u6cd5\u5728\u6b64 GNOME/Wayland \u4f1a\u8bdd\u4e2d\u68c0\u6d4b\u6b63\u5728\u4f7f\u7528\u7684\u5e94\u7528\u3002\u8bf7\u5b89\u88c5\u6269\u5c55\uff0c\u7136\u540e\u9000\u51fa\u91cd\u65b0\u767b\u5f55\u3002",
+        "scroll.gnome_focus_restart": "\u5df2\u5b89\u88c5 \u2014 \u9700\u91cd\u65b0\u751f\u6548",
+        "scroll.gnome_focus_restart_desc": "\u9000\u51fa\u91cd\u65b0\u767b\u5f55\uff08X11 \u4e0b\u53ef\u6309 Alt+F2 \u8f93\u5165 'r'\uff09\uff0c\u7136\u540e\u70b9\u51fb\u542f\u7528\u3002",
+        "scroll.gnome_focus_active": "\u5df2\u751f\u6548",
+        "scroll.gnome_focus_active_desc": "\u6269\u5c55\u6b63\u5728\u8fd0\u884c\uff0cMouser \u5df2\u80fd\u5728 GNOME/Wayland \u4e0b\u68c0\u6d4b\u6b63\u5728\u4f7f\u7528\u7684\u5e94\u7528\u3002",
         "scroll.language": "\u8bed\u8a00",
         "scroll.language_desc": "\u9009\u62e9\u5e94\u7528\u7a0b\u5e8f\u7684\u663e\u793a\u8bed\u8a00\u3002",
 
@@ -641,6 +665,7 @@ _TRANSLATIONS = {
 
         "mouse.debug_events": "\u9664\u932f\u4e8b\u4ef6",
         "mouse.debug_events_desc": "\u6536\u96c6\u5075\u6e2c\u5230\u7684\u6309\u9375\u3001\u624b\u52e2\u548c\u5c0d\u6620\u52d5\u4f5c",
+        "mouse.debug_active_profile": "\u76ee\u524d\u4f7f\u7528\u4e2d\u7684\u8a2d\u5b9a\u6a94",
         "mouse.clear": "\u6e05\u9664",
         "mouse.clear_rec": "\u6e05\u9664\u9304\u88fd",
         "mouse.on": "\u958b",
@@ -754,6 +779,17 @@ _TRANSLATIONS = {
         "scroll.ignore_trackpad": "\u5ffd\u7565\u89f8\u63a7\u677f",
         "scroll.ignore_trackpad_desc": "\u50c5\u56de\u61c9\u6ed1\u9f20\u4e8b\u4ef6\uff0c\u4e0d\u56de\u61c9\u89f8\u63a7\u677f\u6216 Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u900f\u904e HID++ \u8207\u88dd\u7f6e\u901a\u8a0a\uff0c\u5c07\u5728\u77ed\u66ab\u5ef6\u9072\u5f8c\u751f\u6548\u3002",
+        "scroll.gnome_focus_watcher": "GNOME \u7126\u9ede\u76e3\u8996\u5668",
+        "scroll.gnome_focus_watcher_desc": "\u5b89\u88dd\u96a8\u5305\u7684 GNOME Shell \u64f4\u5145\u4ef6\uff0c\u8b93 Mouser \u80fd\u5728 GNOME/Wayland \u4e0b\u5075\u6e2c\u7576\u524d\u4f7f\u7528\u7684\u61c9\u7528\uff08\u6309\u61c9\u7528\u914d\u7f6e\u6a94\u6240\u9700\uff09\u3002",
+        "scroll.gnome_focus_install": "\u5b89\u88dd\u64f4\u5145\u4ef6",
+        "scroll.gnome_focus_reinstall": "\u91cd\u65b0\u5b89\u88dd\u64f4\u5145\u4ef6",
+        "scroll.gnome_focus_enable": "\u555f\u7528\u64f4\u5145\u4ef6",
+        "scroll.gnome_focus_not_installed": "\u5c1a\u672a\u5b89\u88dd",
+        "scroll.gnome_focus_not_installed_desc": "Mouser \u66ab\u6642\u7121\u6cd5\u5728\u6b64 GNOME/Wayland \u6703\u8a71\u4e2d\u5075\u6e2c\u7576\u524d\u4f7f\u7528\u7684\u61c9\u7528\u3002\u8acb\u5b89\u88dd\u64f4\u5145\u4ef6\uff0c\u518d\u767b\u51fa\u91cd\u65b0\u767b\u5165\u3002",
+        "scroll.gnome_focus_restart": "\u5df2\u5b89\u88dd \u2014 \u9700\u91cd\u65b0\u751f\u6548",
+        "scroll.gnome_focus_restart_desc": "\u767b\u51fa\u91cd\u65b0\u767b\u5165\uff08X11 \u4e0b\u53ef\u6309 Alt+F2 \u8f38\u5165 'r'\uff09\uff0c\u518d\u9ede\u64ca\u555f\u7528\u3002",
+        "scroll.gnome_focus_active": "\u5df2\u751f\u6548",
+        "scroll.gnome_focus_active_desc": "\u64f4\u5145\u4ef6\u6b63\u5728\u904b\u884c\uff0cMouser \u5df2\u80fd\u5728 GNOME/Wayland \u4e0b\u5075\u6e2c\u7576\u524d\u4f7f\u7528\u7684\u61c9\u7528\u3002",
         "scroll.language": "\u8a9e\u8a00",
         "scroll.language_desc": "\u9078\u64c7\u61c9\u7528\u7a0b\u5f0f\u7684\u986f\u793a\u8a9e\u8a00\u3002",
 
@@ -1086,14 +1122,14 @@ class LocaleManager(QObject):
         self.languageChanged.emit()
 
     # ── strings map (QVariantMap) ─────────────────────────────────
-    @Property("QVariantMap", notify=languageChanged)
+    @Property("QVariantMap", notify=languageChanged)  # pyright: ignore[reportArgumentType]
     def strings(self) -> dict:
         """Return the full translation dictionary for the active language."""
         return self._strings
 
     # ── helper slot usable from Python ───────────────────────────
     @Slot(str, result=str)
-    def tr(self, key: str) -> str:
+    def tr(self, key: str) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         return self._strings.get(key, key)
 
     # ── button / action / category translation slots for QML ─────
