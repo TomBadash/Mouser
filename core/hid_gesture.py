@@ -393,6 +393,11 @@ if sys.platform == "darwin":
             _IOHID_REPORT_CALLBACK,
             c_void_p,
         ]
+        # The callback must remain alive until it is unregistered. Using a
+        # void pointer for the callback also permits a NULL callback on close.
+        _IOHID_REMOVAL_CALLBACK = ctypes.CFUNCTYPE(None, c_void_p, c_int, c_void_p)
+        _iokit.IOHIDDeviceRegisterRemovalCallback.argtypes = [c_void_p, c_void_p, c_void_p]
+        _iokit.IOHIDDeviceRegisterRemovalCallback.restype = None
         _iokit.IOHIDDeviceGetReport.argtypes = [c_void_p, c_int, c_long, POINTER(c_uint8), POINTER(c_long)]
         _iokit.IOHIDDeviceGetReport.restype = c_int
 
@@ -498,6 +503,8 @@ if _MAC_NATIVE_OK:
             self._input_buffer = None
             self._report_callback = None
             self._report_queue = queue.Queue()
+            self._removal_callback = None
+            self._removed = False
 
         @staticmethod
         def _cfstring(text):
@@ -684,6 +691,8 @@ if _MAC_NATIVE_OK:
             self._run_loop = _cf.CFRunLoopGetCurrent()
             self._input_buffer = (c_uint8 * 64)()
             self._report_callback = _IOHID_REPORT_CALLBACK(self._on_input_report)
+            self._removed = False
+            self._removal_callback = _IOHID_REMOVAL_CALLBACK(self._on_removal)
             _iokit.IOHIDDeviceScheduleWithRunLoop(
                 self._device,
                 self._run_loop,
@@ -695,6 +704,9 @@ if _MAC_NATIVE_OK:
                 len(self._input_buffer),
                 self._report_callback,
                 None,
+            )
+            _iokit.IOHIDDeviceRegisterRemovalCallback(
+                self._device, ctypes.cast(self._removal_callback, c_void_p), None
             )
 
         def _describe_match_failure(self):
@@ -709,6 +721,10 @@ if _MAC_NATIVE_OK:
 
         @_pooled
         def close(self):
+            # Remove the C callback before unscheduling or releasing the
+            # device; a freed ctypes callback must never be invoked by IOKit.
+            if self._device and self._removal_callback is not None:
+                _iokit.IOHIDDeviceRegisterRemovalCallback(self._device, None, None)
             if self._device and self._run_loop:
                 try:
                     _iokit.IOHIDDeviceUnscheduleFromRunLoop(
@@ -738,6 +754,8 @@ if _MAC_NATIVE_OK:
             self._run_loop = None
             self._input_buffer = None
             self._report_callback = None
+            self._removal_callback = None
+            self._removed = False
             self._report_queue = queue.Queue()
 
         def set_nonblocking(self, _enabled):
@@ -768,11 +786,19 @@ if _MAC_NATIVE_OK:
             except Exception:
                 pass
 
+        def _on_removal(self, _context, _result, _sender):
+            # IOKit calls this from the run loop pumped by read(). Avoid
+            # teardown from inside the C callback; the listener owns it.
+            self._removed = True
+
         def read(self, _size, timeout_ms=0):
             try:
                 return self._report_queue.get_nowait()
             except queue.Empty:
                 pass
+
+            if self._removed:
+                raise OSError("IOHIDDevice removed")
 
             deadline = None
             if timeout_ms and timeout_ms > 0:
@@ -799,6 +825,8 @@ if _MAC_NATIVE_OK:
                 try:
                     return self._report_queue.get_nowait()
                 except queue.Empty:
+                    if self._removed:
+                        raise OSError("IOHIDDevice removed")
                     if deadline is not None:
                         continue
                     return b""

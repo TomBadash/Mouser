@@ -441,11 +441,11 @@ class MouseHook(BaseMouseHook):
 
     def _on_hid_mode_shift_down(self):
         self._emit_debug("HID mode shift button down")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
+        super()._on_hid_mode_shift_down()
 
     def _on_hid_mode_shift_up(self):
         self._emit_debug("HID mode shift button up")
-        self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+        super()._on_hid_mode_shift_up()
 
     def _on_hid_dpi_switch_down(self):
         self._emit_debug("HID DPI switch button down")
