@@ -191,6 +191,19 @@ Action labels adapt per platform. Windows exposes `Win+D` and `Task View`; macOS
 
 ---
 
+## Homebrew (macOS)
+
+You can install Mouser from this repository with Homebrew Cask:
+
+```bash
+brew tap TomBadash/Mouser
+brew install --cask tombadash/mouser/mouser
+```
+
+The bundled tap is kept current automatically by an on-release workflow, and manual runs can target a specific tag.
+
+---
+
 ## Build from source
 
 You only need this if you want to hack on Mouser or run a development build. Most users should grab a release zip — see [Download & Run](#download--run).

@@ -20,6 +20,17 @@ On macOS, this will also install:
 - `pyobjc-framework-Quartz` — for CGEventTap (mouse hooking) and CGEvent (key simulation)
 - `pyobjc-framework-Cocoa` — for NSWorkspace (app detection) and NSEvent (media keys)
 
+## Homebrew Cask
+
+If you prefer Homebrew, you can install Mouser from this repository:
+
+```bash
+brew tap TomBadash/Mouser
+brew install --cask tombadash/mouser/mouser
+```
+
+The cask is kept current automatically by an on-release workflow, and maintainers can manually sync a specific tag when needed.
+
 ## Granting Accessibility Permission
 
 Mouser uses a **CGEventTap** to intercept and suppress mouse button events. macOS requires Accessibility permission for this:
